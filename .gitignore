@@ -1,0 +1,23 @@
+venv312/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Node modules (frontend)
+frontend/node_modules/
+
+# Logs
+logs/
+*.log
+
+# Environment files
+# Keep .env allowed but ignore other variations
+.env.local
+.env.production
+.env.development
+.env.test
+.env.*
+!.env
+.env
+.env.example

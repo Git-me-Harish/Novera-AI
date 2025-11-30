@@ -1,0 +1,124 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: mentanova_postgres
+    environment:
+      POSTGRES_USER: mentanova_user
+      POSTGRES_PASSWORD: mentanova_secure_pass_2024
+      POSTGRES_DB: mentanova_db
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_extensions.sql:/docker-entrypoint-initdb.d/init_extensions.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mentanova_user -d mentanova_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mentanova_network
+    restart: unless-stopped
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: mentanova_redis
+    command: redis-server --appendonly yes --requirepass mentanova_redis_pass
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - mentanova_network
+    restart: unless-stopped
+
+  # FastAPI Backend (development mode)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mentanova_backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - ./backend/.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://mentanova_user:mentanova_secure_pass_2024@postgres:5432/mentanova_db
+      - REDIS_URL=redis://:mentanova_redis_pass@redis:6379/0
+      - POSTGRES_HOST=postgres
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - mentanova_network
+    restart: unless-stopped
+
+  # React Frontend (development mode)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mentanova_frontend
+    command: npm run dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - mentanova_network
+    restart: unless-stopped
+
+  # pgAdmin (optional - for database management)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: mentanova_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@mentanova.com
+      PGADMIN_DEFAULT_PASSWORD: admin_password
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - mentanova_network
+    restart: unless-stopped
+    profiles:
+      - tools
+
+networks:
+  mentanova_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
