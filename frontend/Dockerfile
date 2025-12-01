@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-alpine as build
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
@@ -12,13 +12,33 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Build app
+# Build app (for production)
 RUN npm run build
 
-# Production stage
-FROM nginx:alpine
+# Development stage
+FROM node:20-alpine AS development
 
-# Copy built files
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install ALL dependencies (including dev dependencies)
+RUN npm install
+
+# Copy source code
+COPY . .
+
+# Expose Vite dev server port
+EXPOSE 5173
+
+# Start dev server
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+
+# Production stage
+FROM nginx:alpine AS production
+
+# Copy built files from build stage
 COPY --from=build /app/dist /usr/share/nginx/html
 
 # Copy nginx configuration

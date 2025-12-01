@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Upload, FileText, Trash2, CheckCircle, Clock, AlertCircle, Loader2 } from 'lucide-react';
+import { Upload, FileText, CheckCircle, Clock, AlertCircle, Loader2 } from 'lucide-react';
 import api, { Document } from '../services/api';
 import UploadModal from '../components/documents/UploadModal';
 import DocumentCard from '../components/documents/DocumentCard';

@@ -66,10 +66,14 @@ class ConversationDetail(BaseModel):
     metadata: dict
 
 
-# Temporary: Mock user ID
-async def get_current_user_id() -> str:
-    """Mock user ID for testing."""
-    return "user-001"
+# Import authentication dependency
+from app.api.dependencies.auth import get_current_user
+from app.models.user import User
+
+# Get user ID from authenticated user
+async def get_current_user_id(current_user: User = Depends(get_current_user)) -> str:
+    """Get authenticated user ID."""
+    return str(current_user.id)
 
 
 @router.post("/chat", response_model=ChatResponse)

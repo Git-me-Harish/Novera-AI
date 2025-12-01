@@ -1,6 +1,7 @@
 import { ReactNode } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { MessageSquare, FileText, History, Menu, X, Plus } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { MessageSquare, FileText, History, Menu, X, Plus, User, LogOut } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 interface LayoutProps {
   children: ReactNode;
@@ -10,6 +11,8 @@ interface LayoutProps {
 
 export default function Layout({ children, sidebarOpen, setSidebarOpen }: LayoutProps) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
   const navigation = [
     { name: 'Chat', href: '/chat', icon: MessageSquare },
@@ -19,6 +22,11 @@ export default function Layout({ children, sidebarOpen, setSidebarOpen }: Layout
 
   const isActive = (path: string) => {
     return location.pathname === path || location.pathname.startsWith(path + '/');
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login');
   };
 
   return (
@@ -80,17 +88,29 @@ export default function Layout({ children, sidebarOpen, setSidebarOpen }: Layout
             })}
           </nav>
 
-          {/* Footer */}
+          {/* User Profile */}
           <div className="p-4 border-t border-gray-200">
-            <div className="flex items-center space-x-3 px-3 py-2">
+            <Link
+              to="/profile"
+              className="flex items-center space-x-3 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors"
+            >
               <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
-                <span className="text-sm font-medium text-gray-600">U</span>
+                <User className="w-4 h-4 text-gray-600" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">User</p>
-                <p className="text-xs text-gray-500 truncate">user@example.com</p>
+                <p className="text-sm font-medium text-gray-900 truncate">
+                  {user?.full_name || user?.username}
+                </p>
+                <p className="text-xs text-gray-500 truncate">{user?.email}</p>
               </div>
-            </div>
+            </Link>
+            <button
+              onClick={handleLogout}
+              className="flex items-center w-full px-3 py-2 mt-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <LogOut className="w-4 h-4 mr-2" />
+              Logout
+            </button>
           </div>
         </div>
       </aside>

@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import fitz  # PyMuPDF
-from unstructured.partition.auto import partition
+import PyPDF2
+from docx import Document as DocxDocument
+import openpyxl
 from unstructured.documents.elements import (
     Title, NarrativeText, ListItem, Table, Image, Header, Footer
 )

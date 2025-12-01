@@ -3,6 +3,7 @@ Core configuration module using Pydantic settings management.
 Loads environment variables and provides type-safe configuration access.
 """
 from typing import List, Optional
+from typing import List, Union
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
@@ -12,7 +13,7 @@ class Settings(BaseSettings):
     """Application settings with validation and type safety."""
     
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=".env.local",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="allow"
@@ -115,27 +116,36 @@ class Settings(BaseSettings):
     log_retention: str = "30 days"
     
     # CORS Settings
-    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    cors_origins: Union[str, List[str]] = "http://localhost:3000,http://localhost:5173"
     cors_allow_credentials: bool = True
     
-    # Rate Limiting
-    rate_limit_requests: int = 100
-    rate_limit_window: int = 60
-    
     @field_validator("cors_origins", mode="before")
+    @classmethod
     def parse_cors_origins(cls, v):
         """Parse CORS origins from string or list."""
         if isinstance(v, str):
+            # Remove any JSON-like brackets if present
+            v = v.strip('[]"\'')
             return [origin.strip() for origin in v.split(",")]
         return v
     
     @field_validator("openai_api_key", "cohere_api_key", "secret_key")
-    def validate_secrets(cls, v, field):
+    @classmethod
+    def validate_secrets(cls, v, info):
         """Ensure critical secrets are not using placeholder values."""
-        if not v or "your-" in v.lower() or "change-this" in v.lower():
-            raise ValueError(f"{field.name} must be set to a valid value")
+        field_name = info.field_name
+        
+        # Always require SECRET_KEY
+        if field_name == "secret_key":
+            if not v or len(v) < 20:
+                raise ValueError(f"{field_name} must be at least 20 characters long")
+        
+        # For development, allow dummy API keys
+        if field_name in ["openai_api_key", "cohere_api_key"]:
+            if not v or len(v) < 10:
+                raise ValueError(f"{field_name} cannot be empty")
+        
         return v
-
 
 @lru_cache()
 def get_settings() -> Settings:

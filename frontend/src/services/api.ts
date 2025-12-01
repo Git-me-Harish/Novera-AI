@@ -75,20 +75,49 @@ class ApiService {
     // Request interceptor for adding auth tokens
     this.api.interceptors.request.use(
       (config) => {
-        // TODO: Add authentication token
-        // const token = localStorage.getItem('token');
-        // if (token) {
-        //   config.headers.Authorization = `Bearer ${token}`;
-        // }
+        const token = localStorage.getItem('access_token');
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
         return config;
       },
       (error) => Promise.reject(error)
     );
 
-    // Response interceptor for error handling
+    // Response interceptor for error handling and token refresh
     this.api.interceptors.response.use(
       (response) => response,
-      (error) => {
+      async (error) => {
+        const originalRequest = error.config;
+
+        // If 401 and we haven't tried to refresh yet
+        if (error.response?.status === 401 && !originalRequest._retry) {
+          originalRequest._retry = true;
+
+          try {
+            const refreshToken = localStorage.getItem('refresh_token');
+            if (refreshToken) {
+              const response = await axios.post(
+                `${API_BASE_URL}${API_VERSION}/auth/refresh`,
+                { refresh_token: refreshToken }
+              );
+
+              const { access_token } = response.data;
+              localStorage.setItem('access_token', access_token);
+
+              // Retry original request with new token
+              originalRequest.headers.Authorization = `Bearer ${access_token}`;
+              return this.api(originalRequest);
+            }
+          } catch (refreshError) {
+            // Refresh failed, clear tokens and redirect to login
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            window.location.href = '/login';
+            return Promise.reject(refreshError);
+          }
+        }
+
         console.error('API Error:', error.response?.data || error.message);
         return Promise.reject(error);
       }
@@ -170,6 +199,61 @@ class ApiService {
       params: { query, top_k: topK, doc_type: docType },
     });
     return response.data;
+  }
+
+  // Authentication endpoints
+  async register(
+    email: string,
+    username: string,
+    password: string,
+    fullName?: string
+  ): Promise<any> {
+    const response = await this.api.post('/auth/register', {
+      email,
+      username,
+      password,
+      full_name: fullName,
+    });
+    return response.data;
+  }
+
+  async login(email: string, password: string): Promise<any> {
+    const response = await this.api.post('/auth/login', {
+      email,
+      password,
+    });
+    return response.data;
+  }
+
+  async logout(refreshToken: string): Promise<void> {
+    await this.api.post('/auth/logout', {
+      refresh_token: refreshToken,
+    });
+  }
+
+  async getCurrentUser(): Promise<any> {
+    const response = await this.api.get('/auth/me');
+    return response.data;
+  }
+
+  async updateProfile(data: {
+    full_name?: string;
+    avatar_url?: string;
+    preferences?: Record<string, any>;
+    metadata?: Record<string, any>;
+  }): Promise<any> {
+    const response = await this.api.put('/auth/profile', data);
+    return response.data;
+  }
+
+  async changePassword(
+    currentPassword: string,
+    newPassword: string
+  ): Promise<void> {
+    await this.api.post('/auth/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
   }
 }
 
