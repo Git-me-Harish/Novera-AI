@@ -60,6 +60,35 @@ export interface Conversation {
   metadata: any;
 }
 
+export interface AdminUser {
+  id: string;
+  email: string;
+  username: string;
+  full_name: string | null;
+  role: string;
+  is_active: boolean;
+  is_verified: boolean;
+  created_at: string;
+  last_login: string | null;
+  document_count: number;
+}
+
+export interface UserStats {
+  total_users: number;
+  active_users: number;
+  admin_users: number;
+  regular_users: number;
+  verified_users: number;
+}
+
+export interface SystemStats {
+  total_users: number;
+  total_documents: number;
+  total_chunks: number;
+  active_sessions: number;
+  storage_used_mb: number;
+}
+
 class ApiService {
   private api: AxiosInstance;
 
@@ -254,6 +283,79 @@ class ApiService {
       current_password: currentPassword,
       new_password: newPassword,
     });
+  }
+
+  // Admin endpoints
+  async getUsers(params?: {
+    skip?: number;
+    limit?: number;
+    role?: string;
+    is_active?: boolean;
+    search?: string;
+  }): Promise<{ total: number; users: AdminUser[] }> {
+    const response = await this.api.get('/admin/users', { params });
+    return response.data;
+  }
+
+  async getUserStats(): Promise<UserStats> {
+    const response = await this.api.get('/admin/users/stats');
+    return response.data;
+  }
+
+  async getSystemStats(): Promise<SystemStats> {
+    const response = await this.api.get('/admin/stats');
+    return response.data;
+  }
+
+  async createUser(data: {
+    email: string;
+    username: string;
+    password: string;
+    full_name?: string;
+    role: string;
+    is_active: boolean;
+  }): Promise<any> {
+    const response = await this.api.post('/admin/users', data);
+    return response.data;
+  }
+
+  async getUserDetails(userId: string): Promise<any> {
+    const response = await this.api.get(`/admin/users/${userId}`);
+    return response.data;
+  }
+
+  async updateUser(
+    userId: string,
+    data: {
+      full_name?: string;
+      role?: string;
+      is_active?: boolean;
+      is_verified?: boolean;
+    }
+  ): Promise<any> {
+    const response = await this.api.put(`/admin/users/${userId}`, data);
+    return response.data;
+  }
+
+  async deleteUser(userId: string): Promise<void> {
+    await this.api.delete(`/admin/users/${userId}`);
+  }
+
+  async resetUserPassword(userId: string, newPassword: string): Promise<void> {
+    await this.api.post(`/admin/users/${userId}/reset-password`, null, {
+      params: { new_password: newPassword },
+    });
+  }
+
+  async getAllDocuments(params?: {
+    skip?: number;
+    limit?: number;
+    doc_type?: string;
+    status?: string;
+    user_id?: string;
+  }): Promise<{ total: number; documents: any[] }> {
+    const response = await this.api.get('/admin/documents', { params });
+    return response.data;
   }
 }
 

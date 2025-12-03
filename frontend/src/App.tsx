@@ -9,6 +9,8 @@ import ChatPage from './pages/ChatPage';
 import DocumentsPage from './pages/DocumentsPage';
 import ConversationsPage from './pages/ConversationsPage';
 import ProfilePage from './pages/ProfilePage';
+import AdminDashboard from './pages/admin/AdminDashboard';
+import UserManagement from './pages/admin/UserManagement';
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -34,6 +36,24 @@ function App() {
                     <Route path="/documents" element={<DocumentsPage />} />
                     <Route path="/conversations" element={<ConversationsPage />} />
                     <Route path="/profile" element={<ProfilePage />} />
+                    
+                    {/* Admin Routes */}
+                    <Route
+                      path="/admin"
+                      element={
+                        <ProtectedRoute adminOnly>
+                          <AdminDashboard />
+                        </ProtectedRoute>
+                      }
+                    />
+                    <Route
+                      path="/admin/users"
+                      element={
+                        <ProtectedRoute adminOnly>
+                          <UserManagement />
+                        </ProtectedRoute>
+                      }
+                    />
                   </Routes>
                 </Layout>
               </ProtectedRoute>

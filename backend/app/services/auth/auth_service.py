@@ -149,6 +149,7 @@ class AuthService:
     ) -> dict:
         """
         Create access and refresh tokens for user.
+        Include role in JWT payload for RBAC.
         
         Args:
             user: User object
@@ -159,9 +160,13 @@ class AuthService:
         Returns:
             Dictionary with access_token, refresh_token, and metadata
         """
-        # Create access token
+        # Create access token with role included
         access_token = create_access_token(
-            data={"sub": str(user.id), "email": user.email, "role": user.role}
+            data={
+                "sub": str(user.id),
+                "email": user.email,
+                "role": user.role  # Include role for RBAC
+            }
         )
         
         # Create refresh token
@@ -240,9 +245,13 @@ class AuthService:
         if not user or not user.is_active:
             return False, None, "User not found or inactive"
         
-        # Create new access token
+        # Create new access token with role
         access_token = create_access_token(
-            data={"sub": str(user.id), "email": user.email, "role": user.role}
+            data={
+                "sub": str(user.id),
+                "email": user.email,
+                "role": user.role  # Include role
+            }
         )
         
         return True, {
@@ -321,7 +330,7 @@ class AuthService:
                 user.preferences.update(preferences)
             
             if metadata is not None:
-                user.metadata.update(metadata)
+                user.user_metadata.update(metadata)
             
             user.updated_at = datetime.utcnow()
             

@@ -45,8 +45,17 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: development
     container_name: mentanova_backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >
+      sh -c "
+        echo 'Waiting for database to be ready...' &&
+        sleep 5 &&
+        echo 'Running database migrations...' &&
+        alembic upgrade head &&
+        echo 'Starting FastAPI server...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
     dns:
       - 8.8.8.8
       - 8.8.4.4
@@ -56,6 +65,10 @@ services:
       - DATABASE_URL=postgresql+asyncpg://mentanova_user:mentanova_secure_pass_2024@postgres:5432/mentanova_db
       - REDIS_URL=redis://:mentanova_redis_pass@redis:6379/0
       - POSTGRES_HOST=postgres
+      - POSTGRES_USER=mentanova_user
+      - POSTGRES_PASSWORD=mentanova_secure_pass_2024
+      - POSTGRES_DB=mentanova_db
+      - POSTGRES_PORT=5432
     ports:
       - "8000:8000"
     volumes:
@@ -78,14 +91,14 @@ services:
       dockerfile: Dockerfile
       target: development  
     container_name: mentanova_frontend
-    command: npm run dev -- --host 0.0.0.0 
+    command: npm run dev -- --host 0.0.0.0
     ports:
-      - "3000:3000" 
+      - "5173:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      - VITE_API_URL=http://localhost:8000  
+      - VITE_API_URL=http://localhost:8000
     depends_on:
       - backend
     networks:

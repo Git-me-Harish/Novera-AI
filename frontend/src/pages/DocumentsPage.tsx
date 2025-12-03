@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Upload, FileText, CheckCircle, Clock, AlertCircle, Loader2 } from 'lucide-react';
+import { Upload, FileText, CheckCircle, Clock, AlertCircle, Loader2, Shield } from 'lucide-react';
 import api, { Document } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 import UploadModal from '../components/documents/UploadModal';
 import DocumentCard from '../components/documents/DocumentCard';
 
 export default function DocumentsPage() {
+  const { isAdmin } = useAuth();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -37,14 +39,19 @@ export default function DocumentsPage() {
   };
 
   const handleDeleteDocument = async (documentId: string) => {
+    if (!isAdmin) {
+      alert('Only administrators can delete documents.');
+      return;
+    }
+
     if (!confirm('Are you sure you want to delete this document?')) return;
 
     try {
       await api.deleteDocument(documentId);
       setDocuments(docs => docs.filter(d => d.id !== documentId));
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to delete document:', error);
-      alert('Failed to delete document');
+      alert(error.response?.data?.detail || 'Failed to delete document. You may not have permission.');
     }
   };
 
@@ -68,7 +75,7 @@ export default function DocumentsPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Documents</h1>
             <p className="text-sm text-gray-600 mt-1">
-              Manage your knowledge base documents
+              {isAdmin ? 'Manage all documents' : 'View documents (read-only)'}
             </p>
           </div>
           <button
@@ -79,6 +86,16 @@ export default function DocumentsPage() {
             Upload Document
           </button>
         </div>
+
+        {/* Access Level Badge */}
+        {!isAdmin && (
+          <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg flex items-center gap-2">
+            <Shield className="w-5 h-5 text-yellow-600" />
+            <p className="text-sm text-yellow-800">
+              You have read-only access. Contact an administrator to delete or modify documents.
+            </p>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -171,6 +188,7 @@ export default function DocumentsPage() {
                 document={doc}
                 onDelete={handleDeleteDocument}
                 onRefresh={loadDocuments}
+                canDelete={isAdmin}
               />
             ))}
           </div>

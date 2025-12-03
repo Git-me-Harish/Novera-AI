@@ -11,9 +11,7 @@ import sys
 
 from app.core.config import settings
 from app.db.session import init_db, close_db
-from app.api.endpoints import health, documents, auth
-from app.api.endpoints import chat  # Updated chat with full RAG
-from app.api.endpoints import search
+from app.api.endpoints import health, documents, auth, chat, search, admin
 
 
 # Configure Loguru logger
@@ -126,7 +124,6 @@ app.include_router(
     tags=["Documents"]
 )
 
-from app.api.endpoints import search
 app.include_router(
     search.router,
     prefix=settings.api_v1_prefix,
@@ -137,6 +134,13 @@ app.include_router(
     chat.router,
     prefix=settings.api_v1_prefix,
     tags=["Chat"]
+)
+
+# Admin routes - requires admin role
+app.include_router(
+    admin.router,
+    prefix=settings.api_v1_prefix,
+    tags=["Admin"]
 )
 
 

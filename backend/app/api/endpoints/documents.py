@@ -1,10 +1,10 @@
 """
-Document management API endpoints.
+Document management API endpoints with RBAC.
 Handles upload, processing, listing, and deletion of documents.
 """
 from typing import List, Optional
-from uuid import UUID, uuid4
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks, Query
+from uuid import UUID
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 from pydantic import BaseModel, Field
@@ -13,8 +13,10 @@ from loguru import logger
 
 from app.db.session import get_db
 from app.models.document import Document, Chunk
+from app.models.user import User
 from app.utils.file_utils import FileValidator, file_handler
 from app.services.document_processing.processor import document_processor
+from app.api.dependencies.auth import get_current_active_user, get_current_admin_user
 
 
 router = APIRouter()
@@ -61,13 +63,6 @@ class ProcessingStatusResponse(BaseModel):
     error: Optional[str]
 
 
-# Temporary: Mock user authentication until we implement auth
-async def get_current_user_id() -> UUID:
-    """Temporary function returning mock user ID."""
-    # TODO: Replace with actual JWT auth
-    return UUID("00000000-0000-0000-0000-000000000001")
-
-
 @router.post("/documents/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
@@ -75,10 +70,13 @@ async def upload_document(
     department: Optional[str] = Query(None, description="Department name"),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_db),
-    user_id: UUID = Depends(get_current_user_id)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Upload a new document for processing.
+    
+    Admins can upload any document.
+    Regular users can upload documents but have read-only access.
     
     Flow:
     1. Validate file
@@ -86,7 +84,7 @@ async def upload_document(
     3. Create database record
     4. Queue background processing
     """
-    logger.info(f"Document upload request: {file.filename} (type: {doc_type})")
+    logger.info(f"Document upload request: {file.filename} (type: {doc_type}) by user {current_user.email}")
     
     # Step 1: Validate file
     is_valid, error_message = FileValidator.validate_file(file)
@@ -99,7 +97,7 @@ async def upload_document(
         # Save file temporarily to calculate hash
         file_path, file_hash, file_size = await file_handler.save_upload_file(
             file, 
-            str(user_id)
+            str(current_user.id)
         )
         
         # Check if file already exists
@@ -136,10 +134,11 @@ async def upload_document(
             doc_type=doc_type,
             department=department,
             status="pending",
-            uploaded_by=user_id,
+            uploaded_by=current_user.id,
             metadata={
                 "mime_type": FileValidator.get_mime_type(file.filename),
-                "upload_source": "api"
+                "upload_source": "api",
+                "uploaded_by_email": current_user.email
             }
         )
         
@@ -205,10 +204,13 @@ async def list_documents(
     status: Optional[str] = Query(None),
     department: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    user_id: UUID = Depends(get_current_user_id)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
-    List all documents with optional filtering.
+    List documents with optional filtering.
+    
+    Regular users: See only their own documents (read-only)
+    Admins: See all documents
     
     Query parameters:
     - skip: Pagination offset
@@ -218,8 +220,13 @@ async def list_documents(
     - department: Filter by department
     """
     # Build query
-    query = select(Document).where(Document.uploaded_by == user_id)
+    query = select(Document)
     
+    # Regular users see only their documents
+    if not current_user.is_admin():
+        query = query.where(Document.uploaded_by == current_user.id)
+    
+    # Apply filters
     if doc_type:
         query = query.where(Document.doc_type == doc_type)
     
@@ -265,21 +272,29 @@ async def list_documents(
 async def get_document_status(
     document_id: UUID,
     db: AsyncSession = Depends(get_db),
-    user_id: UUID = Depends(get_current_user_id)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get processing status of a specific document.
+    
+    Regular users: Can view only their own documents
+    Admins: Can view any document
     """
-    result = await db.execute(
-        select(Document).where(
-            Document.id == document_id,
-            Document.uploaded_by == user_id
-        )
-    )
+    # Build query
+    query = select(Document).where(Document.id == document_id)
+    
+    # Regular users can only see their own documents
+    if not current_user.is_admin():
+        query = query.where(Document.uploaded_by == current_user.id)
+    
+    result = await db.execute(query)
     document = result.scalar_one_or_none()
     
     if not document:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found or you don't have permission to view it"
+        )
     
     return ProcessingStatusResponse(
         document_id=str(document.id),
@@ -297,23 +312,25 @@ async def get_document_status(
 async def delete_document(
     document_id: UUID,
     db: AsyncSession = Depends(get_db),
-    user_id: UUID = Depends(get_current_user_id)
+    current_user: User = Depends(get_current_admin_user)  # Only admins can delete
 ):
     """
     Delete a document and all its chunks.
     Also removes the file from disk.
+    
+    ADMIN ONLY - Regular users cannot delete documents (read-only access).
     """
-    # Get document
+    # Get document (admin can delete any document)
     result = await db.execute(
-        select(Document).where(
-            Document.id == document_id,
-            Document.uploaded_by == user_id
-        )
+        select(Document).where(Document.id == document_id)
     )
     document = result.scalar_one_or_none()
     
     if not document:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found"
+        )
     
     # Delete file from disk
     from pathlib import Path
@@ -329,7 +346,7 @@ async def delete_document(
     await db.delete(document)
     await db.commit()
     
-    logger.info(f"✅ Document deleted: {document_id}")
+    logger.info(f"✅ Document deleted by admin {current_user.email}: {document_id}")
     
     return {
         "message": "Document deleted successfully",
@@ -342,30 +359,33 @@ async def reprocess_document(
     document_id: UUID,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    user_id: UUID = Depends(get_current_user_id)
+    current_user: User = Depends(get_current_admin_user)  # Only admins can reprocess
 ):
     """
     Reprocess a document (useful if chunking/embedding parameters changed).
+    
+    ADMIN ONLY
     """
-    # Verify document exists and belongs to user
+    # Verify document exists
     result = await db.execute(
-        select(Document).where(
-            Document.id == document_id,
-            Document.uploaded_by == user_id
-        )
+        select(Document).where(Document.id == document_id)
     )
     document = result.scalar_one_or_none()
     
     if not document:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found"
+        )
     
     # Queue reprocessing
-    from pathlib import Path
     background_tasks.add_task(
         document_processor.reprocess_document,
         document_id,
         db
     )
+    
+    logger.info(f"Document reprocessing queued by admin {current_user.email}: {document_id}")
     
     return {
         "message": "Document reprocessing queued",
