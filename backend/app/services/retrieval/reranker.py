@@ -61,8 +61,8 @@ class RerankingService:
                 model=self.model,
                 query=query,
                 documents=documents,
-                top_n=min(n, len(documents)),
-                return_documents=False  # We already have the documents
+                top_n=min(n, len(documents))
+                # ✅ Removed return_documents parameter (not supported in Cohere SDK v5+)
             )
             
             # Map rerank results back to chunks
@@ -84,9 +84,18 @@ class RerankingService:
             
         except Exception as e:
             logger.error(f"❌ Reranking failed: {str(e)}")
-            # Fallback: return original chunks
             logger.warning("Falling back to original ranking")
-            return chunks[:n]
+            
+            # Fallback: return original chunks with preserved scores
+            fallback_chunks = []
+            for i, chunk in enumerate(chunks[:n]):
+                chunk_copy = chunk.copy()
+                # Use existing similarity/fused score as fallback rerank score
+                chunk_copy['rerank_score'] = chunk.get('similarity_score', 0) or chunk.get('fused_score', 0)
+                chunk_copy['rerank_position'] = i
+                fallback_chunks.append(chunk_copy)
+            
+            return fallback_chunks
     
     async def rerank_with_threshold(
         self,

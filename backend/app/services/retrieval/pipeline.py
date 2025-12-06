@@ -133,6 +133,90 @@ class RetrievalPipeline:
             }
         }
     
+    def _safe_get_metadata(self, chunk: Dict[str, Any]) -> dict:
+        """
+        Safely extract metadata from chunk, handling SQLAlchemy objects.
+        
+        Args:
+            chunk: Chunk dictionary (may contain SQLAlchemy objects)
+            
+        Returns:
+            Plain dictionary with metadata
+        """
+        metadata = {}
+        
+        # Try different metadata keys
+        for meta_key in ['chunk_metadata', 'metadata', 'doc_metadata']:
+            if meta_key in chunk:
+                meta_obj = chunk[meta_key]
+                
+                # Handle different types
+                if isinstance(meta_obj, dict):
+                    metadata = meta_obj
+                    break
+                elif hasattr(meta_obj, '__dict__'):
+                    # SQLAlchemy object - convert to dict
+                    try:
+                        metadata = {k: v for k, v in meta_obj.__dict__.items() if not k.startswith('_')}
+                        break
+                    except Exception as e:
+                        logger.debug(f"Could not extract __dict__ from metadata: {e}")
+                        pass
+                elif hasattr(meta_obj, 'keys') and hasattr(meta_obj, '__getitem__'):
+                    # Mapping-like object
+                    try:
+                        metadata = {k: meta_obj[k] for k in meta_obj.keys()}
+                        break
+                    except Exception as e:
+                        logger.debug(f"Could not extract keys from metadata: {e}")
+                        pass
+        
+        return metadata
+    
+    def _prioritize_chunks(
+        self,
+        chunks: List[Dict[str, Any]],
+        processed_query: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Prioritize chunks based on type and relevance.
+        
+        Priority order:
+        1. Tables (for financial/data queries)
+        2. High rerank score chunks
+        3. Exact matches
+        4. Regular text chunks
+        """
+        if not chunks:
+            return []
+        
+        intent = processed_query.get('intent', 'general')
+        entities = processed_query.get('entities', {})
+        has_financial_entities = 'amount' in entities or 'financial' in intent.lower()
+        
+        def get_priority(chunk: Dict[str, Any]) -> tuple:
+            # Higher number = higher priority (sort descending)
+            priority = 0
+            
+            # Boost tables for financial/analytical queries
+            chunk_type = chunk.get('chunk_type', 'text')
+            if chunk_type == 'table' and (intent in ['financial', 'analytical'] or has_financial_entities):
+                priority += 1000
+            
+            # Use rerank score as primary sort
+            rerank_score = chunk.get('rerank_score', chunk.get('fused_score', chunk.get('similarity_score', 0)))
+            
+            return (priority, rerank_score)
+        
+        # Sort by priority
+        try:
+            sorted_chunks = sorted(chunks, key=get_priority, reverse=True)
+        except Exception as e:
+            logger.warning(f"Error sorting chunks: {e}, returning unsorted")
+            sorted_chunks = chunks
+        
+        return sorted_chunks
+    
     def _assemble_context(
         self,
         chunks: List[Dict[str, Any]],
@@ -153,6 +237,16 @@ class RetrievalPipeline:
         sources = []
         final_chunks = []
         
+        # Handle empty chunks
+        if not chunks:
+            logger.warning("No chunks to assemble context from")
+            return {
+                'chunks': [],
+                'context_text': '',
+                'total_tokens': 0,
+                'sources': []
+            }
+        
         # Prioritize chunks based on type and relevance
         sorted_chunks = self._prioritize_chunks(chunks, processed_query)
         
@@ -168,14 +262,18 @@ class RetrievalPipeline:
             chunk_text = self._format_chunk_for_context(chunk)
             context_parts.append(chunk_text)
             
-            # Track sources
+            # ✅ FIXED: Safely extract metadata from chunk
+            chunk_metadata = self._safe_get_metadata(chunk)
+            
+            # Track sources - with safe defaults
             source_info = {
-                'document': chunk['metadata'].get('document_title', 'Unknown'),
-                'page': chunk.get('page_numbers', [None])[0],
+                'document': chunk_metadata.get('document_title', chunk.get('document_name', 'Unknown Document')),
+                'page': chunk.get('page_numbers', [None])[0] if chunk.get('page_numbers') else None,
                 'section': chunk.get('section_title'),
-                'chunk_id': chunk['chunk_id']
+                'chunk_id': str(chunk.get('chunk_id', chunk.get('id', '')))
             }
             
+            # Only add if not duplicate
             if source_info not in sources:
                 sources.append(source_info)
             
@@ -185,47 +283,14 @@ class RetrievalPipeline:
         # Combine context parts
         context_text = "\n\n---\n\n".join(context_parts)
         
+        logger.info(f"Assembled context: {len(final_chunks)} chunks, {total_tokens} tokens, {len(sources)} sources")
+        
         return {
             'chunks': final_chunks,
             'context_text': context_text,
             'total_tokens': total_tokens,
             'sources': sources
         }
-    
-    def _prioritize_chunks(
-        self,
-        chunks: List[Dict[str, Any]],
-        processed_query: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        Prioritize chunks based on type and relevance.
-        
-        Priority order:
-        1. Tables (for financial/data queries)
-        2. High rerank score chunks
-        3. Exact matches
-        4. Regular text chunks
-        """
-        intent = processed_query['intent']
-        has_financial_entities = 'amount' in processed_query.get('entities', {})
-        
-        def get_priority(chunk: Dict[str, Any]) -> tuple:
-            # Higher number = higher priority (sort descending)
-            priority = 0
-            
-            # Boost tables for financial/analytical queries
-            if chunk.get('chunk_type') == 'table' and (intent in ['financial', 'analytical'] or has_financial_entities):
-                priority += 1000
-            
-            # Use rerank score as primary sort
-            rerank_score = chunk.get('rerank_score', chunk.get('fused_score', 0))
-            
-            return (priority, rerank_score)
-        
-        # Sort by priority
-        sorted_chunks = sorted(chunks, key=get_priority, reverse=True)
-        
-        return sorted_chunks
     
     def _format_chunk_for_context(self, chunk: Dict[str, Any]) -> str:
         """
@@ -234,33 +299,47 @@ class RetrievalPipeline:
         Returns:
             Formatted chunk text with source information
         """
-        metadata = chunk.get('metadata', {})
+        # ✅ FIXED: Use safe metadata extraction
+        chunk_metadata = self._safe_get_metadata(chunk)
         
         # Build header
         header_parts = []
         
-        if metadata.get('document_title'):
-            header_parts.append(f"Document: {metadata['document_title']}")
+        # Try to get document title from multiple sources
+        doc_title = (
+            chunk_metadata.get('document_title') or 
+            chunk_metadata.get('filename') or
+            chunk.get('document_name') or 
+            chunk.get('filename')
+        )
         
-        if chunk.get('section_title'):
-            header_parts.append(f"Section: {chunk['section_title']}")
+        if doc_title:
+            header_parts.append(f"Document: {doc_title}")
         
-        if chunk.get('page_numbers'):
-            pages = chunk['page_numbers']
-            if len(pages) == 1:
-                header_parts.append(f"Page: {pages[0]}")
+        section_title = chunk.get('section_title')
+        if section_title:
+            header_parts.append(f"Section: {section_title}")
+        
+        page_numbers = chunk.get('page_numbers', [])
+        if page_numbers and isinstance(page_numbers, list) and len(page_numbers) > 0:
+            if len(page_numbers) == 1:
+                header_parts.append(f"Page: {page_numbers[0]}")
             else:
-                header_parts.append(f"Pages: {pages[0]}-{pages[-1]}")
+                header_parts.append(f"Pages: {page_numbers[0]}-{page_numbers[-1]}")
         
-        if chunk.get('chunk_type') and chunk['chunk_type'] != 'text':
-            header_parts.append(f"Type: {chunk['chunk_type'].title()}")
+        chunk_type = chunk.get('chunk_type', 'text')
+        if chunk_type and chunk_type != 'text':
+            header_parts.append(f"Type: {chunk_type.title()}")
         
-        # Format
+        # Get content
+        content = chunk.get('content', '')
+        
+        # Format final output
         if header_parts:
             header = " | ".join(header_parts)
-            return f"[{header}]\n{chunk['content']}"
+            return f"[{header}]\n{content}"
         else:
-            return chunk['content']
+            return content
     
     async def retrieve_from_document(
         self,

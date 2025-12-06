@@ -1,12 +1,14 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useState } from 'react';
 import { AuthProvider } from './contexts/AuthContext';
+import ToastContainer from './components/common/ToastContainer';  // Changed this line
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import ChatPage from './pages/ChatPage';
 import DocumentsPage from './pages/DocumentsPage';
+import DocumentEditorPage from './pages/DocumentEditorPage';
 import ConversationsPage from './pages/ConversationsPage';
 import ProfilePage from './pages/ProfilePage';
 import AdminDashboard from './pages/admin/AdminDashboard';
@@ -18,6 +20,7 @@ function App() {
   return (
     <AuthProvider>
       <Router>
+        <ToastContainer />
         <Routes>
           {/* Public Routes */}
           <Route path="/login" element={<LoginPage />} />
@@ -34,6 +37,7 @@ function App() {
                     <Route path="/chat" element={<ChatPage />} />
                     <Route path="/chat/:conversationId" element={<ChatPage />} />
                     <Route path="/documents" element={<DocumentsPage />} />
+                    <Route path="/documents/:documentId/edit" element={<DocumentEditorPage />} />
                     <Route path="/conversations" element={<ConversationsPage />} />
                     <Route path="/profile" element={<ProfilePage />} />
                     

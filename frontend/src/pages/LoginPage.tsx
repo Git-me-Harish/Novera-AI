@@ -27,9 +27,24 @@ export default function LoginPage() {
       navigate(from, { replace: true });
     } catch (err: any) {
       console.error('Login error:', err);
-      setError(
-        err.response?.data?.detail || 'Login failed. Please check your credentials.'
-      );
+      
+      // ✅ Better error message extraction
+      let errorMessage = 'Login failed. Please check your credentials.';
+      
+      if (err.response?.data?.detail) {
+        if (typeof err.response.data.detail === 'string') {
+          errorMessage = err.response.data.detail;
+        } else if (Array.isArray(err.response.data.detail)) {
+          // Format validation errors
+          errorMessage = err.response.data.detail
+            .map((e: any) => `${e.loc?.join('.')}: ${e.msg}`)
+            .join(', ');
+        }
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }

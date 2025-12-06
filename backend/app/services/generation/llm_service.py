@@ -1,9 +1,11 @@
 """
-LLM generation service using OpenAI GPT-4.
+LLM generation service using Google Gemini.
 Handles answer generation with strict sourcing and formatting.
+Supports both document-based and conversational responses.
 """
 from typing import List, Dict, Any, Optional, AsyncGenerator
-from openai import AsyncOpenAI
+import asyncio
+import google.generativeai as genai
 from tenacity import retry, stop_after_attempt, wait_exponential
 from loguru import logger
 
@@ -12,37 +14,155 @@ from app.core.config import settings
 
 class LLMService:
     """
-    Service for generating answers using GPT-4.
+    Service for generating answers using Google Gemini.
     Implements strict prompting for accurate, source-based responses.
+    Also handles natural conversational queries.
     """
     
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
-        self.model = settings.openai_chat_model
+        # Configure Gemini
+        genai.configure(api_key=settings.gemini_api_key)
+        
+        self.model_name = settings.gemini_chat_model
         self.temperature = settings.temperature
-        self.max_tokens = settings.max_response_tokens
+        self.max_tokens = settings.gemini_max_tokens
         
-        # System prompt for finance/HRMS RAG
-        self.system_prompt = """You are Mentanova's AI Knowledge Assistant, specializing in Finance and HRMS documentation.
-
-STRICT RULES:
-1. Answer ONLY using the provided context from approved documents
-2. For financial figures: Always cite the source document and date
-3. If context lacks information: State "This information is not available in the current knowledge base"
-4. For calculations: Show your work step-by-step
-5. For policies: Quote the exact policy section and document name
-6. Never make assumptions about financial data
-7. Always cite sources in [Document: X, Page: Y] format
-
-RESPONSE FORMAT:
-- Direct answer first
-- Supporting details from context
-- Source citations (Document name, Page number)
-- If uncertain, state confidence level
-
-Be concise, accurate, and professional."""
+        # Initialize model
+        self.model = genai.GenerativeModel(
+            model_name=self.model_name,
+            generation_config={
+                "temperature": self.temperature,
+                "max_output_tokens": settings.max_response_tokens,
+                "top_p": 0.95,
+            }
+        )
         
-        logger.info(f"LLM service initialized: {self.model}")
+        # System prompt for document-based RAG
+        self.system_instruction = """You are Mentanova, a helpful AI assistant specializing in Finance and HRMS documentation.
+
+Your role is to provide accurate, helpful answers based on the provided document context.
+
+Guidelines:
+1. Answer questions using ONLY the information from the provided context when documents are available
+2. Be conversational and friendly, but professional
+3. For financial figures: Always cite the source document and page
+4. If information is not in the context: Politely say you don't have that information in the available documents
+5. For policies: Reference the exact document and section
+6. Use format [Document: X, Page: Y] for citations
+7. If unsure, acknowledge it and suggest alternatives
+
+Response style:
+- Use natural, conversational language
+- Structure responses with:
+  - Clear paragraphs
+  - Bullet points for lists
+  - Bold for emphasis (use **text**)
+  - Proper spacing
+- Be concise but thorough
+- For greetings and general conversation, respond naturally without forcing document references"""
+        
+        logger.info(f"LLM service initialized: {self.model_name}")
+    
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    async def generate_conversational_response(
+        self,
+        query: str,
+        context_message: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        is_error: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Generate a natural conversational response (no document context).
+        Used for greetings, small talk, and general conversation.
+        
+        Args:
+            query: User's query
+            context_message: Context or guidance message
+            history: Conversation history
+            is_error: Whether this is an error response
+            
+        Returns:
+            Dictionary with answer and metadata
+        """
+        logger.info(f"Generating conversational response for: '{query[:50]}...'")
+        
+        # Build conversational prompt
+        if is_error:
+            prompt = f"""The user asked: "{query}"
+
+However, there's an issue: {context_message}
+
+Please respond in a helpful, friendly way that explains the limitation while guiding the user on how they can get help with their Finance and HRMS documents."""
+        else:
+            prompt = f"""The user said: "{query}"
+
+Please respond naturally and helpfully. You are Mentanova, an AI assistant that helps with Finance and HRMS documents. 
+
+Be conversational, friendly, and guide the user on how you can help them find information from documents.
+
+Use natural language, be warm and helpful."""
+        
+        # Build message history
+        messages = []
+        
+        # Add conversational system prompt
+        messages.append({
+            "role": "user",
+            "parts": ["You are Mentanova, a friendly AI assistant. Respond naturally to user queries. Be helpful, conversational, and professional. Use markdown formatting (bullet points, bold, etc.) when appropriate."]
+        })
+        messages.append({
+            "role": "model",
+            "parts": ["I understand. I'll be helpful, conversational, and use proper formatting."]
+        })
+        
+        # Add history if exists
+        if history:
+            for msg in history[-4:]:
+                role = "model" if msg["role"] == "assistant" else "user"
+                messages.append({"role": role, "parts": [msg["content"]]})
+        
+        # Add current prompt
+        messages.append({"role": "user", "parts": [prompt]})
+        
+        try:
+            loop = asyncio.get_event_loop()
+            
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.model.generate_content(
+                    messages,
+                    generation_config={
+                        "temperature": 0.7,  # More creative for conversation
+                        "max_output_tokens": 500,
+                    }
+                )
+            )
+            
+            answer = response.text
+            
+            return {
+                'answer': answer,
+                'confidence': 'high',
+                'citations': [],
+                'usage': {
+                    'prompt_tokens': response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0,
+                    'completion_tokens': response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0,
+                    'total_tokens': response.usage_metadata.total_token_count if hasattr(response, 'usage_metadata') else 0
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Conversational generation failed: {str(e)}")
+            # Fallback to context message
+            return {
+                'answer': context_message,
+                'confidence': 'medium',
+                'citations': [],
+                'usage': {'total_tokens': 0}
+            }
     
     @retry(
         stop=stop_after_attempt(3),
@@ -53,72 +173,94 @@ Be concise, accurate, and professional."""
         query: str,
         context: str,
         sources: List[Dict[str, Any]],
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        is_conversational: bool = False
     ) -> Dict[str, Any]:
         """
-        Generate answer using GPT-4 with retrieved context.
+        Generate answer using Gemini with retrieved context.
+        Now handles both document-based and conversational queries.
         
         Args:
             query: User's question
-            context: Retrieved and assembled context
-            sources: List of source documents/pages
-            conversation_history: Previous messages for context
+            context: Retrieved context (can be empty for conversational)
+            sources: Source documents
+            conversation_history: Previous messages
+            is_conversational: If True, focus on natural conversation
             
         Returns:
             Dictionary with answer, citations, and metadata
         """
-        logger.info(f"Generating answer for query: '{query[:50]}...'")
+        logger.info(f"Generating answer: conversational={is_conversational}, sources={len(sources)}")
+        
+        # Build prompt based on query type
+        if is_conversational or not context or len(context.strip()) < 50:
+            # Conversational mode - no strong document context
+            user_prompt = f"""Question: {query}
+
+Note: No specific document context is available for this query.
+
+Please respond naturally and conversationally. If this is a greeting or general question, respond appropriately. If the user is asking about documents but no context is available, guide them helpfully on what you can assist with.
+
+Use proper markdown formatting:
+- **Bold** for important points
+- Bullet points for lists
+- Clear paragraphs for readability"""
+        else:
+            # Document-based mode
+            user_prompt = self._build_prompt(query, context, sources)
         
         # Build messages
-        messages = [{"role": "system", "content": self.system_prompt}]
+        messages = []
         
-        # Add conversation history if exists
+        # System instruction
+        messages.append({"role": "user", "parts": [self.system_instruction]})
+        messages.append({"role": "model", "parts": ["Understood. I'll provide accurate, well-formatted responses with proper citations when using documents."]})
+        
+        # Add history
         if conversation_history:
-            messages.extend(conversation_history[-6:])  # Last 3 exchanges
+            for msg in conversation_history[-6:]:
+                role = "model" if msg["role"] == "assistant" else "user"
+                messages.append({"role": role, "parts": [msg["content"]]})
         
-        # Build user prompt with context
-        user_prompt = self._build_prompt(query, context, sources)
-        messages.append({"role": "user", "content": user_prompt})
+        # Add current query
+        messages.append({"role": "user", "parts": [user_prompt]})
         
         try:
-            # Call GPT-4
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                top_p=0.95,
-                frequency_penalty=0.0,
-                presence_penalty=0.0
+            loop = asyncio.get_event_loop()
+            
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.model.generate_content(
+                    messages,
+                    generation_config={
+                        "temperature": 0.7 if is_conversational else self.temperature,
+                        "max_output_tokens": settings.max_response_tokens,
+                    }
+                )
             )
             
-            answer = response.choices[0].message.content
-            finish_reason = response.choices[0].finish_reason
-            
-            # Extract citations from answer
+            answer = response.text
             citations = self._extract_citations(answer, sources)
-            
-            # Calculate confidence
             confidence = self._assess_confidence(answer, context)
             
-            result = {
+            usage = {
+                'prompt_tokens': response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0,
+                'completion_tokens': response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0,
+                'total_tokens': response.usage_metadata.total_token_count if hasattr(response, 'usage_metadata') else 0
+            }
+            
+            logger.info(f"✅ Generated: {len(answer)} chars, {len(citations)} citations")
+            
+            return {
                 'answer': answer,
                 'citations': citations,
                 'confidence': confidence,
-                'finish_reason': finish_reason,
-                'usage': {
-                    'prompt_tokens': response.usage.prompt_tokens,
-                    'completion_tokens': response.usage.completion_tokens,
-                    'total_tokens': response.usage.total_tokens
-                }
+                'finish_reason': 'stop',
+                'usage': usage
             }
             
-            logger.info(f"✅ Answer generated: {len(answer)} chars, {len(citations)} citations")
-            
-            return result
-            
         except Exception as e:
-            logger.error(f"❌ Generation failed: {str(e)}")
+            logger.error(f"Generation failed: {str(e)}")
             raise
     
     @retry(
@@ -146,33 +288,58 @@ Be concise, accurate, and professional."""
         """
         logger.info(f"Streaming answer for query: '{query[:50]}...'")
         
-        # Build messages
-        messages = [{"role": "system", "content": self.system_prompt}]
+        # Build prompt
+        user_prompt = self._build_prompt(query, context, sources)
+        
+        # Build chat messages
+        messages = []
+        
+        messages.append({
+            "role": "user",
+            "parts": [self.system_instruction]
+        })
+        messages.append({
+            "role": "model",
+            "parts": ["Understood. I'll follow these rules strictly."]
+        })
         
         if conversation_history:
-            messages.extend(conversation_history[-6:])
+            for msg in conversation_history[-6:]:
+                role = "model" if msg["role"] == "assistant" else "user"
+                messages.append({
+                    "role": role,
+                    "parts": [msg["content"]]
+                })
         
-        user_prompt = self._build_prompt(query, context, sources)
-        messages.append({"role": "user", "content": user_prompt})
+        messages.append({
+            "role": "user",
+            "parts": [user_prompt]
+        })
         
         try:
             # Stream response
-            stream = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                stream=True
+            loop = asyncio.get_event_loop()
+            
+            response_stream = await loop.run_in_executor(
+                None,
+                lambda: self.model.generate_content(
+                    messages,
+                    stream=True,
+                    generation_config={
+                        "temperature": self.temperature,
+                        "max_output_tokens": settings.max_response_tokens,
+                    }
+                )
             )
             
-            async for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
+            for chunk in response_stream:
+                if chunk.text:
+                    yield chunk.text
             
             logger.info("✅ Streaming completed")
             
         except Exception as e:
-            logger.error(f"❌ Streaming failed: {str(e)}")
+            logger.error(f"Streaming failed: {str(e)}")
             raise
     
     def _build_prompt(
@@ -181,15 +348,10 @@ Be concise, accurate, and professional."""
         context: str,
         sources: List[Dict[str, Any]]
     ) -> str:
-        """
-        Build the complete prompt with query and context.
-        
-        Returns:
-            Formatted prompt string
-        """
+        """Build the complete prompt with query and context."""
         # Format sources for reference
         sources_text = "\n".join([
-            f"- {src['document']}, Page {src['page']}" + 
+            f"- {src['document']}, Page {src.get('page', 'N/A')}" + 
             (f", Section: {src['section']}" if src.get('section') else "")
             for src in sources
         ])
@@ -209,6 +371,12 @@ Instructions:
 4. For financial data, include the exact figures and their source
 5. Be precise and avoid speculation
 
+Formatting:
+- Use **bold** for important points
+- Use bullet points for lists
+- Use clear paragraphs
+- Use markdown formatting
+
 Answer:"""
         
         return prompt
@@ -218,12 +386,7 @@ Answer:"""
         answer: str,
         sources: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """
-        Extract citation references from the generated answer.
-        
-        Returns:
-            List of cited sources with positions
-        """
+        """Extract citation references from the generated answer."""
         import re
         
         citations = []
@@ -252,14 +415,7 @@ Answer:"""
         return citations
     
     def _assess_confidence(self, answer: str, context: str) -> str:
-        """
-        Assess confidence level of the answer.
-        
-        Returns:
-            Confidence level: high, medium, low
-        """
-        # Simple heuristic-based confidence
-        
+        """Assess confidence level of the answer."""
         # High confidence indicators
         high_indicators = [
             'according to', 'states that', 'specified in',
@@ -280,7 +436,6 @@ Answer:"""
         
         # Check for strong sourcing
         if any(indicator in answer_lower for indicator in high_indicators):
-            # Also check if citations present
             if '[Document:' in answer:
                 return 'high'
         
@@ -306,25 +461,33 @@ Answer:"""
         prompt = f"""Summarize the following document concisely in {max_length} words or less.
 Focus on key points, main topics, and important information.
 
+Use proper markdown formatting:
+- **Bold** for key terms
+- Bullet points for main topics
+- Clear paragraphs
+
 Document: {document_title}
 
 Content:
-{document_content[:4000]}  # Limit input length
+{document_content[:4000]}
 
 Summary:"""
         
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a precise document summarizer."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=max_length * 2
+            loop = asyncio.get_event_loop()
+            
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.model.generate_content(
+                    prompt,
+                    generation_config={
+                        "temperature": 0.3,
+                        "max_output_tokens": max_length * 2,
+                    }
+                )
             )
             
-            summary = response.choices[0].message.content
+            summary = response.text
             logger.info(f"Generated summary for '{document_title}'")
             
             return summary

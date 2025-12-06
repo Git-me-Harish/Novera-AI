@@ -42,15 +42,18 @@ class FileValidator:
         if not file.filename:
             return False, "Filename is required"
         
-        # Get file extension
+        # Get file extension (with dot)
         file_ext = Path(file.filename).suffix.lower()
         
         # Check against dangerous extensions
         if file_ext in cls.DANGEROUS_EXTENSIONS:
             return False, f"File type {file_ext} is not allowed for security reasons"
         
+        # Remove the dot for comparison with settings.allowed_extensions_list
+        file_ext_without_dot = file_ext.lstrip('.')
+        
         # Check against allowed extensions
-        if file_ext not in settings.allowed_extensions_list:
+        if file_ext_without_dot not in settings.allowed_extensions_list:
             return False, f"File type {file_ext} not supported. Allowed: {', '.join(settings.allowed_extensions_list)}"
         
         # Validate file size (if we can get it)

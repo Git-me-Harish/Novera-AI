@@ -11,7 +11,7 @@ import sys
 
 from app.core.config import settings
 from app.db.session import init_db, close_db
-from app.api.endpoints import health, documents, auth, chat, search, admin
+from app.api.endpoints import health, documents, auth, chat, search, admin, document_editor
 
 
 # Configure Loguru logger
@@ -141,6 +141,12 @@ app.include_router(
     admin.router,
     prefix=settings.api_v1_prefix,
     tags=["Admin"]
+)
+
+app.include_router(
+    document_editor.router,
+    prefix=settings.api_v1_prefix,
+    tags=["Document Editor"]
 )
 
 

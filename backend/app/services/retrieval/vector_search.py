@@ -22,6 +22,41 @@ class VectorSearchService:
         self.top_k = settings.retrieval_top_k
         self.similarity_threshold = settings.similarity_threshold
     
+    def _safe_extract_metadata(self, metadata_obj: Any) -> dict:
+        """
+        Safely extract metadata from SQLAlchemy object or dict.
+        
+        Args:
+            metadata_obj: Metadata object (could be dict, SQLAlchemy object, etc.)
+            
+        Returns:
+            Plain Python dictionary
+        """
+        if metadata_obj is None:
+            return {}
+        
+        # If already a dict, return it
+        if isinstance(metadata_obj, dict):
+            return metadata_obj
+        
+        # If it has __dict__, try to extract
+        if hasattr(metadata_obj, '__dict__'):
+            try:
+                return {k: v for k, v in metadata_obj.__dict__.items() if not k.startswith('_')}
+            except:
+                pass
+        
+        # If it's mapping-like
+        if hasattr(metadata_obj, 'keys') and hasattr(metadata_obj, '__getitem__'):
+            try:
+                return {k: metadata_obj[k] for k in metadata_obj.keys()}
+            except:
+                pass
+        
+        # Fallback: empty dict
+        logger.warning(f"Could not extract metadata from {type(metadata_obj)}")
+        return {}
+    
     async def search_similar_chunks(
         self,
         query_embedding: List[float],
@@ -47,69 +82,85 @@ class VectorSearchService:
         """
         k = top_k or self.top_k
         
-        # Build the query with vector similarity
-        # Note: pgvector uses <=> for cosine distance (lower is better)
-        # We convert to similarity: similarity = 1 - distance
-        query = (
-            select(
-                Chunk,
-                Document,
-                (1 - Chunk.embedding.cosine_distance(query_embedding)).label('similarity')
+        logger.info(f"Vector search: top_k={k}, threshold={self.similarity_threshold}")
+        
+        try:
+            # Build the query with vector similarity
+            # Note: pgvector uses <=> for cosine distance (lower is better)
+            # We convert to similarity: similarity = 1 - distance
+            query = (
+                select(
+                    Chunk,
+                    Document,
+                    (1 - Chunk.embedding.cosine_distance(query_embedding)).label('similarity')
+                )
+                .join(Document, Chunk.document_id == Document.id)
+                .where(Document.status == "completed")
             )
-            .join(Document, Chunk.document_id == Document.id)
-            .where(Document.status == "completed")
-        )
-        
-        # Apply filters
-        if doc_type:
-            query = query.where(Document.doc_type == doc_type)
-        
-        if department:
-            query = query.where(Document.department == department)
-        
-        if document_ids:
-            query = query.where(Document.id.in_(document_ids))
-        
-        # Order by similarity and limit
-        query = (
-            query
-            .order_by(text('similarity DESC'))
-            .limit(k)
-        )
-        
-        # Execute query
-        result = await db.execute(query)
-        rows = result.all()
-        
-        # Format results
-        chunks = []
-        for chunk, document, similarity in rows:
-            # Filter by similarity threshold
-            if similarity < self.similarity_threshold:
-                continue
             
-            chunk_dict = {
-                'chunk_id': str(chunk.id),
-                'document_id': str(document.id),
-                'content': chunk.content,
-                'chunk_type': chunk.chunk_type,
-                'page_numbers': chunk.page_numbers,
-                'section_title': chunk.section_title,
-                'token_count': chunk.token_count,
-                'similarity_score': float(similarity),
-                'metadata': {
-                    **chunk.metadata,
-                    'document_title': document.filename,
-                    'doc_type': document.doc_type,
-                    'department': document.department,
+            # Apply filters
+            if doc_type:
+                query = query.where(Document.doc_type == doc_type)
+            
+            if department:
+                query = query.where(Document.department == department)
+            
+            if document_ids:
+                query = query.where(Document.id.in_(document_ids))
+            
+            # Order by similarity and limit
+            query = (
+                query
+                .order_by(text('similarity DESC'))
+                .limit(k * 2)  # Get extra for filtering
+            )
+            
+            # Execute query
+            result = await db.execute(query)
+            rows = result.all()
+            
+            # Format results
+            chunks = []
+            for chunk, document, similarity in rows:
+                # Filter by similarity threshold
+                if similarity < self.similarity_threshold:
+                    continue
+                
+                # ✅ FIXED: Safely extract metadata
+                chunk_metadata = self._safe_extract_metadata(chunk.chunk_metadata)
+                doc_metadata = self._safe_extract_metadata(document.doc_metadata)
+                
+                chunk_dict = {
+                    'chunk_id': str(chunk.id),
+                    'id': str(chunk.id),
+                    'document_id': str(document.id),
+                    'document_name': document.filename,
+                    'content': chunk.content,
+                    'chunk_type': chunk.chunk_type,
+                    'chunk_index': chunk.chunk_index,
+                    'page_numbers': chunk.page_numbers,
+                    'section_title': chunk.section_title,
+                    'token_count': chunk.token_count,
+                    'similarity_score': float(similarity),
+                    'chunk_metadata': chunk_metadata,
+                    'metadata': {
+                        'document_title': document.filename,
+                        'doc_type': document.doc_type,
+                        'department': document.department,
+                        **chunk_metadata,  # Now safe to unpack
+                    }
                 }
-            }
+                
+                chunks.append(chunk_dict)
             
-            chunks.append(chunk_dict)
-        
-        logger.info(f"Vector search found {len(chunks)} chunks above threshold {self.similarity_threshold}")
-        
-        return chunks
+            logger.info(f"Vector search found {len(chunks)} chunks above threshold {self.similarity_threshold}")
+            
+            # Return top_k results
+            return chunks[:k]
+            
+        except Exception as e:
+            logger.error(f"Vector search failed: {str(e)}", exc_info=True)
+            return []
     
     async def search_by_document(
         self,
@@ -148,54 +199,66 @@ class VectorSearchService:
         Returns:
             List of neighboring chunks in order
         """
-        # Get target chunk
-        result = await db.execute(
-            select(Chunk, Document)
-            .join(Document, Chunk.document_id == Document.id)
-            .where(Chunk.id == chunk_id)
-        )
-        row = result.first()
-        
-        if not row:
-            return []
-        
-        target_chunk, document = row
-        target_index = target_chunk.chunk_index
-        
-        # Get neighbors
-        query = (
-            select(Chunk)
-            .where(
-                Chunk.document_id == target_chunk.document_id,
-                Chunk.chunk_index >= target_index - n_before,
-                Chunk.chunk_index <= target_index + n_after
+        try:
+            # Get target chunk
+            result = await db.execute(
+                select(Chunk, Document)
+                .join(Document, Chunk.document_id == Document.id)
+                .where(Chunk.id == chunk_id)
             )
-            .order_by(Chunk.chunk_index)
-        )
-        
-        result = await db.execute(query)
-        chunks = result.scalars().all()
-        
-        # Format results
-        neighbor_chunks = []
-        for chunk in chunks:
-            chunk_dict = {
-                'chunk_id': str(chunk.id),
-                'document_id': str(chunk.document_id),
-                'content': chunk.content,
-                'chunk_type': chunk.chunk_type,
-                'chunk_index': chunk.chunk_index,
-                'page_numbers': chunk.page_numbers,
-                'section_title': chunk.section_title,
-                'is_target': chunk.id == chunk_id,
-                'metadata': {
-                    **chunk.metadata,
-                    'document_title': document.filename,
+            row = result.first()
+            
+            if not row:
+                logger.warning(f"Chunk {chunk_id} not found for neighbor expansion")
+                return []
+            
+            target_chunk, document = row
+            target_index = target_chunk.chunk_index
+            
+            # Get neighbors
+            query = (
+                select(Chunk)
+                .where(
+                    Chunk.document_id == target_chunk.document_id,
+                    Chunk.chunk_index >= target_index - n_before,
+                    Chunk.chunk_index <= target_index + n_after
+                )
+                .order_by(Chunk.chunk_index)
+            )
+            
+            result = await db.execute(query)
+            chunks = result.scalars().all()
+            
+            # Format results
+            neighbor_chunks = []
+            for chunk in chunks:
+                chunk_metadata = self._safe_extract_metadata(chunk.chunk_metadata)
+                
+                chunk_dict = {
+                    'chunk_id': str(chunk.id),
+                    'id': str(chunk.id),
+                    'document_id': str(chunk.document_id),
+                    'document_name': document.filename,
+                    'content': chunk.content,
+                    'chunk_type': chunk.chunk_type,
+                    'chunk_index': chunk.chunk_index,
+                    'page_numbers': chunk.page_numbers,
+                    'section_title': chunk.section_title,
+                    'token_count': chunk.token_count,
+                    'is_target': chunk.id == chunk_id,
+                    'chunk_metadata': chunk_metadata,
+                    'metadata': {
+                        'document_title': document.filename,
+                        **chunk_metadata,
+                    }
                 }
-            }
-            neighbor_chunks.append(chunk_dict)
-        
-        return neighbor_chunks
+                neighbor_chunks.append(chunk_dict)
+            
+            return neighbor_chunks
+            
+        except Exception as e:
+            logger.error(f"Failed to get chunk neighbors: {str(e)}", exc_info=True)
+            return []
 
 
 # Global instance

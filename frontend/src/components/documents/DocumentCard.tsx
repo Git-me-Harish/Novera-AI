@@ -1,4 +1,5 @@
-import { FileText, Calendar, Trash2, CheckCircle, Clock, AlertCircle, Eye } from 'lucide-react';
+import { FileText, Calendar, Trash2, CheckCircle, Clock, AlertCircle, Eye, Edit } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Document } from '../../services/api';
 
 interface DocumentCardProps {
@@ -9,6 +10,8 @@ interface DocumentCardProps {
 }
 
 export default function DocumentCard({ document, onDelete, canDelete = false }: DocumentCardProps) {
+  const navigate = useNavigate();
+
   const getStatusIcon = () => {
     switch (document.status) {
       case 'completed':
@@ -32,6 +35,12 @@ export default function DocumentCard({ document, onDelete, canDelete = false }: 
         return 'bg-red-100 text-red-800';
       default:
         return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const handleEdit = () => {
+    if (document.status === 'completed') {
+      navigate(`/documents/${document.id}/edit`);
     }
   };
 
@@ -84,11 +93,22 @@ export default function DocumentCard({ document, onDelete, canDelete = false }: 
         {/* Actions */}
         <div className="mt-4 pt-4 border-t border-gray-200 flex items-center justify-between">
           <button
-            className="flex items-center text-sm text-gray-600 hover:text-gray-900"
-            title="View details"
+            onClick={handleEdit}
+            disabled={document.status !== 'completed'}
+            className="flex items-center text-sm text-primary-600 hover:text-primary-700 disabled:text-gray-400 disabled:cursor-not-allowed"
+            title={document.status === 'completed' ? 'View and edit chunks' : 'Document must be processed first'}
           >
-            <Eye className="w-4 h-4 mr-1" />
-            View
+            {document.status === 'completed' ? (
+              <>
+                <Edit className="w-4 h-4 mr-1" />
+                Edit
+              </>
+            ) : (
+              <>
+                <Eye className="w-4 h-4 mr-1" />
+                View
+              </>
+            )}
           </button>
           
           {canDelete ? (

@@ -2,11 +2,17 @@
 Core configuration module using Pydantic settings management.
 Loads environment variables and provides type-safe configuration access.
 """
-from typing import List, Optional
-from typing import List, Union
+from typing import List, Optional, Union
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+
+import google.generativeai as genai
+genai.configure(api_key="AIzaSyBPKpoPP-oOOJjddWIIVgb9i_u51X_Sqso")
+
+for model in genai.list_models():
+    if 'generateContent' in model.supported_generation_methods:
+        print(model.name)
 
 
 class Settings(BaseSettings):
@@ -54,12 +60,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     redis_cache_ttl: int = 3600
     
-    # OpenAI Configuration
-    openai_api_key: str
-    openai_embedding_model: str = "text-embedding-3-large"
-    openai_embedding_dimensions: int = 1536
-    openai_chat_model: str = "gpt-4-turbo-preview"
-    openai_max_tokens: int = 128000
+    # Google Gemini Configuration
+    gemini_api_key: str
+    gemini_embedding_model: str = "models/text-embedding-004"
+    gemini_embedding_dimensions: int = 768
+    gemini_chat_model: str = "models/gemini-2.0-flash"
+    gemini_max_tokens: int = 8192
     
     # Cohere Configuration
     cohere_api_key: str
@@ -96,7 +102,8 @@ class Settings(BaseSettings):
     # Retrieval Configuration
     retrieval_top_k: int = 20
     rerank_top_k: int = 8
-    similarity_threshold: float = 0.7
+    # Search settings
+    similarity_threshold: float = Field(default=0.3, env="SIMILARITY_THRESHOLD")
     hybrid_alpha: float = 0.7
     
     # Generation Configuration
@@ -124,12 +131,11 @@ class Settings(BaseSettings):
     def parse_cors_origins(cls, v):
         """Parse CORS origins from string or list."""
         if isinstance(v, str):
-            # Remove any JSON-like brackets if present
             v = v.strip('[]"\'')
             return [origin.strip() for origin in v.split(",")]
         return v
     
-    @field_validator("openai_api_key", "cohere_api_key", "secret_key")
+    @field_validator("gemini_api_key", "cohere_api_key", "secret_key")
     @classmethod
     def validate_secrets(cls, v, info):
         """Ensure critical secrets are not using placeholder values."""
@@ -141,7 +147,7 @@ class Settings(BaseSettings):
                 raise ValueError(f"{field_name} must be at least 20 characters long")
         
         # For development, allow dummy API keys
-        if field_name in ["openai_api_key", "cohere_api_key"]:
+        if field_name in ["gemini_api_key", "cohere_api_key"]:
             if not v or len(v) < 10:
                 raise ValueError(f"{field_name} cannot be empty")
         

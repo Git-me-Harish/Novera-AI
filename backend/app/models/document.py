@@ -3,6 +3,7 @@ Database models for documents and chunks with pgvector support.
 """
 from datetime import datetime
 from typing import List, Dict, Any
+from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -115,7 +116,7 @@ class Chunk(Base):
     preceding_context = Column(Text, nullable=True)
 
     # Embedding vector
-    embedding = Column(Vector(1536), nullable=False)
+    embedding = Column(Vector(768), nullable=False)
 
     # JSONB chunk metadata
     chunk_metadata = Column("metadata", JSONB, nullable=False, default=dict)
@@ -143,10 +144,18 @@ class Chunk(Base):
         Index('idx_chunk_type_doc', 'chunk_type', 'document_id'),
     )
 
+    # Editing fields:
+
+    is_edited = Column(Boolean, nullable=False, default=False, index=True)
+    edited_at = Column(DateTime, nullable=True)
+    edited_by = Column(UUID(as_uuid=True), nullable=True)
+    original_content = Column(Text, nullable=True)
+    edit_count = Column(Integer, nullable=False, default=0)
+
     def __repr__(self):
         return f"<Chunk(id={self.id}, doc_id={self.document_id}, index={self.chunk_index})>"
 
-    def to_dict(self, include_embedding=False):
+    def to_dict(self, include_embedding=False, include_edit_info=False):
         result = {
             "id": str(self.id),
             "document_id": str(self.document_id),
@@ -160,7 +169,40 @@ class Chunk(Base):
         }
         if include_embedding:
             result["embedding"] = self.embedding
+        if include_edit_info:
+            result["is_edited"] = self.is_edited
+            result["edited_at"] = self.edited_at.isoformat() if self.edited_at else None
+            result["edited_by"] = str(self.edited_by) if self.edited_by else None
+            result["edit_count"] = self.edit_count
         return result
 
+# Add new model at the end of the file:
+class ChunkEditHistory(Base):
+    """Track chunk edit history."""
+    __tablename__ = "chunk_edit_history"
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    chunk_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    edited_by = Column(UUID(as_uuid=True), nullable=False)
+    edited_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    
+    old_content = Column(Text, nullable=False)
+    new_content = Column(Text, nullable=False)
+    change_summary = Column(String(500), nullable=True)
+    
+    # FIXED: Use edit_metadata as attribute name, "metadata" as DB column name
+    edit_metadata = Column("metadata", JSONB, nullable=False, default=dict)
+    
+    __table_args__ = (
+        Index('idx_chunk_edit_history_chunk', 'chunk_id'),
+        Index('idx_chunk_edit_history_doc', 'document_id'),
+        Index('idx_chunk_edit_history_user', 'edited_by'),
+    )
+    
+    def __repr__(self):
+        return f"<ChunkEditHistory(chunk_id={self.chunk_id}, edited_at={self.edited_at})>"
 
-__all__ = ["Document", "Chunk", "User", "Base"]
+
+# Update __all__ at the end:
+__all__ = ["Document", "Chunk", "ChunkEditHistory", "Base"]

@@ -52,12 +52,16 @@ class DocumentProcessor:
             # Step 1: Extract text and structure
             logger.info("Step 1: Extracting document structure")
             doc_structure = text_extractor.extract_document(file_path)
-            
+
             # Update document metadata
             document.total_pages = doc_structure.total_pages
             document.has_tables = doc_structure.has_tables
             document.has_images = doc_structure.has_images
-            document.metadata.update(doc_structure.metadata)
+
+            # Properly update JSONB metadata field
+            current_metadata = document.doc_metadata or {}
+            updated_metadata = {**current_metadata, **doc_structure.metadata}
+            document.doc_metadata = updated_metadata
             
             # Step 2: Chunk the document
             logger.info("Step 2: Chunking document")

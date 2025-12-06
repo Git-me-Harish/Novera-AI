@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Send, Loader2, FileText, AlertCircle } from 'lucide-react';
+import { Send, Loader2, FileText, AlertCircle, Plus, Sparkles } from 'lucide-react';
 import api, { ChatMessage, ChatResponse, Source } from '../services/api';
 import MessageBubble from '../components/chat/MessageBubble';
 import SourceCard from '../components/chat/SourceCard';
@@ -17,6 +17,7 @@ export default function ChatPage() {
   const [sources, setSources] = useState<Source[]>([]);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Load conversation if ID provided
   useEffect(() => {
@@ -29,6 +30,14 @@ export default function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = 'auto';
+      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 120)}px`;
+    }
+  }, [input]);
 
   const loadConversation = async (convId: string) => {
     try {
@@ -46,7 +55,7 @@ export default function ChatPage() {
 
     const userMessage: ChatMessage = {
       role: 'user',
-      content: input,
+      content: input.trim(),
       timestamp: new Date().toISOString(),
     };
 
@@ -54,11 +63,10 @@ export default function ChatPage() {
     setInput('');
     setLoading(true);
     setError(null);
-    setSources([]);
 
     try {
       const response: ChatResponse = await api.sendChatMessage({
-        query: input,
+        query: input.trim(),
         conversation_id: currentConversationId,
       });
 
@@ -66,12 +74,6 @@ export default function ChatPage() {
       if (!currentConversationId && response.conversation_id) {
         setCurrentConversationId(response.conversation_id);
         navigate(`/chat/${response.conversation_id}`, { replace: true });
-      }
-
-      // Check for errors
-      if (response.status === 'rejected' || response.status === 'retrieval_error' || response.status === 'generation_error') {
-        setError(response.answer);
-        return;
       }
 
       const assistantMessage: ChatMessage = {
@@ -87,11 +89,25 @@ export default function ChatPage() {
 
       setMessages((prev) => [...prev, assistantMessage]);
       setSources(response.sources);
+      setError(null);
+
     } catch (err: any) {
       console.error('Chat error:', err);
-      setError(err.response?.data?.detail || 'Failed to send message. Please try again.');
+      const errorMessage = err.response?.data?.detail || 'Failed to send message. Please try again.';
+      
+      // Show error as assistant message
+      const errorAssistantMessage: ChatMessage = {
+        role: 'assistant',
+        content: `I apologize, but I encountered an error: ${errorMessage}\n\nPlease try rephrasing your question or try again in a moment.`,
+        timestamp: new Date().toISOString(),
+        metadata: { error: true },
+      };
+      
+      setMessages((prev) => [...prev, errorAssistantMessage]);
     } finally {
       setLoading(false);
+      // Focus back to input
+      inputRef.current?.focus();
     }
   };
 
@@ -108,111 +124,118 @@ export default function ChatPage() {
     setSources([]);
     setError(null);
     navigate('/chat');
+    inputRef.current?.focus();
   };
 
+  const exampleQuestions = [
+    'What is this document about?',
+    'Explain the leave policy',
+    'Show me expense reimbursement details',
+    'What was the Q4 revenue?',
+  ];
+
   return (
-    <div className="flex h-full">
+    <div className="flex h-full bg-gray-50">
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col">
         {/* Header */}
-        <div className="h-16 border-b border-gray-200 bg-white px-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold text-gray-900">
-              {currentConversationId ? 'Conversation' : 'New Chat'}
-            </h1>
-            <p className="text-sm text-gray-500">Ask questions about your documents</p>
+        <div className="h-16 border-b border-gray-200 bg-white px-6 flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-md">
+              <Sparkles className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold text-gray-900">
+                {currentConversationId ? 'Chat with Mentanova' : 'New Conversation'}
+              </h1>
+              <p className="text-xs text-gray-500">AI-powered document assistant</p>
+            </div>
           </div>
-          {currentConversationId && (
+          {messages.length > 0 && (
             <button
               onClick={startNewChat}
-              className="px-4 py-2 text-sm font-medium text-primary-600 hover:text-primary-700 hover:bg-primary-50 rounded-lg transition-colors"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
             >
+              <Plus className="w-4 h-4" />
               New Chat
             </button>
           )}
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {messages.length === 0 && (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center">
-                <div className="w-16 h-16 bg-gradient-to-br from-primary-100 to-secondary-100 rounded-full mx-auto mb-4 flex items-center justify-center">
-                  <FileText className="w-8 h-8 text-primary-600" />
-                </div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-2">
-                  Welcome to Mentanova AI
-                </h2>
-                <p className="text-gray-600 max-w-md">
-                  Ask questions about your finance and HRMS documents. I'll provide accurate answers
-                  with source citations.
-                </p>
-                <div className="mt-6 space-y-2">
-                  <p className="text-sm text-gray-500">Try asking:</p>
-                  <div className="space-y-2">
-                    {[
-                      'What was the Q4 2024 revenue?',
-                      'Explain the PF contribution policy',
-                      'Show me the expense breakdown',
-                    ].map((example, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => setInput(example)}
-                        className="block w-full max-w-md mx-auto px-4 py-2 text-sm text-left text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors"
-                      >
-                        "{example}"
-                      </button>
-                    ))}
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-4xl mx-auto px-6 py-8 space-y-6">
+            {messages.length === 0 && (
+              <div className="h-full flex items-center justify-center py-12">
+                <div className="text-center max-w-2xl">
+                  <div className="w-20 h-20 bg-gradient-to-br from-blue-100 to-purple-100 rounded-2xl mx-auto mb-6 flex items-center justify-center shadow-lg">
+                    <Sparkles className="w-10 h-10 text-blue-600" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-gray-900 mb-3">
+                    Welcome to Mentanova AI
+                  </h2>
+                  <p className="text-gray-600 mb-8 leading-relaxed">
+                    I'm your AI assistant specialized in Finance and HRMS documents. Ask me anything about your uploaded documents, policies, or just have a conversation!
+                  </p>
+                  
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium text-gray-700">Try asking:</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {exampleQuestions.map((example, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => setInput(example)}
+                          className="px-4 py-3 text-sm text-left text-gray-700 bg-white hover:bg-gray-50 border border-gray-200 hover:border-blue-300 rounded-lg transition-all shadow-sm hover:shadow"
+                        >
+                          <FileText className="w-4 h-4 inline mr-2 text-gray-400" />
+                          {example}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {messages.map((message, index) => (
-            <MessageBubble key={index} message={message} />
-          ))}
+            {messages.map((message, index) => (
+              <MessageBubble key={index} message={message} />
+            ))}
 
-          {loading && (
-            <div className="flex items-start space-x-3">
-              <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-full flex items-center justify-center flex-shrink-0">
-                <span className="text-white font-bold text-sm">M</span>
-              </div>
-              <div className="flex-1 bg-white rounded-lg p-4 shadow-sm border border-gray-200">
-                <div className="flex items-center space-x-2 text-gray-500">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="text-sm">Thinking...</span>
+            {loading && (
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-md">
+                  <Sparkles className="w-5 h-5 text-white" />
+                </div>
+                <div className="flex-1 bg-white rounded-2xl p-4 shadow-sm border border-gray-200">
+                  <div className="flex items-center gap-3 text-gray-500">
+                    <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
+                    <div className="flex gap-1">
+                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></span>
+                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {error && (
-            <div className="flex items-start space-x-3">
-              <div className="w-8 h-8 bg-red-100 rounded-full flex items-center justify-center flex-shrink-0">
-                <AlertCircle className="w-5 h-5 text-red-600" />
-              </div>
-              <div className="flex-1 bg-red-50 rounded-lg p-4 border border-red-200">
-                <p className="text-sm text-red-800">{error}</p>
-              </div>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
+            <div ref={messagesEndRef} />
+          </div>
         </div>
 
         {/* Input */}
-        <div className="border-t border-gray-200 bg-white p-4">
+        <div className="border-t border-gray-200 bg-white p-4 shadow-lg">
           <div className="max-w-4xl mx-auto">
-            <div className="flex items-end space-x-2">
+            <div className="flex items-end gap-2">
               <div className="flex-1 relative">
                 <textarea
+                  ref={inputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  placeholder="Ask a question about your documents..."
+                  placeholder="Ask me anything about your documents..."
                   rows={1}
-                  className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
+                  className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none shadow-sm"
                   style={{ minHeight: '48px', maxHeight: '120px' }}
                   disabled={loading}
                 />
@@ -220,13 +243,13 @@ export default function ChatPage() {
               <button
                 onClick={handleSendMessage}
                 disabled={!input.trim() || loading}
-                className="px-4 py-3 bg-gradient-to-r from-primary-500 to-primary-600 text-white rounded-lg hover:from-primary-600 hover:to-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
+                className="px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl hover:from-blue-700 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg disabled:shadow-none"
               >
                 <Send className="w-5 h-5" />
               </button>
             </div>
             <p className="mt-2 text-xs text-gray-500 text-center">
-              Press Enter to send, Shift+Enter for new line
+              Press Enter to send • Shift+Enter for new line
             </p>
           </div>
         </div>
@@ -234,14 +257,17 @@ export default function ChatPage() {
 
       {/* Sources Sidebar */}
       {sources.length > 0 && (
-        <div className="w-80 border-l border-gray-200 bg-gray-50 overflow-y-auto">
-          <div className="p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Sources</h3>
-            <div className="space-y-2">
-              {sources.map((source, index) => (
-                <SourceCard key={index} source={source} />
-              ))}
-            </div>
+        <div className="w-80 border-l border-gray-200 bg-white overflow-y-auto">
+          <div className="p-4 border-b border-gray-200 bg-gray-50">
+            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+              <FileText className="w-4 h-4 text-blue-600" />
+              Sources ({sources.length})
+            </h3>
+          </div>
+          <div className="p-4 space-y-2">
+            {sources.map((source, index) => (
+              <SourceCard key={index} source={source} />
+            ))}
           </div>
         </div>
       )}

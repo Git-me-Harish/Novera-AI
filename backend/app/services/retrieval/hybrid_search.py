@@ -163,17 +163,36 @@ class HybridSearchService:
     ) -> List[Dict[str, Any]]:
         """
         Hybrid search with automatic context expansion.
-        Retrieves neighboring chunks for better context.
-        
-        Args:
-            query: Search query
-            db: Database session
-            top_k: Number of results
-            expand_neighbors: Whether to include neighboring chunks
-            
-        Returns:
-            Chunks with expanded context
         """
+        # Get initial results
+        initial_results = await self.search(
+            query=query,
+            db=db,
+            top_k=top_k
+        )
+        
+        if not expand_neighbors:
+            return initial_results
+        
+        # Expand context for top results
+        expanded_results = []
+        seen_chunk_ids = set()
+        
+        for result in initial_results[:5]:
+            # ✅ FIXED: Safe chunk_id extraction
+            chunk_id_raw = result.get('chunk_id') or result.get('id')
+            
+            if not chunk_id_raw:
+                logger.warning(f"Chunk missing ID, skipping: {result}")
+                continue
+            
+            try:
+                from uuid import UUID
+                chunk_id = UUID(str(chunk_id_raw))
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid chunk ID format: {chunk_id_raw}, error: {e}")
+                continue
+
         # Get initial results
         initial_results = await self.search(
             query=query,

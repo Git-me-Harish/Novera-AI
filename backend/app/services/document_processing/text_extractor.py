@@ -1,5 +1,5 @@
 """
-Text extraction service using Unstructured.io and PyMuPDF.
+Text extraction service using PyMuPDF and fallback libraries.
 Handles PDF, DOCX, TXT, and XLSX files with intelligent layout detection.
 """
 from pathlib import Path
@@ -9,9 +9,6 @@ import fitz  # PyMuPDF
 import PyPDF2
 from docx import Document as DocxDocument
 import openpyxl
-from unstructured.documents.elements import (
-    Title, NarrativeText, ListItem, Table, Image, Header, Footer
-)
 from loguru import logger
 
 
@@ -54,7 +51,7 @@ class DocumentStructure:
 class TextExtractor:
     """
     Intelligent text extraction with layout awareness.
-    Uses Unstructured.io for structured extraction and PyMuPDF as fallback.
+    Uses PyMuPDF and format-specific parsers.
     """
     
     def __init__(self):
@@ -78,98 +75,172 @@ class TextExtractor:
         logger.info(f"Extracting document: {file_path.name}")
         
         try:
-            # Primary: Use Unstructured.io
-            return self._extract_with_unstructured(file_path)
-        except Exception as e:
-            logger.warning(f"Unstructured.io extraction failed: {str(e)}")
-            
-            # Fallback: Use PyMuPDF for PDFs
+            # Use format-specific extractors
             if file_ext == '.pdf':
-                logger.info("Falling back to PyMuPDF extraction")
                 return self._extract_with_pymupdf(file_path)
+            elif file_ext in ['.docx', '.doc']:
+                return self._extract_docx(file_path)
+            elif file_ext == '.txt':
+                return self._extract_txt(file_path)
+            elif file_ext in ['.xlsx', '.xls']:
+                return self._extract_excel(file_path)
             else:
-                raise Exception(f"Failed to extract document: {str(e)}")
+                raise ValueError(f"Unsupported file format: {file_ext}")
+        except Exception as e:
+            logger.error(f"Extraction failed for {file_path.name}: {str(e)}")
+            raise Exception(f"Failed to extract document: {str(e)}")
     
-    def _extract_with_unstructured(self, file_path: Path) -> DocumentStructure:
-        """
-        Extract using Unstructured.io library.
-        Provides best layout understanding and structure preservation.
-        """
-        # Partition document into elements
-        elements = partition(
-            filename=str(file_path),
-            strategy="hi_res",  # High resolution for better accuracy
-            include_page_breaks=True,
-            infer_table_structure=True,
-            languages=["eng"],
-        )
+    def _extract_txt(self, file_path: Path) -> DocumentStructure:
+        """Extract text from plain text files."""
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        except Exception as e:
+            logger.error(f"Error reading text file: {str(e)}")
+            raise
         
-        extracted_elements = []
-        has_tables = False
-        has_images = False
-        total_pages = 0
+        # Split into paragraphs
+        paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
         
-        for element in elements:
-            # Determine element type
-            if isinstance(element, Title):
-                elem_type = "title"
-            elif isinstance(element, Table):
-                elem_type = "table"
-                has_tables = True
-            elif isinstance(element, ListItem):
-                elem_type = "list"
-            elif isinstance(element, Header):
-                elem_type = "header"
-            elif isinstance(element, Footer):
-                elem_type = "footer"
-            elif isinstance(element, Image):
-                elem_type = "image"
-                has_images = True
-                continue  # Skip images for now
-            else:
-                elem_type = "text"
-            
-            # Extract metadata
-            element_metadata = element.metadata.to_dict() if hasattr(element, 'metadata') else {}
-            page_number = element_metadata.get('page_number', 1)
-            
-            # Track total pages
-            if page_number > total_pages:
-                total_pages = page_number
-            
-            # Create extracted element
-            extracted_elem = ExtractedElement(
-                content=str(element),
-                element_type=elem_type,
-                page_number=page_number,
-                metadata={
-                    'coordinates': element_metadata.get('coordinates'),
-                    'filetype': element_metadata.get('filetype'),
-                    'category': element_metadata.get('category'),
-                }
+        # If no paragraphs (single line text), split by newlines
+        if not paragraphs:
+            paragraphs = [line.strip() for line in content.split('\n') if line.strip()]
+        
+        elements = []
+        for idx, para in enumerate(paragraphs, start=1):
+            element = ExtractedElement(
+                content=para,
+                element_type="text",
+                page_number=1,
+                metadata={'paragraph_index': idx}
             )
-            
-            extracted_elements.append(extracted_elem)
+            elements.append(element)
         
-        logger.info(f"Extracted {len(extracted_elements)} elements from {total_pages} pages")
+        logger.info(f"Extracted {len(elements)} text elements from TXT file")
         
         return DocumentStructure(
-            elements=extracted_elements,
-            total_pages=total_pages,
+            elements=elements,
+            total_pages=1,
+            has_tables=False,
+            has_images=False,
+            metadata={'extraction_method': 'txt_parser', 'total_elements': len(elements)}
+        )
+    
+    def _extract_docx(self, file_path: Path) -> DocumentStructure:
+        """Extract text from DOCX files."""
+        try:
+            doc = DocxDocument(file_path)
+        except Exception as e:
+            logger.error(f"Error reading DOCX file: {str(e)}")
+            raise
+        
+        elements = []
+        
+        # Extract paragraphs
+        for idx, para in enumerate(doc.paragraphs, start=1):
+            if para.text.strip():
+                # Detect if it's a heading
+                elem_type = "title" if para.style.name.startswith('Heading') else "text"
+                
+                element = ExtractedElement(
+                    content=para.text.strip(),
+                    element_type=elem_type,
+                    page_number=1,  # DOCX doesn't have page numbers easily accessible
+                    metadata={
+                        'paragraph_index': idx,
+                        'style': para.style.name
+                    }
+                )
+                elements.append(element)
+        
+        # Extract tables
+        has_tables = len(doc.tables) > 0
+        for table_idx, table in enumerate(doc.tables):
+            table_text = []
+            for row in table.rows:
+                row_text = [cell.text.strip() for cell in row.cells]
+                table_text.append(' | '.join(row_text))
+            
+            element = ExtractedElement(
+                content='\n'.join(table_text),
+                element_type="table",
+                page_number=1,
+                metadata={'table_index': table_idx}
+            )
+            elements.append(element)
+        
+        logger.info(f"Extracted {len(elements)} elements from DOCX ({len(doc.tables)} tables)")
+        
+        return DocumentStructure(
+            elements=elements,
+            total_pages=1,
             has_tables=has_tables,
-            has_images=has_images,
+            has_images=False,
             metadata={
-                'extraction_method': 'unstructured',
-                'total_elements': len(extracted_elements)
+                'extraction_method': 'docx_parser',
+                'total_elements': len(elements),
+                'total_paragraphs': len(doc.paragraphs),
+                'total_tables': len(doc.tables)
+            }
+        )
+    
+    def _extract_excel(self, file_path: Path) -> DocumentStructure:
+        """Extract text from Excel files."""
+        try:
+            workbook = openpyxl.load_workbook(file_path, data_only=True)
+        except Exception as e:
+            logger.error(f"Error reading Excel file: {str(e)}")
+            raise
+        
+        elements = []
+        
+        for sheet_idx, sheet in enumerate(workbook.worksheets):
+            # Convert sheet to text representation
+            rows = []
+            for row in sheet.iter_rows(values_only=True):
+                row_text = [str(cell) if cell is not None else '' for cell in row]
+                if any(row_text):  # Skip empty rows
+                    rows.append(' | '.join(row_text))
+            
+            if rows:
+                element = ExtractedElement(
+                    content='\n'.join(rows),
+                    element_type="table",
+                    page_number=sheet_idx + 1,
+                    metadata={
+                        'sheet_name': sheet.title,
+                        'sheet_index': sheet_idx,
+                        'rows': len(rows),
+                        'columns': sheet.max_column
+                    }
+                )
+                elements.append(element)
+        
+        logger.info(f"Extracted {len(elements)} sheets from Excel file")
+        
+        return DocumentStructure(
+            elements=elements,
+            total_pages=len(workbook.worksheets),
+            has_tables=True,
+            has_images=False,
+            metadata={
+                'extraction_method': 'excel_parser',
+                'total_elements': len(elements),
+                'total_sheets': len(workbook.worksheets)
             }
         )
     
     def _extract_with_pymupdf(self, file_path: Path) -> DocumentStructure:
         """
-        Fallback extraction using PyMuPDF.
-        Simpler but still effective for PDF text extraction.
+        Extraction using PyMuPDF.
+        Effective for PDF text extraction.
         """
-        doc = fitz.open(file_path)
+        try:
+            doc = fitz.open(file_path)
+        except Exception as e:
+            logger.error(f"Error opening PDF with PyMuPDF: {str(e)}")
+            raise
+        
         extracted_elements = []
         has_tables = False
         
@@ -203,13 +274,14 @@ class TextExtractor:
                     
                     extracted_elements.append(extracted_elem)
         
+        total_pages = len(doc)
         doc.close()
         
-        logger.info(f"PyMuPDF extracted {len(extracted_elements)} elements from {len(doc)} pages")
+        logger.info(f"PyMuPDF extracted {len(extracted_elements)} elements from {total_pages} pages")
         
         return DocumentStructure(
             elements=extracted_elements,
-            total_pages=len(doc),
+            total_pages=total_pages,
             has_tables=has_tables,
             has_images=False,
             metadata={
@@ -251,7 +323,7 @@ class TextExtractor:
         file_ext = file_path.suffix.lower()
         
         if file_ext == '.txt':
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 return f.read()
         
         elif file_ext == '.pdf':
@@ -262,10 +334,22 @@ class TextExtractor:
             doc.close()
             return text
         
+        elif file_ext in ['.docx', '.doc']:
+            doc = DocxDocument(file_path)
+            return "\n\n".join([para.text for para in doc.paragraphs if para.text.strip()])
+        
+        elif file_ext in ['.xlsx', '.xls']:
+            workbook = openpyxl.load_workbook(file_path, data_only=True)
+            text_parts = []
+            for sheet in workbook.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    row_text = [str(cell) if cell is not None else '' for cell in row]
+                    if any(row_text):
+                        text_parts.append(' | '.join(row_text))
+            return "\n".join(text_parts)
+        
         else:
-            # Use unstructured for other formats
-            elements = partition(filename=str(file_path))
-            return "\n\n".join(str(elem) for elem in elements)
+            raise ValueError(f"Unsupported format for text extraction: {file_ext}")
 
 
 # Global instance

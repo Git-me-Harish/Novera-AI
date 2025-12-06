@@ -89,6 +89,59 @@ export interface SystemStats {
   storage_used_mb: number;
 }
 
+export interface ChunkData {
+  id: string;
+  document_id: string;
+  chunk_index: number;
+  content: string;
+  chunk_type: string;
+  page_numbers: number[];
+  section_title: string | null;
+  token_count: number;
+  is_edited: boolean;
+  edited_at: string | null;
+  edited_by: string | null;
+  edit_count: number;
+  metadata: any;
+}
+
+export interface DocumentInfo {
+  id: string;
+  filename: string;
+  original_filename: string;
+  file_size_mb: number;
+  doc_type: string;
+  department: string | null;
+  total_pages: number;
+  total_chunks: number;
+  has_tables: boolean;
+  has_images: boolean;
+  status: string;
+  upload_date: string;
+  processed_date: string | null;
+  mime_type: string;
+  preview_type: string;
+  is_previewable: boolean;
+}
+
+export interface EditHistoryItem {
+  id: string;
+  edited_at: string;
+  edited_by: string;
+  old_content: string;
+  new_content: string;
+  change_summary: string | null;
+  metadata: any;
+}
+
+export interface DocumentEditStats {
+  total_chunks: number;
+  edited_chunks: number;
+  unedited_chunks: number;
+  total_edits: number;
+  edit_percentage: number;
+}
+
 class ApiService {
   private api: AxiosInstance;
 
@@ -118,6 +171,16 @@ class ApiService {
       (response) => response,
       async (error) => {
         const originalRequest = error.config;
+
+        // Log detailed validation errors
+        if (error.response?.status === 422) {
+          console.error('❌ Validation Error (422):', {
+            url: originalRequest.url,
+            method: originalRequest.method,
+            data: originalRequest.data,
+            errors: error.response.data.detail,
+          });
+        }
 
         // If 401 and we haven't tried to refresh yet
         if (error.response?.status === 401 && !originalRequest._retry) {
@@ -237,21 +300,62 @@ class ApiService {
     password: string,
     fullName?: string
   ): Promise<any> {
-    const response = await this.api.post('/auth/register', {
-      email,
-      username,
-      password,
-      full_name: fullName,
-    });
-    return response.data;
+    try {
+      console.log('📝 Registration attempt:', { email, username });
+      
+      const response = await this.api.post('/auth/register', {
+        email,
+        username,
+        password,
+        full_name: fullName,
+      });
+      
+      console.log('✅ Registration successful');
+      return response.data;
+      
+    } catch (error: any) {
+      if (error.response?.status === 422) {
+        console.error('❌ Registration validation failed');
+        this.handleValidationError(error);
+      }
+      throw error;
+    }
   }
 
   async login(email: string, password: string): Promise<any> {
-    const response = await this.api.post('/auth/login', {
-      email,
-      password,
-    });
-    return response.data;
+    try {
+      console.log('🔐 Login attempt:', { 
+        email, 
+        passwordLength: password.length,
+        requestPayload: { email, password: '***' }
+      });
+      
+      const response = await this.api.post('/auth/login', {
+        email: email,      // ✅ Backend expects 'email' field
+        password: password,
+      });
+      
+      console.log('✅ Login successful:', {
+        hasAccessToken: !!response.data.access_token,
+        hasRefreshToken: !!response.data.refresh_token,
+        user: response.data.user?.email,
+      });
+      
+      return response.data;
+      
+    } catch (error: any) {
+      console.error('❌ Login failed:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+      });
+      
+      if (error.response?.status === 422) {
+        this.handleValidationError(error);
+      }
+      
+      throw error;
+    }
   }
 
   async logout(refreshToken: string): Promise<void> {
@@ -356,6 +460,86 @@ class ApiService {
   }): Promise<{ total: number; documents: any[] }> {
     const response = await this.api.get('/admin/documents', { params });
     return response.data;
+  }
+
+  // Document Editor Endpoints
+  async getDocumentInfo(documentId: string): Promise<DocumentInfo> {
+    const response = await this.api.get(`/documents/${documentId}/info`);
+    return response.data;
+  }
+
+  async getDocumentChunks(documentId: string): Promise<ChunkData[]> {
+    const response = await this.api.get(`/documents/${documentId}/chunks`);
+    return response.data;
+  }
+
+  async getTextPreview(documentId: string, maxChars: number = 5000): Promise<any> {
+    const response = await this.api.get(`/documents/${documentId}/preview/text`, {
+      params: { max_chars: maxChars }
+    });
+    return response.data;
+  }
+
+  async downloadDocument(documentId: string): Promise<Blob> {
+    const response = await this.api.get(`/documents/${documentId}/download`, {
+      responseType: 'blob'
+    });
+    return response.data;
+  }
+
+  async editChunk(chunkId: string, newContent: string, metadata?: any): Promise<ChunkData> {
+    const response = await this.api.put(`/chunks/${chunkId}/edit`, {
+      chunk_id: chunkId,
+      new_content: newContent,
+      metadata: metadata
+    });
+    return response.data;
+  }
+
+  async batchEditChunks(edits: Array<{ chunk_id: string; new_content: string }>): Promise<any> {
+    const response = await this.api.post('/chunks/batch-edit', { edits });
+    return response.data;
+  }
+
+  async revertChunk(chunkId: string): Promise<void> {
+    await this.api.post(`/chunks/${chunkId}/revert`);
+  }
+
+  async deleteChunk(chunkId: string): Promise<void> {
+    await this.api.delete(`/chunks/${chunkId}`);
+  }
+
+  async getChunkHistory(chunkId: string, limit: number = 10): Promise<EditHistoryItem[]> {
+    const response = await this.api.get(`/chunks/${chunkId}/history`, {
+      params: { limit }
+    });
+    return response.data;
+  }
+
+  async getDocumentEditStats(documentId: string): Promise<DocumentEditStats> {
+    const response = await this.api.get(`/documents/${documentId}/edit-stats`);
+    return response.data;
+  }
+
+  // ✅ NEW: Helper method to format validation errors
+  private handleValidationError(error: any): void {
+    const validationErrors = error.response?.data?.detail;
+    
+    if (Array.isArray(validationErrors)) {
+      console.error('Validation errors:');
+      validationErrors.forEach((err: any, index: number) => {
+        console.error(`  ${index + 1}. Field: ${err.loc?.join('.')}`);
+        console.error(`     Error: ${err.msg}`);
+        console.error(`     Input: ${err.input}`);
+      });
+      
+      // Create user-friendly error message
+      const errorMessage = validationErrors
+        .map((err: any) => `${err.loc?.join('.')}: ${err.msg}`)
+        .join('; ');
+      
+      throw new Error(errorMessage);
+    }
   }
 }
 

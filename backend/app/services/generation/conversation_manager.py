@@ -156,7 +156,11 @@ class ConversationManager:
             raise ValueError(f"Conversation {conversation_id} not found")
         
         conversation = self.conversations[conversation_id]
-        conversation['context'].update(context_updates)
+        
+        # FIXED: Properly merge dictionaries instead of using .update()
+        current_context = conversation.get('context', {})
+        new_context = {**current_context, **context_updates}
+        conversation['context'] = new_context
         conversation['updated_at'] = datetime.utcnow().isoformat()
         
         logger.debug(f"Updated context for conversation {conversation_id}")
@@ -169,7 +173,7 @@ class ConversationManager:
             Context dictionary
         """
         conversation = self.get_conversation(conversation_id)
-        return conversation['context'] if conversation else {}
+        return conversation.get('context', {}) if conversation else {}
     
     def summarize_conversation(
         self,
@@ -193,7 +197,7 @@ class ConversationManager:
         assistant_messages = [m for m in messages if m['role'] == 'assistant']
         
         # Extract topics from context
-        topics = conversation['context'].get('topics', [])
+        topics = conversation.get('context', {}).get('topics', [])
         
         return {
             'conversation_id': conversation_id,
