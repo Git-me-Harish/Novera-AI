@@ -7,7 +7,6 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
-
 class Settings(BaseSettings):
     """Application settings with validation and type safety."""
     
