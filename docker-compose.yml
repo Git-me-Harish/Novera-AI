@@ -69,6 +69,9 @@ services:
       - POSTGRES_PASSWORD=mentanova_secure_pass_2024
       - POSTGRES_DB=mentanova_db
       - POSTGRES_PORT=5432
+      # CRITICAL FIX: Override Gemini models (remove models/ prefix)
+      - GEMINI_CHAT_MODEL=gemini-2.5-flash
+      - GEMINI_EMBEDDING_MODEL=text-embedding-004
     ports:
       - "8000:8000"
     volumes:
@@ -89,7 +92,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      target: development  
+      target: development
     container_name: mentanova_frontend
     command: npm run dev -- --host 0.0.0.0
     ports:

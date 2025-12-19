@@ -141,24 +141,23 @@ class ChatService:
         retrieval_metadata = {}
         
         if should_search:
-            # Step 7: Retrieve with context-aware filtering
+            # Step 7: Retrieve with optimized chunk count
             try:
-                logger.info("🔍 Searching documents with context...")
+                logger.info("🔍Searching documents with context...")
                 
-                # Get document filter from context
                 document_filter = conv_context.get_document_filter()
                 
                 if document_filter:
-                    logger.info(f"📄 Scoping search to documents: {document_filter}")
+                    logger.info(f"📄Scoping search to documents: {document_filter}")
                 
                 retrieval_result = await retrieval_pipeline.retrieve(
-                    query=reformulated_query,  # Use reformulated query
+                    query=reformulated_query,
                     db=db,
-                    top_k=8,
+                    top_k=3,
                     doc_type=doc_type,
                     department=department,
                     include_context=True,
-                    conversation_context=conv_context  # Pass context
+                    conversation_context=conv_context
                 )
                 
                 context = retrieval_result['context_text']
@@ -166,28 +165,26 @@ class ChatService:
                 chunks_used = len(retrieval_result['chunks'])
                 retrieval_metadata = retrieval_result.get('retrieval_metadata', {})
                 
-                # Update context with retrieval results
                 conv_context.update_from_retrieval(sources)
                 
                 logger.info(f"Retrieved {chunks_used} chunks")
                 
-                # If no results and we were using document scope, try global search
                 if chunks_used == 0 and document_filter:
-                    logger.info("🌐 No results in scoped search, trying global...")
+                    logger.info("🌐 No results in scoped search, trying global with top_k=3...")
                     retrieval_result = await retrieval_pipeline.retrieve(
                         query=reformulated_query,
                         db=db,
-                        top_k=8,
+                        top_k=3,
                         doc_type=doc_type,
                         department=department,
                         include_context=True,
-                        conversation_context=None  # Global search
+                        conversation_context=None
                     )
                     
                     context = retrieval_result['context_text']
                     sources = retrieval_result['sources']
                     chunks_used = len(retrieval_result['chunks'])
-                
+
             except Exception as e:
                 logger.error(f"Retrieval failed: {str(e)}", exc_info=True)
                 context = ""
@@ -225,6 +222,22 @@ class ChatService:
             citations = generation_result.get('citations', [])
             
             logger.info(f"✅ Generated: {len(answer)} chars, {len(citations)} citations")
+
+            if generation_result:
+                usage = generation_result.get('usage', {})
+                logger.info(f"TOKEN USAGE - Total: {usage.get('total_tokens', 0)}, "
+                            f"Cached: {usage.get('cached_tokens', 0)}, "
+                            f"Prompt: {usage.get('prompt_tokens', 0)}, "
+                            f"Completion: {usage.get('completion_tokens', 0)}")
+                
+                # Calculate estimated cost
+                total_tokens = usage.get('total_tokens', 0)
+                cached_tokens = usage.get('cached_tokens', 0)
+                regular_tokens = total_tokens - cached_tokens
+                
+                # Gemini 1.5 Flash pricing
+                cost = (cached_tokens * 0.00000003) + (regular_tokens * 0.0000003)
+                logger.info(f"ESTIMATED COST: ${cost:.6f}")
             
         except Exception as e:
             logger.error(f"Generation failed: {str(e)}", exc_info=True)
@@ -327,6 +340,7 @@ class ChatService:
                 'query_reformulated': reformulated_query != query
             }
         }"""
+        
     
     async def _generate_conversational_response(
         self,

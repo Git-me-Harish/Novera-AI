@@ -20,8 +20,13 @@ class EmbeddingService:
     
     def __init__(self):
         genai.configure(api_key=settings.gemini_api_key)
+    
+        raw_model_name = settings.gemini_embedding_model
+        if raw_model_name.startswith('models/'):
+            self.model_name = raw_model_name.replace('models/', '', 1)
+        else:
+            self.model_name = raw_model_name
         
-        self.model_name = settings.gemini_embedding_model
         self.dimensions = settings.gemini_embedding_dimensions
         self.batch_size = 100
         

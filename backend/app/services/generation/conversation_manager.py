@@ -16,11 +16,10 @@ class ConversationManager:
     """
     
     def __init__(self):
-        # In-memory storage (for Phase 4)
-        # TODO: Replace with Redis or database in production
+        # In-memory storage
         self.conversations: Dict[str, Dict[str, Any]] = {}
-        self.max_history_length = 10  # Keep last 10 exchanges
-        self.session_timeout = 3600  # 1 hour in seconds
+        self.max_history_length = 3
+        self.session_timeout = 3600
     
     def create_conversation(
         self,
@@ -60,18 +59,7 @@ class ConversationManager:
         content: str,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """
-        Add a message to conversation history.
-        
-        Args:
-            conversation_id: Conversation ID
-            role: Message role (user/assistant)
-            content: Message content
-            metadata: Optional message metadata (sources, tokens, context, etc.)
-            
-        Returns:
-            Message object
-        """
+        """Add a message to conversation history."""
         if conversation_id not in self.conversations:
             raise ValueError(f"Conversation {conversation_id} not found")
         
@@ -87,22 +75,17 @@ class ConversationManager:
         conversation['messages'].append(message)
         conversation['updated_at'] = datetime.utcnow().isoformat()
         
-        # NEW: Update conversation context from message metadata
         if metadata and 'context_used' in metadata:
             context_data = metadata['context_used']
-            # Store latest context in conversation
             if 'primary_document' in context_data:
                 conversation['context']['primary_document'] = context_data['primary_document']
             if 'active_documents' in context_data:
                 conversation['context']['active_documents'] = context_data['active_documents']
-            if 'recent_time_period' in context_data:
-                conversation['context']['recent_time_period'] = context_data['recent_time_period']
         
-        # Trim history if too long
-        if len(conversation['messages']) > self.max_history_length * 2:
+        if len(conversation['messages']) > 10:
             conversation['messages'] = (
                 conversation['messages'][:1] + 
-                conversation['messages'][-(self.max_history_length * 2 - 1):]
+                conversation['messages'][-9:] 
             )
         
         logger.debug(f"Added {role} message to conversation {conversation_id}")

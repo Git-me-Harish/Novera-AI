@@ -13,6 +13,8 @@ import {
   LayoutDashboard
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useConversation } from '../contexts/ConversationContext';
+import TokenMeter from './chat/TokenMeter';
 
 interface LayoutProps {
   children: ReactNode;
@@ -24,6 +26,7 @@ export default function Layout({ children, sidebarOpen, setSidebarOpen }: Layout
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout, isAdmin } = useAuth();
+  const { currentConversationId } = useConversation();
 
   const handleLogout = async () => {
     await logout();
@@ -45,6 +48,12 @@ export default function Layout({ children, sidebarOpen, setSidebarOpen }: Layout
     { path: '/admin/users', icon: Users, label: 'User Management' },
   ];
 
+  // Show token meter only when there's an active conversation on chat/conversations pages
+  const showTokenMeter = currentConversationId && (
+    location.pathname.startsWith('/chat') || 
+    location.pathname.startsWith('/conversations')
+  );
+
   return (
     <div className="flex h-screen bg-gray-50">
       {/* Sidebar */}
@@ -57,9 +66,9 @@ export default function Layout({ children, sidebarOpen, setSidebarOpen }: Layout
         <div className="h-16 flex items-center justify-between px-6 border-b border-gray-200">
           <div className="flex items-center space-x-2">
             <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold">M</span>
+              <span className="text-white font-bold">N</span>
             </div>
-            <span className="font-semibold text-gray-900">Mentanova</span>
+            <span className="font-semibold text-gray-900">Novera</span>
           </div>
         </div>
 
@@ -128,6 +137,16 @@ export default function Layout({ children, sidebarOpen, setSidebarOpen }: Layout
             </Link>
           </div>
         </nav>
+
+        {/* Token Meter - Shows above user info when in active conversation */}
+        {showTokenMeter && (
+          <div className="px-4 pb-3 border-t border-gray-200 pt-3">
+            <TokenMeter 
+              conversationId={currentConversationId} 
+              isVisible={true}
+            />
+          </div>
+        )}
 
         {/* User Info & Logout */}
         <div className="border-t border-gray-200 p-4">

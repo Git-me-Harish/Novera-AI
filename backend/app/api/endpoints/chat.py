@@ -645,5 +645,125 @@ async def debug_config(current_user: User = Depends(get_current_user)):
         'similarity_threshold': settings.similarity_threshold
     }
 
+@router.get("/chat/conversations/{conversation_id}/token-stats")
+async def get_conversation_token_stats(
+    conversation_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get detailed token usage and cost statistics for a conversation.
+    """
+    user_id = str(current_user.id)
+    
+    try:
+        conversation = await chat_service.get_conversation_history(
+            conversation_id=conversation_id,
+            user_id=user_id
+        )
+        
+        if 'error' in conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=conversation['error']
+            )
+        
+        messages = conversation.get('messages', [])
+        assistant_messages = [m for m in messages if m['role'] == 'assistant']
+        
+        total_tokens = 0
+        total_cached_tokens = 0
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_cost = 0.0
+        
+        message_stats = []
+        
+        for msg in assistant_messages:
+            metadata = msg.get('metadata', {})
+            tokens = metadata.get('tokens', {})
+            
+            msg_total = tokens.get('total_tokens', 0)
+            msg_cached = tokens.get('cached_tokens', 0)
+            msg_prompt = tokens.get('prompt_tokens', 0)
+            msg_completion = tokens.get('completion_tokens', 0)
+            
+            msg_regular = msg_total - msg_cached
+            msg_cost = (msg_cached * 0.00000003) + (msg_regular * 0.0000003)
+            
+            total_tokens += msg_total
+            total_cached_tokens += msg_cached
+            total_prompt_tokens += msg_prompt
+            total_completion_tokens += msg_completion
+            total_cost += msg_cost
+            
+            message_stats.append({
+                'message_id': msg.get('id'),
+                'timestamp': msg.get('timestamp'),
+                'tokens': {
+                    'total': msg_total,
+                    'cached': msg_cached,
+                    'prompt': msg_prompt,
+                    'completion': msg_completion
+                },
+                'cost_usd': round(msg_cost, 6)
+            })
+        
+        cache_efficiency = (total_cached_tokens / total_tokens * 100) if total_tokens > 0 else 0
+        
+        return {
+            'conversation_id': conversation_id,
+            'summary': {
+                'total_messages': len(assistant_messages),
+                'total_tokens': total_tokens,
+                'cached_tokens': total_cached_tokens,
+                'prompt_tokens': total_prompt_tokens,
+                'completion_tokens': total_completion_tokens,
+                'cache_efficiency_percent': round(cache_efficiency, 2),
+                'total_cost_usd': round(total_cost, 6),
+                'avg_tokens_per_message': round(total_tokens / len(assistant_messages)) if assistant_messages else 0,
+                'avg_cost_per_message': round(total_cost / len(assistant_messages), 6) if assistant_messages else 0
+            },
+            'messages': message_stats,
+            'pricing_info': {
+                'model': 'gemini-1.5-flash',
+                'cached_token_price': 0.00000003,
+                'regular_token_price': 0.0000003,
+                'currency': 'USD'
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting token stats: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+@router.get("/chat/debug/list-models")
+async def list_gemini_models():
+    """List all available Gemini models."""
+    import google.generativeai as genai
+    from app.core.config import settings
+    
+    genai.configure(api_key=settings.gemini_api_key)
+    
+    try:
+        models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                models.append({
+                    'name': m.name,
+                    'display_name': m.display_name,
+                    'description': m.description[:100] if m.description else ''
+                })
+        
+        return {
+            'available_models': models,
+            'current_config': settings.gemini_chat_model
+        }
+    except Exception as e:
+        return {'error': str(e)}
 
 __all__ = ['router']

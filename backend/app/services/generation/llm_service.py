@@ -8,6 +8,7 @@ import asyncio
 import google.generativeai as genai
 from tenacity import retry, stop_after_attempt, wait_exponential
 from loguru import logger
+import tiktoken
 
 from app.core.config import settings
 
@@ -22,10 +23,15 @@ class LLMService:
     def __init__(self):
         # Configure Gemini
         genai.configure(api_key=settings.gemini_api_key)
+    
+        # FIX: Remove 'models/' prefix if SDK adds it automatically
+        raw_model_name = settings.gemini_chat_model
+        if raw_model_name.startswith('models/'):
+            self.model_name = raw_model_name.replace('models/', '', 1)
+        else:
+            self.model_name = raw_model_name
         
-        self.model_name = settings.gemini_chat_model
         self.temperature = settings.temperature
-        self.max_tokens = settings.gemini_max_tokens
         
         # Initialize model
         self.model = genai.GenerativeModel(
@@ -38,55 +44,56 @@ class LLMService:
         )
         
         # System prompt for document-based RAG
-        self.system_instruction = """You are Mentanova, a helpful AI assistant specializing in Finance and HRMS documentation.
+        self.system_instruction = """You are Novera, an AI assistant specializing in Finance and HRMS documentation.
 
-        Your role is to provide accurate, helpful answers based on the provided document context.
+Core Guidelines:
+1. Answer questions using ONLY information from provided context when documents are available
+2. Be conversational, friendly, and professional
+3. For financial figures: Include exact numbers (citations handled separately)
+4. If information is not in context: Clearly state what's missing
+5. CRITICAL: Never mention document filenames, page numbers, or file references in responses
+6. CRITICAL: No inline citations like [Document: X, Page: Y] in your answer text
 
-        Guidelines:
-        1. Answer questions using ONLY the information from the provided context when documents are available
-        2. Be conversational and friendly, but professional
-        3. For financial figures: Always include exact figures (citations are handled separately)
-        4. If information is not in the context: Politely say you don't have that information in the available documents
-        5. For policies: Explain clearly without mentioning document filenames
-        6. **CRITICAL**: DO NOT mention document filenames, page numbers, or any file references in your response
-        7. **CRITICAL**: DO NOT include inline citations like [Document: X, Page: Y] anywhere in your response text
-        8. When presenting tabular data, use proper Markdown table format
+Response Formatting:
+- Use natural, conversational language as if explaining from your knowledge
+- Structure clearly: paragraphs, bullet points (- or *), bold (**text**)
+- For tabular data, use Markdown tables:
+  | Header 1 | Header 2 |
+  |----------|----------|
+  | Value 1  | Value 2  |
 
-        Response style:
-        - Use natural, conversational language
-        - Answer as if you're explaining from your knowledge, not referencing external files
-        - Structure responses with:
-        - Clear paragraphs
-        - Bullet points for lists (use - or *)
-        - Bold for emphasis (use **text**)
-        - Proper spacing
-        - **Tables in Markdown format** for tabular data:
-            ```
-            | Header 1 | Header 2 | Header 3 |
-            |----------|----------|----------|
-            | Data 1   | Data 2   | Data 3   |
-            ```
-        - Be concise but thorough
-        - For greetings and general conversation, respond naturally
-        - NEVER say "According to [filename]" or "The document states" - just explain the information naturally
+Examples:
+❌ BAD: "According to Branch_Manager_Manual.docx, the eligibility..."
+✅ GOOD: "The eligibility criteria include..."
 
-        EXAMPLES:
-
-        ❌ BAD (mentions filename):
-        "According to Branch_Quality_Manager_Training_Manual.docx, the training includes..."
-
-        ✅ GOOD (natural):
-        "The training includes..."
-
-        ❌ BAD (mentions document):
-        "The policy document states that leave requests..."
-
-        ✅ GOOD (natural):
-        "Leave requests should be submitted..."
-
-        REMEMBER: Sources/citations will be displayed separately in the UI. Just focus on giving clear, natural answers."""
+Remember: Sources display separately in UI. Focus on clear, natural explanations."""
         
-        logger.info(f"LLM service initialized: {self.model_name}")
+        # Initialize token encoder for accurate counting
+        try:
+            self.encoding = tiktoken.get_encoding("cl100k_base")
+            logger.info(f"LLM service initialized: {self.model_name} with tiktoken encoder")
+        except Exception as e:
+            logger.warning(f"Failed to load tiktoken encoder: {e}, using estimation fallback")
+            self.encoding = None
+    
+    def count_tokens(self, text: str) -> int:
+        """
+        Accurately count tokens in text using tiktoken.
+        
+        Args:
+            text: Text to count tokens for
+            
+        Returns:
+            Token count (accurate if tiktoken loaded, estimated otherwise)
+        """
+        if self.encoding:
+            try:
+                return len(self.encoding.encode(text))
+            except Exception as e:
+                logger.warning(f"Token counting failed, using estimation: {e}")
+        
+        # Fallback: rough estimation (1 token ≈ 4 characters)
+        return len(text) // 4
     
     @retry(
         stop=stop_after_attempt(3),
@@ -160,7 +167,7 @@ Use natural language, be warm and helpful."""
                 lambda: self.model.generate_content(
                     messages,
                     generation_config={
-                        "temperature": 0.7,  # More creative for conversation
+                        "temperature": 0.7,
                         "max_output_tokens": 500,
                     }
                 )
@@ -181,7 +188,6 @@ Use natural language, be warm and helpful."""
             
         except Exception as e:
             logger.error(f"Conversational generation failed: {str(e)}")
-            # Fallback to context message
             return {
                 'answer': context_message,
                 'confidence': 'medium',
@@ -221,31 +227,43 @@ Use natural language, be warm and helpful."""
         """
         logger.info(f"Generating answer: conversational={is_conversational}, sources={len(sources)}")
         
-        # Build context-aware prompt
+        recent_history = []
+        if conversation_history and len(conversation_history) > 0:
+            if len(conversation_history) > 2:
+                recent_history = conversation_history[-2:]
+            else:
+                recent_history = [] 
+        
+        # Build the cacheable system context (changes infrequently)
+        system_instruction = self._get_context_aware_system_instruction(conversation_context)
+        
+        # Build the variable user prompt
         if is_conversational or not context or len(context.strip()) < 50:
-            # Conversational mode - no strong document context
             user_prompt = self._build_conversational_prompt(
-                query, conversation_history, conversation_context
+                query, recent_history, conversation_context
             )
         else:
-            # Document-based mode with context awareness
             user_prompt = self._build_contextual_prompt(
                 query, context, sources, reformulated_query, conversation_context
             )
         
-        # Build messages
+        # Build messages array
         messages = []
         
-        # Enhanced system instruction
-        system_instruction = self._get_context_aware_system_instruction(conversation_context)
-        messages.append({"role": "user", "parts": [system_instruction]})
-        messages.append({"role": "model", "parts": ["Understood. I'll provide accurate, context-aware responses with proper citations."]})
+        # Add system instruction (will be cached in future)
+        messages.append({
+            "role": "user",
+            "parts": [system_instruction]
+        })
+        messages.append({
+            "role": "model",
+            "parts": ["Understood. I'll provide accurate, context-aware responses."]
+        })
         
-        # Add conversation history (last 6 messages for better context)
-        if conversation_history:
-            for msg in conversation_history[-6:]:
-                role = "model" if msg["role"] == "assistant" else "user"
-                messages.append({"role": role, "parts": [msg["content"]]})
+        # OPTIMIZATION: Only add last 2 history messages instead of 6
+        for msg in recent_history:
+            role = "model" if msg["role"] == "assistant" else "user"
+            messages.append({"role": role, "parts": [msg["content"]]})
         
         # Add current query
         messages.append({"role": "user", "parts": [user_prompt]})
@@ -268,13 +286,62 @@ Use natural language, be warm and helpful."""
             citations = self._extract_citations(answer, sources)
             confidence = self._assess_confidence(answer, context, conversation_context)
             
-            usage = {
-                'prompt_tokens': response.usage_metadata.prompt_token_count if hasattr(response, 'usage_metadata') else 0,
-                'completion_tokens': response.usage_metadata.candidates_token_count if hasattr(response, 'usage_metadata') else 0,
-                'total_tokens': response.usage_metadata.total_token_count if hasattr(response, 'usage_metadata') else 0
-            }
+            # Extract or calculate usage metadata
+            usage = {}
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage_meta = response.usage_metadata
+                
+                # DEBUG: Log all available metadata attributes
+                logger.info(f"🔍 DEBUG - Available metadata attributes: {dir(usage_meta)}")
+                logger.info(f"🔍 DEBUG - Raw metadata: {usage_meta}")
+                
+                usage = {
+                    'prompt_tokens': getattr(usage_meta, 'prompt_token_count', 0),
+                    'completion_tokens': getattr(usage_meta, 'candidates_token_count', 0),
+                    'total_tokens': getattr(usage_meta, 'total_token_count', 0),
+                    'cached_tokens': getattr(usage_meta, 'cached_content_token_count', 0)
+                }
+                
+                logger.info(f"📊 Token breakdown: Prompt={usage['prompt_tokens']}, "
+                            f"Completion={usage['completion_tokens']}, "
+                            f"Cached={usage['cached_tokens']}, "
+                            f"Total={usage['total_tokens']}")
+            else:
+                # Use accurate token counting
+                logger.warning(f"⚠️ API didn't return usage metadata, counting tokens manually")
+                
+                # Count tokens for each component
+                system_tokens = self.count_tokens(system_instruction)
+                
+                # Count history tokens
+                history_tokens = 0
+                for msg in recent_history:
+                    history_tokens += self.count_tokens(msg['content'])
+                
+                user_prompt_tokens = self.count_tokens(user_prompt)
+                completion_tokens = self.count_tokens(answer)
+                
+                prompt_tokens = system_tokens + history_tokens + user_prompt_tokens
+                total_tokens = prompt_tokens + completion_tokens
+                
+                usage = {
+                    'prompt_tokens': prompt_tokens,
+                    'completion_tokens': completion_tokens,
+                    'total_tokens': total_tokens,
+                    'cached_tokens': 0,
+                    'breakdown': {
+                        'system': system_tokens,
+                        'history': history_tokens,
+                        'user_prompt': user_prompt_tokens,
+                        'completion': completion_tokens
+                    }
+                }
+                
+                logger.info(f"📊 Token breakdown - System: {system_tokens}, History: {history_tokens}, "
+                           f"User: {user_prompt_tokens}, Completion: {completion_tokens}")
             
             logger.info(f"✅ Generated: {len(answer)} chars, {len(citations)} citations")
+            logger.info(f"📊 Token usage: {usage['total_tokens']} total, {usage['cached_tokens']} cached")
             
             return {
                 'answer': answer,
@@ -292,57 +359,21 @@ Use natural language, be warm and helpful."""
         self,
         conversation_context: Optional[Dict[str, Any]] = None
     ) -> str:
-        """Get system instruction based on conversation context."""
+        """
+        Get system instruction with minimal context additions.
+        """
+        # Use the base system instruction
+        instruction = self.system_instruction
         
-        base_instruction = """You are Mentanova, a helpful AI assistant specializing in Finance and HRMS documentation.
-
-    Your role is to provide accurate, conversational answers based on the provided context and conversation history.
-
-    Core Guidelines:
-    1. **Context Awareness**: Pay attention to the conversation history and maintain context across messages
-    2. **Natural Responses**: Answer naturally as if explaining from your knowledge - NEVER mention document filenames or page numbers
-    3. **No File References**: Do NOT say things like "According to [filename]" or "The document shows" or "[Document: X, Page: Y]"
-    4. **Source Attribution**: Citations are handled separately - just provide clear explanations
-    5. **Clarification**: If information is not in the context, say so clearly and offer alternatives
-    6. **Follow-ups**: Handle follow-up questions by referring back to previous answers, not documents
-
-    Response Guidelines:
-    - Use natural, conversational language as if you're an expert explaining the topic
-    - Structure responses clearly with paragraphs, bullet points, and bold text
-    - For financial data: Include exact figures naturally (e.g., "The budget is ₹50,000" not "According to doc.pdf, budget is ₹50,000")
-    - For follow-up questions: Reference previous context naturally
-    - Be concise but thorough
-    - NEVER mention filenames, document names, or page numbers in your answer text
-
-    EXAMPLES:
-
-    ❌ BAD: "According to the Branch_Quality_Manager_Training_Manual.docx, the eligibility criteria..."
-    ✅ GOOD: "The eligibility criteria include..."
-
-    ❌ BAD: "The policy document states that..."
-    ✅ GOOD: "Policy guidelines indicate that..."
-
-    ❌ BAD: "As per [Document: X, Page: Y]..."
-    ✅ GOOD: "The requirement is..."
-    """
-        
-        # Add context-specific instructions (but remove document name references)
+        # OPTIMIZATION: Only add context if it's significant
         if conversation_context:
             primary_doc = conversation_context.get('primary_document')
-            time_period = conversation_context.get('recent_time_period')
             
             if primary_doc:
-                base_instruction += f"""
-    **Current Context**:
-    - We are discussing a specific topic area
-    - When answering follow-up questions, maintain continuity with previous answers
-    - DO NOT mention the document name "{primary_doc}" in your responses
-    """
-            
-            if time_period:
-                base_instruction += f"- Time Period in Focus: {time_period}\n"
+                # Add minimal context hint (not full document name)
+                instruction += f"\n\nCurrent focus: Document-scoped conversation."
         
-        return base_instruction
+        return instruction
     
     def _extract_citations(
         self,

@@ -260,21 +260,13 @@ class RetrievalPipeline:
         processed_query: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Assemble final context from retrieved chunks.
-        
-        Args:
-            chunks: Retrieved and reranked chunks
-            processed_query: Processed query information
-            
-        Returns:
-            Assembled context with metadata
+        Assemble final context with intelligent truncation.
         """
         context_parts = []
         total_tokens = 0
         sources = []
         final_chunks = []
         
-        # Handle empty chunks
         if not chunks:
             logger.warning("No chunks to assemble context from")
             return {
@@ -284,25 +276,26 @@ class RetrievalPipeline:
                 'sources': []
             }
         
-        # Prioritize chunks based on type and relevance
         sorted_chunks = self._prioritize_chunks(chunks, processed_query)
+        
+        max_tokens = min(self.max_context_tokens, 6000)
         
         for chunk in sorted_chunks:
             chunk_tokens = chunk.get('token_count', 0)
             
-            # Check if adding this chunk would exceed limit
-            if total_tokens + chunk_tokens > self.max_context_tokens:
-                logger.warning(f"Reached token limit ({self.max_context_tokens}), stopping context assembly")
+            if chunk_tokens > 800:
+                chunk['content'] = chunk['content'][:3200]
+                chunk_tokens = 800
+            
+            if total_tokens + chunk_tokens > max_tokens:
+                logger.warning(f"Reached token limit ({max_tokens}), stopping context assembly")
                 break
             
-            # Format chunk with metadata
             chunk_text = self._format_chunk_for_context(chunk)
             context_parts.append(chunk_text)
             
-            # ✅ FIXED: Safely extract metadata from chunk
             chunk_metadata = self._safe_get_metadata(chunk)
             
-            # Track sources - with safe defaults
             source_info = {
                 'document': chunk_metadata.get('document_title', chunk.get('document_name', 'Unknown Document')),
                 'page': chunk.get('page_numbers', [None])[0] if chunk.get('page_numbers') else None,
@@ -310,14 +303,12 @@ class RetrievalPipeline:
                 'chunk_id': str(chunk.get('chunk_id', chunk.get('id', '')))
             }
             
-            # Only add if not duplicate
             if source_info not in sources:
                 sources.append(source_info)
             
             final_chunks.append(chunk)
             total_tokens += chunk_tokens
         
-        # Combine context parts
         context_text = "\n\n---\n\n".join(context_parts)
         
         logger.info(f"Assembled context: {len(final_chunks)} chunks, {total_tokens} tokens, {len(sources)} sources")

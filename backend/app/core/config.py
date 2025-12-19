@@ -115,7 +115,7 @@ class Settings(BaseSettings):
     enable_context_ui: bool = Field(default=True, env="ENABLE_CONTEXT_UI")
     
     # Enhanced Retrieval
-    max_conversation_history: int = Field(default=5, env="MAX_CONVERSATION_HISTORY")
+    max_conversation_history: int = Field(default=2, env="MAX_CONVERSATION_HISTORY")
     document_scope_message_threshold: int = Field(default=5, env="DOCUMENT_SCOPE_MESSAGE_THRESHOLD")
     
     # Logging Configuration

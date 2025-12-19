@@ -61,3 +61,6 @@ black==23.12.1
 ruff==0.1.11
 mypy==1.8.0
 reportlab==4.0.7
+
+# Tokens
+tiktoken==0.5.2

@@ -94,7 +94,7 @@ export default function RegisterPage() {
           </div>
           <h2 className="text-3xl font-bold text-gray-900">Create your account</h2>
           <p className="mt-2 text-sm text-gray-600">
-            Start using Mentanova AI Knowledge Assistant
+            Start using Novera AI Knowledge Assistant
           </p>
         </div>
 

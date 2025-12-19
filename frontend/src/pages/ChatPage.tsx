@@ -7,18 +7,22 @@ import SourceCard from '../components/chat/SourceCard';
 import ContextIndicator from '../components/chat/ContextIndicator';
 import ExportButton from '../components/chat/ExportButton';
 import AnalyticsModal from '../components/chat/AnalyticsModal';
+import { useConversation } from '../contexts/ConversationContext';
 
-// Memoize MessageBubble for better performance
+// Memoize components for better performance
 const MemoizedMessageBubble = memo(MessageBubble);
 const MemoizedSourceCard = memo(SourceCard);
 
 export default function ChatPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
+  const { setCurrentConversationId } = useConversation();
+  
+  // ALL STATE DECLARATIONS FIRST
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(
+  const [currentConversationIdLocal, setCurrentConversationIdLocal] = useState<string | null>(
     conversationId || null
   );
   const [sources, setSources] = useState<Source[]>([]);
@@ -26,8 +30,22 @@ export default function ChatPage() {
   const [contextSummary, setContextSummary] = useState<any>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showAnalytics, setShowAnalytics] = useState(false);
+  
+  // REFS
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // NOW USE EFFECTS (after all state is declared)
+  
+  // Update global conversation context whenever local conversation ID changes
+  useEffect(() => {
+    setCurrentConversationId(currentConversationIdLocal);
+    
+    return () => {
+      // Cleanup: clear conversation ID when leaving chat page
+      setCurrentConversationId(null);
+    };
+  }, [currentConversationIdLocal, setCurrentConversationId]);
 
   // Load conversation if ID provided
   useEffect(() => {
@@ -52,7 +70,7 @@ export default function ChatPage() {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'a' && currentConversationId) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a' && currentConversationIdLocal) {
         e.preventDefault();
         setShowAnalytics(true);
       }
@@ -60,20 +78,21 @@ export default function ChatPage() {
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [currentConversationId]);
+  }, [currentConversationIdLocal]);
 
+  // HELPER FUNCTIONS
+  
   const loadConversation = async (convId: string) => {
     try {
       const conversation = await api.getConversation(convId);
       setMessages(conversation.messages);
-      setCurrentConversationId(convId);
+      setCurrentConversationIdLocal(convId);
     } catch (err) {
       console.error('Failed to load conversation:', err);
       setError('Failed to load conversation');
     }
   };
 
-  // OPTIMIZED: Handle chat response with useCallback
   const handleChatResponse = useCallback((response: ChatResponse) => {
     // Format sources
     const formattedSources = response.sources.map(src => ({
@@ -114,12 +133,12 @@ export default function ChatPage() {
     try {
       const response: ChatResponse = await api.sendChatMessage({
         query: input.trim(),
-        conversation_id: currentConversationId,
+        conversation_id: currentConversationIdLocal,
       });
 
       // Update conversation ID if new
-      if (!currentConversationId && response.conversation_id) {
-        setCurrentConversationId(response.conversation_id);
+      if (!currentConversationIdLocal && response.conversation_id) {
+        setCurrentConversationIdLocal(response.conversation_id);
         navigate(`/chat/${response.conversation_id}`, { replace: true });
       }
 
@@ -171,7 +190,7 @@ export default function ChatPage() {
 
   const startNewChat = useCallback(() => {
     setMessages([]);
-    setCurrentConversationId(null);
+    setCurrentConversationIdLocal(null);
     setSources([]);
     setError(null);
     setContextSummary(null);
@@ -209,7 +228,7 @@ export default function ChatPage() {
             </div>
             <div>
               <h1 className="text-lg font-semibold text-gray-900">
-                {currentConversationId ? 'Chat with Mentanova' : 'New Conversation'}
+                {currentConversationIdLocal ? 'Chat with Novera' : 'New Conversation'}
               </h1>
               <p className="text-xs text-gray-500">AI-powered document assistant</p>
             </div>
@@ -217,7 +236,7 @@ export default function ChatPage() {
           
           {messages.length > 0 && (
             <div className="flex items-center gap-2">
-              {currentConversationId && (
+              {currentConversationIdLocal && (
                 <button
                   onClick={() => setShowAnalytics(true)}
                   className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg transition-colors"
@@ -228,8 +247,8 @@ export default function ChatPage() {
                 </button>
               )}
               
-              {currentConversationId && (
-                <ExportButton conversationId={currentConversationId} />
+              {currentConversationIdLocal && (
+                <ExportButton conversationId={currentConversationIdLocal} />
               )}
               
               <button
@@ -261,7 +280,7 @@ export default function ChatPage() {
                     <Sparkles className="w-10 h-10 text-blue-600" />
                   </div>
                   <h2 className="text-2xl font-bold text-gray-900 mb-3">
-                    Welcome to Mentanova AI
+                    Welcome to Novera AI
                   </h2>
                   <p className="text-gray-600 mb-8 leading-relaxed">
                     I'm your AI assistant specialized in Finance and HRMS documents. Ask me anything about your uploaded documents, policies, or just have a conversation!
@@ -421,9 +440,9 @@ export default function ChatPage() {
       )}
 
       {/* Analytics Modal */}
-      {currentConversationId && (
+      {currentConversationIdLocal && (
         <AnalyticsModal
-          conversationId={currentConversationId}
+          conversationId={currentConversationIdLocal}
           isOpen={showAnalytics}
           onClose={() => setShowAnalytics(false)}
         />

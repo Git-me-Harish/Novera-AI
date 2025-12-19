@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
     Handles startup and shutdown events.
     """
     # Startup
-    logger.info("🚀 Starting Mentanova AI Knowledge Assistant...")
+    logger.info("🚀 Starting Novera AI Knowledge Assistant...")
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug mode: {settings.debug}")
     
@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
     yield  # Application runs here
     
     # Shutdown
-    logger.info("🛑 Shutting down Mentanova AI Knowledge Assistant...")
+    logger.info("🛑 Shutting down Novera AI Knowledge Assistant...")
     
     try:
         await close_db()
