@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { LogIn, Mail, Lock, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import VerificationReminder from '../components/auth/VerificationReminder';
+import api from '../services/api';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -14,8 +16,17 @@ export default function LoginPage() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showVerificationReminder, setShowVerificationReminder] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
 
   const from = (location.state as any)?.from?.pathname || '/chat';
+
+  useEffect(() => {
+    const state = location.state as any;
+    if (state?.message) {
+      console.log(state.message);
+    }
+  }, [location]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,18 +35,25 @@ export default function LoginPage() {
 
     try {
       await login(formData.email, formData.password);
-      navigate(from, { replace: true });
+      
+      // Check if user is verified
+      const currentUser = await api.getCurrentUser();
+      
+      if (!currentUser.is_verified) {
+        setUserEmail(currentUser.email);
+        setShowVerificationReminder(true);
+      } else {
+        navigate(from, { replace: true });
+      }
     } catch (err: any) {
       console.error('Login error:', err);
       
-      // ✅ Better error message extraction
       let errorMessage = 'Login failed. Please check your credentials.';
       
       if (err.response?.data?.detail) {
         if (typeof err.response.data.detail === 'string') {
           errorMessage = err.response.data.detail;
         } else if (Array.isArray(err.response.data.detail)) {
-          // Format validation errors
           errorMessage = err.response.data.detail
             .map((e: any) => `${e.loc?.join('.')}: ${e.msg}`)
             .join(', ');
@@ -64,12 +82,12 @@ export default function LoginPage() {
         <div className="text-center">
           <div className="flex justify-center mb-6">
             <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-2xl flex items-center justify-center shadow-lg">
-              <span className="text-white font-bold text-2xl">N</span>
+              <span className="text-white font-bold text-2xl">M</span>
             </div>
           </div>
           <h2 className="text-3xl font-bold text-gray-900">Welcome back</h2>
           <p className="mt-2 text-sm text-gray-600">
-            Sign in to your Novera account
+            Sign in to your Mentanova account
           </p>
         </div>
 
@@ -202,6 +220,17 @@ export default function LoginPage() {
           </a>
         </p>
       </div>
+
+      {/* Verification Reminder */}
+      {showVerificationReminder && (
+        <VerificationReminder
+          email={userEmail}
+          onClose={() => {
+            setShowVerificationReminder(false);
+            navigate(from, { replace: true });
+          }}
+        />
+      )}
     </div>
   );
 }

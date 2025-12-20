@@ -7,8 +7,10 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from loguru import logger
+import secrets
+from app.models.user import User, RefreshToken, PasswordResetToken, EmailVerificationToken
+from app.services.email.email_service import email_service
 
-from app.models.user import User, RefreshToken
 from app.core.security import (
     verify_password,
     get_password_hash,
@@ -23,13 +25,14 @@ from app.core.config import settings
 
 class AuthService:
     """Service for handling authentication operations."""
-    
+
     async def register_user(
         self,
         email: str,
         username: str,
         password: str,
         full_name: Optional[str],
+        ip_address: Optional[str],  # Add this parameter
         db: AsyncSession
     ) -> Tuple[bool, Optional[User], Optional[str]]:
         """
@@ -40,6 +43,7 @@ class AuthService:
             username: Username
             password: Plain password
             full_name: Full name (optional)
+            ip_address: IP address of requester
             db: Database session
             
         Returns:
@@ -88,6 +92,14 @@ class AuthService:
             db.add(user)
             await db.commit()
             await db.refresh(user)
+            
+            await self.send_verification_email(
+                user_id=user.id,
+                email=user.email,
+                username=user.username,
+                ip_address=ip_address,
+                db=db
+            )
             
             logger.info(f"New user registered: {user.email}")
             
@@ -398,6 +410,338 @@ class AuthService:
             logger.error(f"Password change failed: {str(e)}")
             return False, "Password change failed"
 
+    async def request_password_reset(
+        self,
+        email: str,
+        ip_address: Optional[str],
+        db: AsyncSession
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Request password reset - generates token and sends email.
+
+        Args:
+            email: User's email address
+            ip_address: IP address of requester
+            db: Database session
+
+        Returns:
+            Tuple of (success, error_message)
+        """
+        result = await db.execute(
+            select(User).where(User.email == email.lower())
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            logger.warning(f"Password reset requested for non-existent email: {email}")
+            return True, None
+
+        if not user.is_active:
+            return False, "Account is deactivated"
+
+        try:
+            reset_token = secrets.token_urlsafe(32)
+            
+            expires_at = datetime.utcnow() + timedelta(
+                minutes=settings.password_reset_token_expire_minutes
+            )
+
+            token_entry = PasswordResetToken(
+                user_id=user.id,
+                token=reset_token,
+                expires_at=expires_at,
+                ip_address=ip_address
+            )
+
+            db.add(token_entry)
+            await db.commit()
+
+            email_sent = email_service.send_password_reset_email(
+                to_email=user.email,
+                reset_token=reset_token,
+                username=user.username
+            )
+
+            if not email_sent:
+                logger.error(f"Failed to send password reset email to {user.email}")
+                return False, "Failed to send reset email. Please try again."
+
+            logger.info(f"Password reset email sent to {user.email}")
+            return True, None
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Password reset request failed: {str(e)}")
+            return False, "Failed to process password reset request"
+
+    async def verify_reset_token(
+        self,
+        token: str,
+        db: AsyncSession
+    ) -> Tuple[bool, Optional[UUID], Optional[str]]:
+        """
+        Verify password reset token.
+
+        Args:
+            token: Reset token string
+            db: Database session
+
+        Returns:
+            Tuple of (is_valid, user_id, error_message)
+        """
+        result = await db.execute(
+            select(PasswordResetToken).where(
+                PasswordResetToken.token == token,
+                PasswordResetToken.used == False
+            )
+        )
+        reset_token = result.scalar_one_or_none()
+
+        if not reset_token:
+            return False, None, "Invalid or expired reset token"
+
+        if reset_token.expires_at < datetime.utcnow():
+            return False, None, "Reset token has expired"
+
+        result = await db.execute(
+            select(User).where(User.id == reset_token.user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user or not user.is_active:
+            return False, None, "User not found or inactive"
+
+        return True, user.id, None
+
+    async def reset_password(
+        self,
+        token: str,
+        new_password: str,
+        db: AsyncSession
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Reset password using reset token.
+
+        Args:
+            token: Reset token string
+            new_password: New password
+            db: Database session
+
+        Returns:
+            Tuple of (success, error_message)
+        """
+        is_valid, user_id, error = await self.verify_reset_token(token, db)
+
+        if not is_valid:
+            return False, error
+
+        is_strong, password_error = validate_password_strength(new_password)
+        if not is_strong:
+            return False, password_error
+
+        try:
+            result = await db.execute(
+                select(User).where(User.id == user_id)
+            )
+            user = result.scalar_one_or_none()
+
+            if not user:
+                return False, "User not found"
+
+            user.hashed_password = get_password_hash(new_password)
+            user.updated_at = datetime.utcnow()
+
+            result = await db.execute(
+                select(PasswordResetToken).where(
+                    PasswordResetToken.token == token
+                )
+            )
+            reset_token = result.scalar_one_or_none()
+
+            if reset_token:
+                reset_token.used = True
+
+            await db.commit()
+
+            logger.info(f"Password reset successful for user {user.email}")
+            return True, None
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Password reset failed: {str(e)}")
+            return False, "Password reset failed. Please try again."
+
+    async def send_verification_email(
+        self,
+        user_id: UUID,
+        email: str,
+        username: str,
+        ip_address: Optional[str],
+        db: AsyncSession
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Send email verification link to user.
+
+        Args:
+            user_id: User ID
+            email: User's email address
+            username: User's username
+            ip_address: IP address of requester
+            db: Database session
+
+        Returns:
+            Tuple of (success, error_message)
+        """
+        try:
+            # Generate verification token
+            verification_token = secrets.token_urlsafe(32)
+            
+            # Token expires in 24 hours
+            expires_at = datetime.utcnow() + timedelta(hours=24)
+
+            # Store token in database
+            token_entry = EmailVerificationToken(
+                user_id=user_id,
+                token=verification_token,
+                expires_at=expires_at,
+                ip_address=ip_address
+            )
+
+            db.add(token_entry)
+            await db.commit()
+
+            # Send verification email
+            email_sent = email_service.send_verification_email(
+                to_email=email,
+                verification_token=verification_token,
+                username=username
+            )
+
+            if not email_sent:
+                logger.error(f"Failed to send verification email to {email}")
+                return False, "Failed to send verification email. Please try again."
+
+            logger.info(f"Verification email sent to {email}")
+            return True, None
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Send verification email failed: {str(e)}")
+            return False, "Failed to send verification email"
+
+    async def verify_email(
+        self,
+        token: str,
+        db: AsyncSession
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Verify user's email using verification token.
+
+        Args:
+            token: Verification token
+            db: Database session
+
+        Returns:
+            Tuple of (success, error_message)
+        """
+        # Get verification token from database
+        result = await db.execute(
+            select(EmailVerificationToken).where(
+                EmailVerificationToken.token == token,
+                EmailVerificationToken.used == False
+            )
+        )
+        verification_token = result.scalar_one_or_none()
+
+        if not verification_token:
+            return False, "Invalid or expired verification token"
+
+        # Check if token is expired
+        if verification_token.expires_at < datetime.utcnow():
+            return False, "Verification link has expired. Please request a new one."
+
+        try:
+            # Get user
+            result = await db.execute(
+                select(User).where(User.id == verification_token.user_id)
+            )
+            user = result.scalar_one_or_none()
+
+            if not user:
+                return False, "User not found"
+
+            # Check if already verified
+            if user.is_verified:
+                return False, "Email already verified"
+
+            # Mark user as verified
+            user.is_verified = True
+            user.updated_at = datetime.utcnow()
+
+            # Mark token as used
+            verification_token.used = True
+
+            await db.commit()
+
+            logger.info(f"Email verified for user {user.email}")
+            return True, None
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Email verification failed: {str(e)}")
+            return False, "Email verification failed. Please try again."
+
+    async def resend_verification_email(
+        self,
+        user_id: UUID,
+        ip_address: Optional[str],
+        db: AsyncSession
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Resend verification email to user.
+
+        Args:
+            user_id: User ID
+            ip_address: IP address of requester
+            db: Database session
+
+        Returns:
+            Tuple of (success, error_message)
+        """
+        # Get user
+        result = await db.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            return False, "User not found"
+
+        if user.is_verified:
+            return False, "Email already verified"
+
+        # Check if a recent token was sent (rate limiting)
+        result = await db.execute(
+            select(EmailVerificationToken)
+            .where(
+                EmailVerificationToken.user_id == user_id,
+                EmailVerificationToken.used == False,
+                EmailVerificationToken.created_at > datetime.utcnow() - timedelta(minutes=5)
+            )
+        )
+        recent_token = result.scalar_one_or_none()
+
+        if recent_token:
+            return False, "Verification email was recently sent. Please wait 5 minutes before requesting again."
+
+        # Send new verification email
+        return await self.send_verification_email(
+            user_id=user.id,
+            email=user.email,
+            username=user.username,
+            ip_address=ip_address,
+            db=db
+        )
 
 # Global instance
 auth_service = AuthService()

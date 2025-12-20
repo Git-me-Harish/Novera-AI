@@ -93,6 +93,49 @@ class RefreshToken(Base):
 
     def __repr__(self):
         return f"<RefreshToken(id={self.id}, user_id={self.user_id}, revoked={self.revoked})>"
+    
+class PasswordResetToken(Base):
+    """
+    Password reset token model for secure password recovery.
+    """
+    __tablename__ = "password_reset_tokens"
 
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), nullable=False, index=True)
+    token = Column(String(512), unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    used = Column(Boolean, default=False, nullable=False)
+    ip_address = Column(String(45), nullable=True)
 
-__all__ = ['User', 'RefreshToken']
+    __table_args__ = (
+        Index('idx_reset_token_active', 'token', 'used'),
+        Index('idx_reset_user_active', 'user_id', 'used'),
+    )
+
+    def __repr__(self):
+        return f"<PasswordResetToken(id={self.id}, user_id={self.user_id}, used={self.used})>"
+
+class EmailVerificationToken(Base):
+    """
+    Email verification token model for account activation.
+    """
+    __tablename__ = "email_verification_tokens"
+
+    id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(PGUUID(as_uuid=True), nullable=False, index=True)
+    token = Column(String(512), unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    used = Column(Boolean, default=False, nullable=False)
+    ip_address = Column(String(45), nullable=True)
+
+    __table_args__ = (
+        Index('idx_verification_token_active', 'token', 'used'),
+        Index('idx_verification_user_active', 'user_id', 'used'),
+    )
+
+    def __repr__(self):
+        return f"<EmailVerificationToken(id={self.id}, user_id={self.user_id}, used={self.used})>"
+
+__all__ = ['User', 'RefreshToken', 'PasswordResetToken', 'EmailVerificationToken']

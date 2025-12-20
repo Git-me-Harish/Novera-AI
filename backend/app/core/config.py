@@ -68,6 +68,19 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+
+    # Email Configuration
+    smtp_host: str = Field(default="smtp.gmail.com")
+    smtp_port: int = Field(default=587)
+    smtp_user: str = Field(default="")
+    smtp_password: str = Field(default="")
+    smtp_from_email: str = Field(default="")
+    smtp_from_name: str = Field(default="Novera AI")
+    smtp_use_tls: bool = Field(default=True)
+
+    # Password Reset
+    password_reset_token_expire_minutes: int = Field(default=15)
+    frontend_url: str = Field(default="http://localhost:5173")
     
     # Document Processing Configuration
     max_upload_size_mb: int = 50

@@ -14,6 +14,9 @@ import ConversationsPage from './pages/ConversationsPage';
 import ProfilePage from './pages/ProfilePage';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import UserManagement from './pages/admin/UserManagement';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -42,6 +45,9 @@ function App() {
                       <Route path="/documents/:documentId/edit" element={<DocumentEditorPage />} />
                       <Route path="/conversations" element={<ConversationsPage />} />
                       <Route path="/profile" element={<ProfilePage />} />
+                      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                      <Route path="/reset-password" element={<ResetPasswordPage />} />
+                      <Route path="/verify-email" element={<VerifyEmailPage />} />
                       
                       {/* Admin Routes */}
                       <Route

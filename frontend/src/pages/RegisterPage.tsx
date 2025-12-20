@@ -1,10 +1,9 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { UserPlus, Mail, Lock, User, AlertCircle, Loader2, CheckCircle, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function RegisterPage() {
-  const navigate = useNavigate();
   const { register } = useAuth();
 
   const [formData, setFormData] = useState({
@@ -16,6 +15,7 @@ export default function RegisterPage() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [registrationSuccess, setRegistrationSuccess] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,12 +43,25 @@ export default function RegisterPage() {
         formData.password,
         formData.fullName || undefined
       );
-      navigate('/chat', { replace: true });
+      setRegistrationSuccess(true);
     } catch (err: any) {
       console.error('Registration error:', err);
-      setError(
-        err.response?.data?.detail || 'Registration failed. Please try again.'
-      );
+      
+      let errorMessage = 'Registration failed. Please try again.';
+      
+      if (err.response?.data?.detail) {
+        if (typeof err.response.data.detail === 'string') {
+          errorMessage = err.response.data.detail;
+        } else if (Array.isArray(err.response.data.detail)) {
+          errorMessage = err.response.data.detail
+            .map((e: any) => `${e.loc?.join('.')}: ${e.msg}`)
+            .join(', ');
+        }
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -82,6 +95,76 @@ export default function RegisterPage() {
 
   const passwordStrength = formData.password ? validatePassword(formData.password) : null;
 
+  // Success screen after registration
+  if (registrationSuccess) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-md w-full">
+          <div className="text-center mb-8">
+            <div className="flex justify-center mb-6">
+              <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-2xl flex items-center justify-center shadow-lg">
+                <span className="text-white font-bold text-2xl">M</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-lg p-8">
+            <div className="text-center">
+              <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
+                <CheckCircle className="h-10 w-10 text-green-600" />
+              </div>
+
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Registration Successful!</h2>
+
+              <p className="text-gray-600 mb-4">
+                Welcome to Mentanova AI, <strong>{formData.username}</strong>!
+              </p>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 text-left">
+                <div className="flex items-start gap-2 mb-3">
+                  <Mail className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-blue-900 mb-1">
+                      Verify Your Email
+                    </p>
+                    <p className="text-sm text-blue-800">
+                      We've sent a verification link to:
+                    </p>
+                    <p className="text-sm font-medium text-blue-900 break-all mt-1">
+                      {formData.email}
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="bg-white rounded p-3 border border-blue-100">
+                  <p className="text-xs text-blue-800 mb-2">
+                    <strong>Next steps:</strong>
+                  </p>
+                  <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
+                    <li>Check your email inbox (and spam folder)</li>
+                    <li>Click the verification link</li>
+                    <li>Sign in to access all features</li>
+                  </ol>
+                </div>
+              </div>
+
+              <Link
+                to="/login"
+                className="inline-flex items-center justify-center px-6 py-3 bg-gradient-to-r from-primary-500 to-primary-600 text-white rounded-lg hover:from-primary-600 hover:to-primary-700 transition-all shadow-sm"
+              >
+                Go to Sign In
+              </Link>
+
+              <p className="mt-4 text-xs text-gray-500">
+                Didn't receive the email? Check your spam folder or contact support.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
@@ -94,7 +177,7 @@ export default function RegisterPage() {
           </div>
           <h2 className="text-3xl font-bold text-gray-900">Create your account</h2>
           <p className="mt-2 text-sm text-gray-600">
-            Start using Novera AI Knowledge Assistant
+            Start using Mentanova AI Knowledge Assistant
           </p>
         </div>
 

@@ -442,6 +442,65 @@ class ApiService {
     });
   }
 
+   async forgotPassword(email: string): Promise<any> {
+    try {
+      const response = await this.api.post('/auth/forgot-password', {
+        email,
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error('Forgot password error:', error.response?.data);
+      throw error;
+    }
+  }
+
+  async verifyResetToken(token: string): Promise<any> {
+    try {
+      const response = await this.api.post('/auth/verify-reset-token', {
+        token,
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error('Verify reset token error:', error.response?.data);
+      throw error;
+    }
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<any> {
+    try {
+      const response = await this.api.post('/auth/reset-password', {
+        token,
+        new_password: newPassword,
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error('Reset password error:', error.response?.data);
+      throw error;
+    }
+  }
+
+  async verifyEmail(token: string): Promise<any> {
+    try {
+      const response = await this.api.post('/auth/verify-email', {
+        token,
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error('Email verification error:', error.response?.data);
+      throw error;
+    }
+  }
+
+  async resendVerificationEmail(): Promise<any> {
+    try {
+      const response = await this.api.post('/auth/resend-verification');
+      return response.data;
+    } catch (error: any) {
+      console.error('Resend verification error:', error.response?.data);
+      throw error;
+    }
+  }
+
   async getUsers(params?: {
     skip?: number;
     limit?: number;

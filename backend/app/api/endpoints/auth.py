@@ -75,10 +75,34 @@ class UserResponse(BaseModel):
     preferences: dict
     metadata: dict
 
+class ForgotPasswordRequest(BaseModel):
+    """Forgot password request."""
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    """Reset password request."""
+    token: str
+    new_password: str = Field(..., min_length=8)
+
+
+class VerifyResetTokenRequest(BaseModel):
+    """Verify reset token request."""
+    token: str
+
+class ResendVerificationRequest(BaseModel):
+    """Resend verification email request."""
+    pass
+
+
+class VerifyEmailRequest(BaseModel):
+    """Verify email request."""
+    token: str
 
 @router.post("/auth/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     request: RegisterRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -90,12 +114,17 @@ async def register(
     - Password must contain uppercase, lowercase, digit, and special character
     
     Returns access and refresh tokens upon successful registration.
+    Sends verification email to user.
     """
+    # Get IP address
+    ip_address = http_request.client.host if http_request.client else None
+    
     success, user, error = await auth_service.register_user(
         email=request.email,
         username=request.username,
         password=request.password,
         full_name=request.full_name,
+        ip_address=ip_address,
         db=db
     )
     
@@ -109,7 +138,6 @@ async def register(
     tokens = await auth_service.create_tokens(user, db)
     
     return tokens
-
 
 @router.post("/auth/login", response_model=TokenResponse)
 async def login(
@@ -268,9 +296,160 @@ async def test_auth():
             "POST /auth/logout",
             "GET /auth/me",
             "PUT /auth/profile",
-            "POST /auth/change-password"
+            "POST /auth/change-password",
+            "POST /auth/forgot-password",
+            "POST /auth/verify-reset-token",
+            "POST /auth/reset-password",
+            "POST /auth/verify-email",
+            "POST /auth/resend-verification"
         ]
     }
 
+@router.post("/auth/forgot-password")
+async def forgot_password(
+    request: ForgotPasswordRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Request password reset.
+    
+    Sends an email with password reset link if email exists.
+    Always returns success to prevent email enumeration.
+    """
+    ip_address = http_request.client.host if http_request.client else None
+    
+    success, error = await auth_service.request_password_reset(
+        email=request.email,
+        ip_address=ip_address,
+        db=db
+    )
+    
+    if not success and error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error
+        )
+    
+    return {
+        "message": "If the email exists, a password reset link has been sent",
+        "email": request.email
+    }
+
+
+@router.post("/auth/verify-reset-token")
+async def verify_reset_token(
+    request: VerifyResetTokenRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verify if a password reset token is valid.
+    
+    Used to validate token before showing reset password form.
+    """
+    is_valid, user_id, error = await auth_service.verify_reset_token(
+        token=request.token,
+        db=db
+    )
+    
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error
+        )
+    
+    return {
+        "valid": True,
+        "message": "Token is valid"
+    }
+
+
+@router.post("/auth/reset-password")
+async def reset_password(
+    request: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Reset password using reset token.
+    
+    Validates token and sets new password.
+    """
+    success, error = await auth_service.reset_password(
+        token=request.token,
+        new_password=request.new_password,
+        db=db
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error
+        )
+    
+    return {"message": "Password reset successfully"}
+
+@router.post("/auth/verify-email")
+async def verify_email(
+    request: VerifyEmailRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Verify user's email address using verification token.
+    
+    Token is sent via email after registration.
+    """
+    success, error = await auth_service.verify_email(
+        token=request.token,
+        db=db
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error
+        )
+    
+    return {
+        "message": "Email verified successfully",
+        "verified": True
+    }
+
+
+@router.post("/auth/resend-verification")
+async def resend_verification(
+    http_request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Resend verification email to current user.
+    
+    Can only be used if email is not yet verified.
+    Rate limited to one request per 5 minutes.
+    """
+    if current_user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already verified"
+        )
+    
+    ip_address = http_request.client.host if http_request.client else None
+    
+    success, error = await auth_service.resend_verification_email(
+        user_id=current_user.id,
+        ip_address=ip_address,
+        db=db
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error
+        )
+    
+    return {
+        "message": "Verification email sent",
+        "email": current_user.email
+    }
 
 __all__ = ['router']
