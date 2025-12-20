@@ -1,10 +1,14 @@
 Novera AI Knowledge Assistant
 🎯 Overview
 
-Novera is a production-ready Retrieval-Augmented Generation (RAG) platform designed for Finance, HRMS, and internal enterprise documentation.
-It delivers accurate, traceable, citation-backed answers using a hybrid retrieval pipeline and a modern chat interface.
+Novera is a production-ready Retrieval-Augmented Generation (RAG) platform built for Finance, HRMS, and internal enterprise documentation.
+
+It delivers accurate, citation-backed, and context-aware answers using a hybrid retrieval pipeline combined with a modern chat interface.
 
 LLM Engine: Google Gemini Flash 2.5
+
+Architecture: Hybrid RAG (Vector + Keyword)
+
 Status: ✅ Production Ready (Backend + Frontend Complete)
 
 🏗️ Architecture
@@ -33,39 +37,41 @@ Response with Citations
 🚀 Key Features
 🔐 Authentication & Security
 
-Email-based registration & verification
+Email-based user registration & verification
 
 Secure password hashing
 
-Role-based access (Admin / User)
+JWT-based authentication
 
-Protected routes (frontend & backend)
+Role-based access control (Admin / User)
+
+Protected backend APIs and frontend routes
 
 Input & output guardrails
 
 📄 Document Management
 
-Upload & manage documents
+Upload and manage documents
 
 Semantic chunking with overlap
 
-Chunk-level editing & history
+Chunk-level editing and history
 
-Metadata & document version handling
+Metadata and document categorization
 
 Finance / HRMS / Policy segregation
 
 🔍 Retrieval System
 
-Vector similarity search (pgvector)
+Vector similarity search using pgvector
 
-Keyword search (PostgreSQL FTS)
+Keyword search using PostgreSQL Full-Text Search
 
-Hybrid fusion pipeline
+Hybrid retrieval fusion pipeline
 
 Optional Cohere reranking
 
-Source attribution for every answer
+Source attribution for every response
 
 💬 Chat System
 
@@ -75,19 +81,19 @@ Context-aware responses
 
 Streaming support
 
-Citation cards per response
+Citation cards per answer
 
 Conversation analytics
 
-Export conversations
+Export chat history
 
 🖥️ Admin Capabilities
 
 User management
 
-Role control
+Role assignment
 
-Analytics dashboard
+System analytics
 
 Document oversight
 
@@ -116,7 +122,7 @@ Framework: React 18
 
 Language: TypeScript
 
-State: Context API + Hooks
+State Management: Context API + Hooks
 
 Styling: Tailwind CSS
 
@@ -132,22 +138,30 @@ Nginx (frontend)
 
 Render / Railway compatible
 
-📂 Project Structure (Verified)
+📂 Project Structure
 NOVERA/
+│
 ├── backend/
+│   ├── alembic/
 │   ├── app/
 │   │   ├── api/
-│   │   │   ├── endpoints/ (auth, chat, search, documents, admin)
+│   │   │   ├── endpoints/
+│   │   │   │   ├── auth.py
+│   │   │   │   ├── chat.py
+│   │   │   │   ├── documents.py
+│   │   │   │   ├── search.py
+│   │   │   │   ├── admin.py
+│   │   │   │   └── health.py
 │   │   │   └── dependencies/
-│   │   ├── core/ (config, security)
+│   │   ├── core/
+│   │   ├── db/
+│   │   ├── models/
 │   │   ├── services/
 │   │   │   ├── auth/
 │   │   │   ├── document_processing/
 │   │   │   ├── retrieval/
 │   │   │   └── generation/
-│   │   ├── models/ (user, document)
 │   │   └── main.py
-│   ├── alembic/
 │   ├── scripts/
 │   ├── tests/
 │   ├── Dockerfile
@@ -158,9 +172,11 @@ NOVERA/
 │   │   ├── components/
 │   │   ├── pages/
 │   │   ├── contexts/
-│   │   └── services/
+│   │   ├── services/
+│   │   └── utils/
 │   ├── nginx.conf
-│   └── Dockerfile
+│   ├── Dockerfile
+│   └── package.json
 │
 ├── docker-compose.yml
 ├── .gitignore
@@ -171,7 +187,7 @@ NOVERA/
 Backend (backend/.env)
 # Core
 ENV=development
-SECRET_KEY=replace_with_secure_key
+SECRET_KEY=replace_with_secure_secret
 
 # Database
 DATABASE_URL=postgresql+asyncpg://user:password@postgres:5432/novera
@@ -184,40 +200,70 @@ GEMINI_MODEL=gemini-2.5-flash
 RETRIEVAL_TOP_K=20
 SIMILARITY_THRESHOLD=0.7
 
-# Optional
-COHERE_API_KEY=your_cohere_key
+# Optional Reranker
+COHERE_API_KEY=your_cohere_api_key
 
 
-⚠️ Never commit real keys — .env is git-ignored.
+⚠️ Never commit real secrets.
+.env files are intentionally excluded via .gitignore.
 
 🚀 Local Setup
-# Clone
+Prerequisites
+
+Docker & Docker Compose
+
+4GB+ RAM recommended
+
+Steps
+# Clone repository
 git clone https://github.com/Git-me-Harish/Novera-AI.git
 cd Novera-AI
 
-# Backend
+# Setup environment
 cp backend/.env.example backend/.env
+# Edit backend/.env with your keys
 
 # Start services
 docker-compose up -d
 
-# Apply migrations
+# Apply database migrations
 cd backend
 alembic upgrade head
 
-Access
+Access Points
 
-API: http://localhost:8000
+Backend API: http://localhost:8000
 
-Docs: http://localhost:8000/api/docs
+API Docs: http://localhost:8000/api/docs
 
 Frontend: http://localhost:5173
 
+🧪 Testing
+cd backend
+
+# Run tests
+pytest
+
+
+Manual checks:
+
+Upload documents
+
+Verify chunking & embeddings
+
+Test hybrid search
+
+Validate chat citations
+
+Verify email authentication flow
+
 🔐 Security Highlights
 
-Email verification required
+Email verification enforced
 
-JWT-based authentication
+JWT authentication
+
+Secure password hashing
 
 Input sanitization & jailbreak detection
 
@@ -225,26 +271,38 @@ Hallucination filtering
 
 Role-based admin access
 
-Secure password hashing
+📦 Deployment
+Development
+docker-compose up -d
+
+Production (Render / Railway)
+
+Connect GitHub repository
+
+Configure environment variables
+
+Deploy backend & frontend services
+
+Use /api/v1/health for health checks
 
 🗺️ Roadmap
 Completed ✅
 
 Backend RAG pipeline
 
-Gemini Flash integration
+Gemini Flash 2.5 integration
 
 Email authentication
 
-Admin panel
+Hybrid retrieval
+
+Admin dashboard
 
 Document editor
 
-Hybrid retrieval
-
 Frontend UI
 
-Next
+Upcoming 🚧
 
 Rate limiting
 
@@ -252,24 +310,28 @@ Audit logs
 
 Feedback loop for retrieval quality
 
-Multi-language documents
+Multi-language document support
 
-Advanced analytics
+Advanced analytics dashboard
+
+🤝 Contributing
+
+Fork the repository
+
+Create a feature branch
+
+git checkout -b feature/your-feature
+
+
+Commit changes
+
+Push and open a Pull Request
 
 📄 License
 
 MIT License
 
-✨ Final Verdict
+✨ Final Note
 
-This README now:
-
-✅ Matches your actual codebase
-
-✅ Removes OpenAI completely
-
-✅ Reflects Gemini Flash 2.5 correctly
-
-✅ Is safe for public GitHub
-
-✅ Looks enterprise-grade
+Novera is built with a strong focus on accuracy, transparency, and enterprise readiness.
+It is suitable for internal knowledge systems, compliance-driven domains, and scalable deployments.
