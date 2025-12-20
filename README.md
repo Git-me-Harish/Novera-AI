@@ -1,4 +1,4 @@
-# Mentanova AI Knowledge Assistant
+# Novera AI Knowledge Assistant
 
 ## 🎯 Overview
 
@@ -505,4 +505,4 @@ MIT License - See LICENSE file for details
 
 ---
 
-**Mentanova**
+**Novera**
