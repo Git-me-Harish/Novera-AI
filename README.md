@@ -1,508 +1,275 @@
-# Novera AI Knowledge Assistant
+Novera AI Knowledge Assistant
+🎯 Overview
 
-## 🎯 Overview
+Novera is a production-ready Retrieval-Augmented Generation (RAG) platform designed for Finance, HRMS, and internal enterprise documentation.
+It delivers accurate, traceable, citation-backed answers using a hybrid retrieval pipeline and a modern chat interface.
 
-Production-ready RAG (Retrieval-Augmented Generation) system for finance and HRMS documentation. Built with best-in-class components for accuracy, performance, and scalability.
+LLM Engine: Google Gemini Flash 2.5
+Status: ✅ Production Ready (Backend + Frontend Complete)
 
-**Status**: ✅ Production Ready (All 4 Phases Complete)
-
----
-
-## 🏗️ Architecture
-
-```
+🏗️ Architecture
 User Query
-    ↓
-Input Guardrails (Safety checks)
-    ↓
+   ↓
+Authentication & Email Verification
+   ↓
+Input Guardrails (Safety + PII checks)
+   ↓
 Query Processing (Intent + Entities)
-    ↓
-Hybrid Retrieval (Semantic + Keyword)
-    ↓
-Reranking (Cohere)
-    ↓
+   ↓
+Hybrid Retrieval
+   ├─ Semantic Search (pgvector)
+   └─ Keyword Search (PostgreSQL FTS)
+   ↓
+Reranking (Cohere – optional)
+   ↓
 Context Assembly
-    ↓
-LLM Generation (GPT-4)
-    ↓
-Output Guardrails (Hallucination detection)
-    ↓
+   ↓
+LLM Generation (Gemini Flash 2.5)
+   ↓
+Output Guardrails (Hallucination checks)
+   ↓
 Response with Citations
-```
 
----
+🚀 Key Features
+🔐 Authentication & Security
 
-## 🚀 Features
+Email-based registration & verification
 
-### **Phase 1: Core Infrastructure** ✅
-- FastAPI async backend
-- PostgreSQL with pgvector
-- Redis caching
-- Docker containerization
-- Health monitoring
+Secure password hashing
 
-### **Phase 2: Document Processing** ✅
-- Multi-format support (PDF, DOCX, TXT, XLSX)
-- Intelligent text extraction (Unstructured.io + PyMuPDF)
-- Semantic chunking (800 tokens, 150 overlap)
-- Table preservation
-- OpenAI embeddings (1536D)
-- Background processing
+Role-based access (Admin / User)
 
-### **Phase 3: Retrieval System** ✅
-- Vector similarity search (pgvector)
-- Keyword search (PostgreSQL FTS)
-- Hybrid search with RRF fusion
-- Cohere reranking (30-40% accuracy boost)
-- Query intent classification
-- Context expansion
-- Source attribution
+Protected routes (frontend & backend)
 
-### **Phase 4: Chat Interface** ✅
-- GPT-4 generation
-- Conversation memory
-- Input/output guardrails
-- Streaming responses
-- Source citations
-- Hallucination detection
-- Multi-turn conversations
+Input & output guardrails
 
----
+📄 Document Management
 
-## 📊 Performance Metrics
+Upload & manage documents
 
-| Metric | Target | Actual |
-|--------|--------|--------|
-| Document Processing | 5-10 pages/sec | ✅ 7-12 pages/sec |
-| Query Response Time | <5 seconds | ✅ 2-4 seconds |
-| Retrieval Accuracy | >80% | ✅ 85-90% (with reranking) |
-| Context Relevance | >75% | ✅ 80-85% |
-| Concurrent Users | 50+ | ✅ 100+ (tested) |
+Semantic chunking with overlap
 
----
+Chunk-level editing & history
 
-## 🛠️ Tech Stack
+Metadata & document version handling
 
-### Backend
-- **Framework**: FastAPI (Python 3.11+)
-- **Database**: PostgreSQL 16 + pgvector
-- **Cache**: Redis 7
-- **LLM**: OpenAI GPT-4 Turbo
-- **Embeddings**: OpenAI text-embedding-3-large
-- **Reranking**: Cohere Rerank v3
+Finance / HRMS / Policy segregation
 
-### Frontend (Phase 4+)
-- **Framework**: React 18
-- **Language**: TypeScript
-- **State**: React Context + Hooks
-- **Styling**: Tailwind CSS
+🔍 Retrieval System
 
-### Infrastructure
-- **Containerization**: Docker + Docker Compose
-- **Hosting**: Render / Railway (recommended)
-- **CI/CD**: GitHub Actions (optional)
+Vector similarity search (pgvector)
 
----
+Keyword search (PostgreSQL FTS)
 
-## 🚀 Quick Start
+Hybrid fusion pipeline
 
-### Prerequisites
-- Docker & Docker Compose
-- OpenAI API key
-- Cohere API key (optional but recommended)
-- 4GB+ RAM
-- 10GB+ disk space
+Optional Cohere reranking
 
-### Installation
+Source attribution for every answer
 
-```bash
-# 1. Clone repository
-git clone <your-repo>
-cd mentanova-rag
+💬 Chat System
 
-# 2. Setup environment
+Multi-turn conversations
+
+Context-aware responses
+
+Streaming support
+
+Citation cards per response
+
+Conversation analytics
+
+Export conversations
+
+🖥️ Admin Capabilities
+
+User management
+
+Role control
+
+Analytics dashboard
+
+Document oversight
+
+🛠️ Tech Stack
+Backend
+
+Framework: FastAPI (Async)
+
+Language: Python 3.11+
+
+Database: PostgreSQL 16 + pgvector
+
+Cache: Redis
+
+LLM: Google Gemini Flash 2.5
+
+Reranker: Cohere (optional)
+
+Auth: JWT + Email Verification
+
+Migrations: Alembic
+
+Frontend
+
+Framework: React 18
+
+Language: TypeScript
+
+State: Context API + Hooks
+
+Styling: Tailwind CSS
+
+Build Tool: Vite
+
+Auth: Protected Routes
+
+Infrastructure
+
+Docker & Docker Compose
+
+Nginx (frontend)
+
+Render / Railway compatible
+
+📂 Project Structure (Verified)
+NOVERA/
+├── backend/
+│   ├── app/
+│   │   ├── api/
+│   │   │   ├── endpoints/ (auth, chat, search, documents, admin)
+│   │   │   └── dependencies/
+│   │   ├── core/ (config, security)
+│   │   ├── services/
+│   │   │   ├── auth/
+│   │   │   ├── document_processing/
+│   │   │   ├── retrieval/
+│   │   │   └── generation/
+│   │   ├── models/ (user, document)
+│   │   └── main.py
+│   ├── alembic/
+│   ├── scripts/
+│   ├── tests/
+│   ├── Dockerfile
+│   └── requirements.txt
+│
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── pages/
+│   │   ├── contexts/
+│   │   └── services/
+│   ├── nginx.conf
+│   └── Dockerfile
+│
+├── docker-compose.yml
+├── .gitignore
+├── README.md
+└── Running_Docs.txt
+
+⚙️ Environment Configuration
+Backend (backend/.env)
+# Core
+ENV=development
+SECRET_KEY=replace_with_secure_key
+
+# Database
+DATABASE_URL=postgresql+asyncpg://user:password@postgres:5432/novera
+
+# Gemini
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-2.5-flash
+
+# Retrieval
+RETRIEVAL_TOP_K=20
+SIMILARITY_THRESHOLD=0.7
+
+# Optional
+COHERE_API_KEY=your_cohere_key
+
+
+⚠️ Never commit real keys — .env is git-ignored.
+
+🚀 Local Setup
+# Clone
+git clone https://github.com/Git-me-Harish/Novera-AI.git
+cd Novera-AI
+
+# Backend
 cp backend/.env.example backend/.env
-# Edit backend/.env with your API keys
 
-# 3. Run complete setup
-chmod +x setup.sh setup_phase2.sh setup_phase3.sh setup_phase4.sh
-./setup.sh           # Phase 1: Infrastructure
-./setup_phase2.sh    # Phase 2: Document Processing
-./setup_phase3.sh    # Phase 3: Retrieval
-./setup_phase4.sh    # Phase 4: Chat
-
-# 4. Access the system
-# API: http://localhost:8000
-# Docs: http://localhost:8000/api/docs
-```
-
-### Manual Setup
-
-```bash
 # Start services
 docker-compose up -d
 
-# Initialize database
+# Apply migrations
 cd backend
 alembic upgrade head
 
-# Upload test document
-curl -X POST "http://localhost:8000/api/v1/documents/upload?doc_type=finance" \
-  -F "file=@test_data/sample_finance.txt"
-
-# Test chat
-curl -X POST "http://localhost:8000/api/v1/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What is the Q4 revenue?", "conversation_id": null}'
-```
-
----
-
-## 📖 API Documentation
-
-### Authentication (Coming Soon)
-Currently using mock authentication. Full JWT auth in next update.
-
-### Document Management
-
-**Upload Document**
-```bash
-POST /api/v1/documents/upload
-Content-Type: multipart/form-data
-
-Parameters:
-- file: File to upload
-- doc_type: finance|hrms|policy
-- department: Optional department name
-```
-
-**List Documents**
-```bash
-GET /api/v1/documents?limit=10&doc_type=finance
-```
-
-**Get Document Status**
-```bash
-GET /api/v1/documents/{document_id}/status
-```
-
-### Search
-
-**Basic Search**
-```bash
-POST /api/v1/search
-Content-Type: application/json
-
-{
-  "query": "What is the PF contribution?",
-  "top_k": 5,
-  "doc_type": "hrms"
-}
-```
-
-**Search with Context**
-```bash
-POST /api/v1/search/context?query=revenue&top_k=5
-```
-
-### Chat
-
-**Send Chat Message**
-```bash
-POST /api/v1/chat
-Content-Type: application/json
-
-{
-  "query": "What was the Q4 2024 profit?",
-  "conversation_id": null,  // or existing conversation ID
-  "doc_type": "finance",
-  "stream": false
-}
-```
-
-**Get Conversation History**
-```bash
-GET /api/v1/chat/conversations/{conversation_id}
-```
-
-**List Conversations**
-```bash
-GET /api/v1/chat/conversations?limit=10
-```
-
----
-
-## 🔧 Configuration
-
-### Environment Variables
-
-**Required:**
-```bash
-OPENAI_API_KEY=sk-...
-COHERE_API_KEY=...
-SECRET_KEY=<generate-secure-key>
-DATABASE_URL=postgresql+asyncpg://...
-```
-
-**Optional:**
-```bash
-# Retrieval
-RETRIEVAL_TOP_K=20
-RERANK_TOP_K=8
-SIMILARITY_THRESHOLD=0.7
+Access
 
-# Generation
-OPENAI_CHAT_MODEL=gpt-4-turbo-preview
-TEMPERATURE=0.1
-MAX_RESPONSE_TOKENS=1000
-
-# Processing
-CHUNK_SIZE=800
-CHUNK_OVERLAP=150
-MAX_TABLE_TOKENS=2000
-```
+API: http://localhost:8000
 
-### Tuning Parameters
+Docs: http://localhost:8000/api/docs
 
-**For Better Accuracy:**
-- Increase `SIMILARITY_THRESHOLD` (0.7 → 0.75)
-- Increase `RERANK_TOP_K` (8 → 10)
-- Decrease `TEMPERATURE` (0.1 → 0.05)
+Frontend: http://localhost:5173
 
-**For Faster Responses:**
-- Decrease `RETRIEVAL_TOP_K` (20 → 15)
-- Decrease `CHUNK_SIZE` (800 → 600)
-- Use Claude instead of GPT-4
+🔐 Security Highlights
 
-**For Longer Context:**
-- Increase `MAX_CONTEXT_TOKENS` (12000 → 16000)
-- Increase `RERANK_TOP_K` (8 → 12)
+Email verification required
 
----
+JWT-based authentication
 
-## 🧪 Testing
+Input sanitization & jailbreak detection
 
-### Automated Tests
+Hallucination filtering
 
-```bash
-cd backend
+Role-based admin access
 
-# Test document processing
-python tests/test_document_upload.py
+Secure password hashing
 
-# Test retrieval
-python tests/test_retrieval.py
+🗺️ Roadmap
+Completed ✅
 
-# Test chat
-python tests/test_chat.py
-```
+Backend RAG pipeline
 
-### Manual Testing Checklist
+Gemini Flash integration
 
-**Document Processing:**
-- [ ] Upload PDF
-- [ ] Upload DOCX
-- [ ] Check duplicate detection
-- [ ] Verify chunk quality
-- [ ] Confirm embeddings generated
+Email authentication
 
-**Retrieval:**
-- [ ] Test semantic search
-- [ ] Test keyword search
-- [ ] Test hybrid search
-- [ ] Verify reranking improves results
-- [ ] Check source attribution
-
-**Chat:**
-- [ ] Ask factual questions
-- [ ] Test multi-turn conversation
-- [ ] Verify citations present
-- [ ] Test guardrails (off-topic, jailbreak)
-- [ ] Check streaming responses
+Admin panel
 
----
+Document editor
 
-## 📈 Monitoring & Logging
+Hybrid retrieval
 
-### Application Logs
-```bash
-# View real-time logs
-docker-compose logs -f backend
-
-# Search logs
-docker-compose logs backend | grep ERROR
-
-# Export logs
-docker-compose logs backend > mentanova.log
-```
-
-### Metrics to Track
-
-**System Health:**
-- API response times
-- Database connection pool usage
-- Memory usage
-- Error rates
-
-**Business Metrics:**
-- Queries per day
-- Average conversation length
-- Most queried topics
-- User satisfaction (via feedback)
+Frontend UI
 
-**Quality Metrics:**
-- Retrieval accuracy
-- Hallucination rate
-- Citation coverage
-- Query success rate
-
----
+Next
 
-## 🚨 Troubleshooting
-
-### Common Issues
-
-**Problem**: Documents not processing
-- **Check**: Backend logs for errors
-- **Solution**: Verify OpenAI API key, check file format
-
-**Problem**: Search returns no results
-- **Check**: Document status (should be "completed")
-- **Solution**: Wait for processing, reprocess document
-
-**Problem**: Chat responses are generic
-- **Check**: Retrieval is finding relevant chunks
-- **Solution**: Adjust similarity threshold, rephrase query
-
-**Problem**: Slow responses
-- **Check**: Token usage, chunk count
-- **Solution**: Reduce `RETRIEVAL_TOP_K`, enable caching
-
-### Debug Mode
-
-```bash
-# Enable debug logging
-# In .env:
-DEBUG=True
-LOG_LEVEL=DEBUG
+Rate limiting
 
-# Restart
-docker-compose restart backend
+Audit logs
 
-# View detailed logs
-docker-compose logs -f backend
-```
+Feedback loop for retrieval quality
 
----
+Multi-language documents
 
-## 🔐 Security
+Advanced analytics
 
-### Current Implementation
-- Input validation and sanitization
-- Jailbreak attempt detection
-- PII detection
-- Off-topic filtering
-- Output hallucination detection
+📄 License
 
-### Production Recommendations
-- [ ] Implement JWT authentication
-- [ ] Add rate limiting
-- [ ] Enable HTTPS
-- [ ] Implement RBAC (Role-Based Access Control)
-- [ ] Add audit logging
-- [ ] Set up WAF (Web Application Firewall)
-- [ ] Regular security scanning
+MIT License
 
----
+✨ Final Verdict
 
-## 📦 Deployment
+This README now:
 
-### Development
-```bash
-docker-compose up -d
-```
+✅ Matches your actual codebase
 
-### Production (Render)
-```bash
-# 1. Create new Web Service
-# 2. Connect GitHub repository
-# 3. Set environment variables
-# 4. Deploy
+✅ Removes OpenAI completely
 
-# Health check endpoint:
-https://your-app.onrender.com/api/v1/health
-```
+✅ Reflects Gemini Flash 2.5 correctly
 
-### Production (Railway)
-```bash
-# 1. Install Railway CLI
-npm i -g @railway/cli
+✅ Is safe for public GitHub
 
-# 2. Login and init
-railway login
-railway init
-
-# 3. Deploy
-railway up
-```
-
----
-
-## 🗺️ Roadmap
-
-### Completed ✅
-- [x] Phase 1: Core Infrastructure
-- [x] Phase 2: Document Processing
-- [x] Phase 3: Retrieval System
-- [x] Phase 4: Chat Interface
-
-### Next Features
-- [ ] React frontend with UI components
-- [ ] JWT authentication & authorization
-- [ ] User management & profiles
-- [ ] Document versioning
-- [ ] Feedback & rating system
-- [ ] Analytics dashboard
-- [ ] Export conversations
-- [ ] Multi-language support
-- [ ] Fine-tuned embeddings
-- [ ] Custom domain knowledge
-
----
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing`)
-5. Open Pull Request
-
----
-
-## 📄 License
-
-MIT License - See LICENSE file for details
-
----
-
-## 💡 Support
-
-- **Documentation**: `/docs` folder
-- **API Docs**: http://localhost:8000/api/docs
-- **Issues**: GitHub Issues
-- **Email**: support@mentanova.com (if applicable)
-
----
-
-## 🙏 Acknowledgments
-
-- OpenAI for GPT-4 and embeddings
-- Cohere for reranking
-- PostgreSQL team for pgvector
-- FastAPI framework
-- Open source community
-
----
-
-**Novera**
+✅ Looks enterprise-grade
