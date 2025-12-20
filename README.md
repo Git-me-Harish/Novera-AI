@@ -12,6 +12,7 @@ Architecture: Hybrid RAG (Vector + Keyword)
 Status: ✅ Production Ready (Backend + Frontend Complete)
 
 🏗️ Architecture
+
 User Query
    ↓
 Authentication & Email Verification
@@ -33,6 +34,7 @@ LLM Generation (Gemini Flash 2.5)
 Output Guardrails (Hallucination checks)
    ↓
 Response with Citations
+
 
 🚀 Key Features
 🔐 Authentication & Security
@@ -182,6 +184,7 @@ NOVERA/
 ├── .gitignore
 ├── README.md
 └── Running_Docs.txt
+
 
 ⚙️ Environment Configuration
 Backend (backend/.env)
