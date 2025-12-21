@@ -22,55 +22,46 @@ class ChatService:
     No templated responses - everything is AI-generated.
     """
     
-    def _should_search_documents(self, query: str) -> bool:
+    async def _should_search_documents(
+        self, 
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> bool:
         """
-        Intelligently detect if query requires document search.
+        Use pure LLM understanding to determine if document search is needed.
+        No hardcoded rules - only semantic understanding.
         
-        Returns True if:
-        - Query asks about specific information (what, how, when, explain)
-        - Query mentions domain keywords (policy, salary, expense, etc.)
-        - Query is asking for details or data
-        
-        Returns False if:
-        - Simple greetings
-        - General conversation
-        - Acknowledgments
+        Args:
+            query: User's query
+            conversation_history: Recent conversation for context
+            
+        Returns:
+            True if document search needed, False for conversational response
         """
-        query_lower = query.lower().strip()
-        words = query_lower.split()
+        from app.services.generation.query_classifier import query_classifier
         
-        # Very short queries (1-3 words) are likely conversational
-        if len(words) <= 3:
-            conversational_words = [
-                'hi', 'hello', 'hey', 'thanks', 'thank', 'ok', 'okay',
-                'yes', 'no', 'sure', 'great', 'good', 'nice', 'bye'
-            ]
-            if any(word in query_lower for word in conversational_words):
-                return False
+        # Use LLM to classify with full understanding
+        classification = await query_classifier.classify_query(query, conversation_history)
         
-        # Check for information-seeking keywords
-        info_seeking = [
-            'what', 'how', 'when', 'where', 'why', 'who', 'which',
-            'explain', 'describe', 'tell me', 'show me', 'find',
-            'about', 'regarding', 'concerning', 'details', 'information'
-        ]
+        classification_type = classification['type']
+        reasoning = classification['reasoning']
+        confidence = classification['confidence']
         
-        if any(keyword in query_lower for keyword in info_seeking):
-            return True
+        should_search = (classification_type == 'document')
         
-        # Check for domain keywords (finance/HR)
-        domain_keywords = [
-            'document', 'policy', 'salary', 'leave', 'expense', 'revenue',
-            'employee', 'benefit', 'payment', 'report', 'finance', 'hr',
-            'budget', 'cost', 'profit', 'loss', 'quarter', 'annual',
-            'reimbursement', 'allowance', 'deduction', 'compliance'
-        ]
+        # Log the decision with reasoning
+        if should_search:
+            logger.info(f"📄 DOCUMENT SEARCH NEEDED")
+            logger.info(f"   Query: '{query}'")
+            logger.info(f"   Reason: {reasoning}")
+            logger.info(f"   Confidence: {confidence}")
+        else:
+            logger.info(f"🗣️ CONVERSATIONAL RESPONSE")
+            logger.info(f"   Query: '{query}'")
+            logger.info(f"   Reason: {reasoning}")
+            logger.info(f"   Confidence: {confidence}")
         
-        if any(keyword in query_lower for keyword in domain_keywords):
-            return True
-        
-        # Default: search if query is substantial (5+ words)
-        return len(words) >= 5
+        return should_search
     
     async def chat(
         self,
@@ -131,9 +122,9 @@ class ChatService:
         
         logger.info(f"🔄 Query reformulation: '{query}' -> '{reformulated_query}'")
         
-        # Step 6: Determine if we need to search documents
-        should_search = self._should_search_documents(reformulated_query)
-        logger.info(f"Document search: {'YES' if should_search else 'NO'}")
+        # Step 6: Use intelligent LLM classification to determine search need
+        history = conversation_manager.get_history(conversation_id, limit=2) if conversation_id else []
+        should_search = await self._should_search_documents(reformulated_query, history)
         
         context = ""
         sources = []
@@ -141,23 +132,29 @@ class ChatService:
         retrieval_metadata = {}
         
         if should_search:
-            # Step 7: Retrieve with optimized chunk count
+            # Step 7: Intelligent document retrieval with dynamic scoping
             try:
-                logger.info("🔍Searching documents with context...")
+                logger.info("🔍 Searching documents with dynamic scoping...")
                 
-                document_filter = conv_context.get_document_filter()
+                from app.core.config import settings
                 
-                if document_filter:
-                    logger.info(f"📄Scoping search to documents: {document_filter}")
+                # Determine initial search mode
+                use_scoped_initially = conv_context.should_use_document_scope() if conv_context else False
+                
+                if use_scoped_initially:
+                    logger.info("📄 Starting with scoped search (will expand if needed)")
+                else:
+                    logger.info("🌐 Starting with global search")
                 
                 retrieval_result = await retrieval_pipeline.retrieve(
                     query=reformulated_query,
                     db=db,
-                    top_k=3,
+                    top_k=settings.global_search_top_k, 
                     doc_type=doc_type,
                     department=department,
                     include_context=True,
-                    conversation_context=conv_context
+                    conversation_context=conv_context,
+                    force_global=False 
                 )
                 
                 context = retrieval_result['context_text']
@@ -165,25 +162,18 @@ class ChatService:
                 chunks_used = len(retrieval_result['chunks'])
                 retrieval_metadata = retrieval_result.get('retrieval_metadata', {})
                 
-                conv_context.update_from_retrieval(sources)
+                # Update context with retrieval results
+                if conv_context:
+                    conv_context.update_from_retrieval(sources)
                 
-                logger.info(f"Retrieved {chunks_used} chunks")
+                # Log search outcome
+                search_type = retrieval_metadata.get('search_type', 'unknown')
+                expanded = retrieval_metadata.get('expanded_to_global', False)
                 
-                if chunks_used == 0 and document_filter:
-                    logger.info("🌐 No results in scoped search, trying global with top_k=3...")
-                    retrieval_result = await retrieval_pipeline.retrieve(
-                        query=reformulated_query,
-                        db=db,
-                        top_k=3,
-                        doc_type=doc_type,
-                        department=department,
-                        include_context=True,
-                        conversation_context=None
-                    )
-                    
-                    context = retrieval_result['context_text']
-                    sources = retrieval_result['sources']
-                    chunks_used = len(retrieval_result['chunks'])
+                if expanded:
+                    logger.info(f"✅ Retrieved {chunks_used} chunks (expanded from scoped to global search)")
+                else:
+                    logger.info(f"✅ Retrieved {chunks_used} chunks ({search_type} search)")
 
             except Exception as e:
                 logger.error(f"Retrieval failed: {str(e)}", exc_info=True)
@@ -300,8 +290,8 @@ class ChatService:
             logger.error(f"Suggestion generation failed: {str(e)}", exc_info=True)
             suggestions = []
         
-        # ✅ CRITICAL: Return statement MUST be here, OUTSIDE all try-except blocks
-        # ✅ Suggestions MUST be at top level, NOT in metadata
+        # ✅ Return statement MUST be here, OUTSIDE all try-except blocks
+        # ✅ MUST be at top level, NOT in metadata
         response_data = {
             'answer': answer,
             'conversation_id': conversation_id,

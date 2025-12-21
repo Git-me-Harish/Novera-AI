@@ -117,7 +117,7 @@ export default function VerifyEmailPage() {
               <h2 className="text-2xl font-bold text-gray-900 mb-2">Email Verified!</h2>
 
               <p className="text-gray-600 mb-6">
-                Your email has been successfully verified. You can now access all features of Mentanova AI.
+                Your email has been successfully verified. You can now access all features of Novera AI.
               </p>
 
               <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">

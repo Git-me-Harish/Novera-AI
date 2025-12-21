@@ -110,19 +110,34 @@ class ConversationContext:
         """
         Determine if we should scope retrieval to active documents.
         
+        NEW LOGIC: Only scope if we have STRONG contextual evidence
+        
         Returns:
             True if document scope should be applied
         """
-        # Use document scope if:
-        # 1. We have a primary document
-        # 2. Last message was about documents
-        # 3. We're within 5 messages of last document reference
-        
         if not self.primary_document:
             return False
         
         if not self.document_references:
             return False
+        
+        last_ref = self.document_references[-1]
+        messages_since = self.message_count - last_ref['message_index']
+        
+        # CRITICAL FIX: More lenient scoping
+        # Only scope if:
+        # 1. Very recent (within 3 messages) OR
+        # 2. Multiple references to same document (within 8 messages)
+        if messages_since <= 3:
+            return True
+        
+        if messages_since <= 8:
+            # Check if multiple recent references to same document
+            recent_refs = [ref for ref in self.document_references[-5:] 
+                        if ref['document'] == self.primary_document]
+            return len(recent_refs) >= 2
+        
+        return False
         
         # Check recency
         last_ref = self.document_references[-1]
@@ -132,20 +147,63 @@ class ConversationContext:
     
     def get_document_filter(self) -> Optional[List[str]]:
         """
-        Get list of documents to filter retrieval by.
+        Get list of documents to BOOST (not restrict) in retrieval.
+        
+        CHANGED: Now returns documents for boosting, not hard filtering
         
         Returns:
-            List of document names to prioritize, or None for global search
+            List of document names to prioritize, or None for no boosting
         """
         if not self.should_use_document_scope():
             return None
         
-        # Return primary document + recently referenced docs
-        recent_docs = set()
-        for ref in self.document_references[-5:]:
-            recent_docs.add(ref['document'])
+        # Return primary + recently referenced docs for BOOSTING
+        # NOT for hard filtering
+        boost_docs = set()
         
-        return list(recent_docs)
+        if self.primary_document:
+            boost_docs.add(self.primary_document)
+        
+        # Add docs referenced in last 3 messages
+        for ref in self.document_references[-3:]:
+            boost_docs.add(ref['document'])
+        
+        result = list(boost_docs) if boost_docs else None
+        
+        if result:
+            logger.info(f"Documents to BOOST (not filter): {result}")
+        
+        return result
+    
+    def should_expand_search(self, initial_results: List[Dict[str, Any]]) -> bool:
+        """
+        Determine if we should expand search beyond scoped documents.
+        
+        Args:
+            initial_results: Results from scoped search
+            
+        Returns:
+            True if we should do a global search
+        """
+        if not initial_results:
+            logger.info("No scoped results - should expand search")
+            return True
+        
+        # Check if results are actually relevant
+        avg_score = sum(
+            r.get('rerank_score', r.get('fused_score', r.get('similarity_score', 0)))
+            for r in initial_results
+        ) / len(initial_results)
+        
+        # If average relevance is low, expand search
+        from app.core.config import settings
+        threshold = settings.min_relevance_for_scoped_search
+        
+        if avg_score < threshold:
+            logger.info(f"Low scoped relevance ({avg_score:.3f} < {threshold}) - expanding search")
+            return True
+        
+        return False
     
     def detect_context_switch(self, query: str, processed_query: Dict[str, Any]) -> bool:
         """

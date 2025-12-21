@@ -117,7 +117,7 @@ export default function RegisterPage() {
               <h2 className="text-2xl font-bold text-gray-900 mb-2">Registration Successful!</h2>
 
               <p className="text-gray-600 mb-4">
-                Welcome to Mentanova AI, <strong>{formData.username}</strong>!
+                Welcome to Novera AI, <strong>{formData.username}</strong>!
               </p>
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 text-left">
@@ -177,7 +177,7 @@ export default function RegisterPage() {
           </div>
           <h2 className="text-3xl font-bold text-gray-900">Create your account</h2>
           <p className="mt-2 text-sm text-gray-600">
-            Start using Mentanova AI Knowledge Assistant
+            Start using Novera AI Knowledge Assistant
           </p>
         </div>
 

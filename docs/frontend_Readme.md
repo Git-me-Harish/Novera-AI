@@ -1,8 +1,8 @@
-# Mentanova Frontend - React Application
+# Novera Frontend - React Application
 
 ## Overview
 
-Modern React frontend for the Mentanova RAG system. Built with React 18, TypeScript, and Tailwind CSS.
+Modern React frontend for the Novera RAG system. Built with React 18, TypeScript, and Tailwind CSS.
 
 ## Features
 

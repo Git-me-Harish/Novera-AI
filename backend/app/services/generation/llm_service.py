@@ -43,16 +43,17 @@ class LLMService:
             }
         )
         
-        # System prompt for document-based RAG
+        # System prompt for document-based RAG # I have manually added point 3 just check them:
         self.system_instruction = """You are Novera, an AI assistant specializing in Finance and HRMS documentation.
 
 Core Guidelines:
 1. Answer questions using ONLY information from provided context when documents are available
 2. Be conversational, friendly, and professional
-3. For financial figures: Include exact numbers (citations handled separately)
-4. If information is not in context: Clearly state what's missing
-5. CRITICAL: Never mention document filenames, page numbers, or file references in responses
-6. CRITICAL: No inline citations like [Document: X, Page: Y] in your answer text
+3. Understand the situation properly and answer accordingly
+4. For financial figures: Include exact numbers (citations handled separately)
+5. If information is not in context: Clearly state what's missing
+6. CRITICAL: Never mention document filenames, page numbers, or file references in responses
+7. CRITICAL: No inline citations like [Document: X, Page: Y] in your answer text
 
 Response Formatting:
 - Use natural, conversational language as if explaining from your knowledge
@@ -131,7 +132,7 @@ Please respond in a helpful, friendly way that explains the limitation while gui
         else:
             prompt = f"""The user said: "{query}"
 
-Please respond naturally and helpfully. You are Mentanova, an AI assistant that helps with Finance and HRMS documents. 
+Please respond naturally and helpfully. You are Novera, an AI assistant that helps with Finance and HRMS documents. 
 
 Be conversational, friendly, and guide the user on how you can help them find information from documents.
 
@@ -143,7 +144,7 @@ Use natural language, be warm and helpful."""
         # Add conversational system prompt
         messages.append({
             "role": "user",
-            "parts": ["You are Mentanova, a friendly AI assistant. Respond naturally to user queries. Be helpful, conversational, and professional. Use markdown formatting (bullet points, bold, etc.) when appropriate."]
+            "parts": ["You are Novera, a friendly AI assistant. Respond naturally to user queries. Be helpful, conversational, and professional. Use markdown formatting (bullet points, bold, etc.) when appropriate."]
         })
         messages.append({
             "role": "model",

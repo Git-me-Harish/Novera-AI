@@ -35,10 +35,11 @@ class RetrievalPipeline:
         doc_type: Optional[str] = None,
         department: Optional[str] = None,
         include_context: bool = True,
-        conversation_context: Optional['ConversationContext'] = None  # NEW
+        conversation_context: Optional['ConversationContext'] = None,
+        force_global: bool = False
     ) -> Dict[str, Any]:
         """
-        Complete retrieval pipeline with conversation context awareness.
+        Complete retrieval pipeline with conversation context awareness and dynamic scoping.
         
         Args:
             query: User's search query
@@ -48,6 +49,7 @@ class RetrievalPipeline:
             department: Filter by department
             include_context: Whether to expand with neighboring chunks
             conversation_context: Conversation context for document scoping
+            force_global: Force global search (skip scoping)
             
         Returns:
             Dictionary with retrieved chunks and metadata
@@ -61,27 +63,30 @@ class RetrievalPipeline:
         logger.info(f"  Intent: {processed_query['intent']}")
         logger.info(f"  Complexity: {processed_query['complexity']}")
         
-        # Step 2: Apply conversation context filtering
-        document_filter = None
+        # Step 2: Apply conversation context - BOOST not FILTER
         boost_documents = []
-        
-        if conversation_context:
+        use_scoped_search = False
+        document_filter_for_boosting = None
+
+        if conversation_context and not force_global:
             logger.info("Step 2: Applying conversation context...")
             
-            # Get document filter if we should scope
-            if conversation_context.should_use_document_scope():
-                document_filter = conversation_context.get_document_filter()
-                logger.info(f"  📄 Document scope: {document_filter}")
+            # Get documents to BOOST (not hard filter)
+            document_filter_for_boosting = conversation_context.get_document_filter()
             
-            # Get documents to boost in ranking
-            if conversation_context.primary_document:
-                boost_documents = [conversation_context.primary_document]
-                logger.info(f"  ⬆️ Boosting: {boost_documents}")
-        
+            if document_filter_for_boosting:
+                boost_documents = document_filter_for_boosting
+                use_scoped_search = True
+                logger.info(f"  ⬆️ Will boost results from: {boost_documents}")
+            else:
+                logger.info("  🌐 No document boosting - global search")
+        else:
+            logger.info("Step 2: Global search (no context or forced)")
+
         # Step 3: Determine search strategy
         use_semantic = True
         use_keyword = True
-        
+
         if query_processor.should_use_semantic_only(processed_query):
             logger.info("  Strategy: Semantic only")
             use_keyword = False
@@ -90,50 +95,106 @@ class RetrievalPipeline:
             use_semantic = False
         else:
             logger.info("  Strategy: Hybrid (semantic + keyword)")
-        
-        # Step 4: Hybrid search with context
-        logger.info("Step 3: Performing hybrid search...")
-        
+
+        # Step 4: Execute search with dynamic scoping
+        initial_top_k = settings.scoped_search_top_k if use_scoped_search else settings.global_search_top_k
+
+        logger.info(f"Step 3: Performing {'scoped' if use_scoped_search else 'global'} hybrid search (k={initial_top_k})...")
+
         if include_context:
             search_results = await hybrid_search_service.search_with_context_expansion(
                 query=query,
                 db=db,
-                top_k=top_k or settings.retrieval_top_k,
+                top_k=initial_top_k,
                 expand_neighbors=True,
-                document_filter=document_filter, 
-                boost_documents=boost_documents
+                document_filter=None,  # CRITICAL: No hard filtering
+                boost_documents=boost_documents  # Only boosting
             )
         else:
             search_results = await hybrid_search_service.search(
                 query=query,
                 db=db,
-                top_k=top_k or settings.retrieval_top_k,
+                top_k=initial_top_k,
                 use_semantic=use_semantic,
                 use_keyword=use_keyword,
                 doc_type=doc_type,
                 department=department,
-                document_filter=document_filter,
-                boost_documents=boost_documents   
+                document_filter=None,  # CRITICAL: No hard filtering
+                boost_documents=boost_documents  # Only boosting
             )
+
+        logger.info(f"  Initial search: {len(search_results)} chunks")
+
+        # Step 5: DYNAMIC EXPANSION - Check if we need global search
+        should_expand = False
+
+        if use_scoped_search and conversation_context and settings.enable_dynamic_scope:
+            should_expand = conversation_context.should_expand_search(search_results)
+            
+            if should_expand:
+                logger.info("🔄 Scoped search insufficient - performing GLOBAL search...")
+                
+                global_results = await hybrid_search_service.search(
+                    query=query,
+                    db=db,
+                    top_k=settings.global_search_top_k,
+                    use_semantic=use_semantic,
+                    use_keyword=use_keyword,
+                    doc_type=doc_type,
+                    department=department,
+                    document_filter=None,
+                    boost_documents=[]  # No boosting in global search
+                )
+                
+                logger.info(f"  Global search: {len(global_results)} chunks")
+                
+                # Merge results: prioritize scoped but include global
+                seen_ids = set()
+                merged_results = []
+                
+                # Add scoped results first (boosted)
+                for chunk in search_results:
+                    chunk_id = chunk.get('chunk_id')
+                    if chunk_id and chunk_id not in seen_ids:
+                        chunk['source_type'] = 'scoped'
+                        merged_results.append(chunk)
+                        seen_ids.add(chunk_id)
+                
+                # Add global results
+                for chunk in global_results:
+                    chunk_id = chunk.get('chunk_id')
+                    if chunk_id and chunk_id not in seen_ids:
+                        chunk['source_type'] = 'global'
+                        merged_results.append(chunk)
+                        seen_ids.add(chunk_id)
+                
+                search_results = merged_results
+                logger.info(f"  Merged results: {len(search_results)} total chunks")
+
+        # Step 6: Rerank results (CRITICAL - DO NOT SKIP)
+        reranked_results = []
         
-        logger.info(f"  Retrieved {len(search_results)} chunks")
-        
-        # Step 5: Rerank results
         if self.rerank_enabled and len(search_results) > 1:
             logger.info("Step 4: Reranking results...")
-            reranked_results = await reranking_service.rerank(
-                query=query,
-                chunks=search_results,
-                top_n=top_k or settings.rerank_top_k
-            )
-            
-            stats = reranking_service.calculate_score_statistics(reranked_results)
-            logger.info(f"  Rerank scores: min={stats['min_score']:.3f}, max={stats['max_score']:.3f}, avg={stats['avg_score']:.3f}")
+            try:
+                reranked_results = await reranking_service.rerank(
+                    query=query,
+                    chunks=search_results,
+                    top_n=top_k or settings.rerank_top_k
+                )
+                
+                stats = reranking_service.calculate_score_statistics(reranked_results)
+                logger.info(f"  Rerank scores: min={stats['min_score']:.3f}, max={stats['max_score']:.3f}, avg={stats['avg_score']:.3f}")
+            except Exception as e:
+                logger.error(f"Reranking failed: {str(e)}, using original order")
+                reranked_results = search_results[:top_k or settings.rerank_top_k]
         else:
-            logger.info("Step 4: Skipping reranking")
+            logger.info("Step 4: Skipping reranking (disabled or insufficient results)")
             reranked_results = search_results[:top_k or settings.rerank_top_k]
+
+        logger.info(f"  After reranking: {len(reranked_results)} chunks")
         
-        # Step 6: Assemble final context
+        # Step 7: Assemble final context
         logger.info("Step 5: Assembling context...")
         final_context = self._assemble_context(
             chunks=reranked_results,
@@ -156,9 +217,10 @@ class RetrievalPipeline:
                 'final_chunks': len(final_context['chunks']),
                 'intent': processed_query['intent'],
                 'complexity': processed_query['complexity'],
-                'document_scoped': document_filter is not None,
-                'scoped_to': document_filter if document_filter else None,
-                'boosted_documents': boost_documents
+                'used_scoped_search': use_scoped_search,
+                'expanded_to_global': should_expand,
+                'boosted_documents': boost_documents,
+                'search_type': 'global' if should_expand else ('scoped' if use_scoped_search else 'global')
             }
         }
     
@@ -327,7 +389,7 @@ class RetrievalPipeline:
         Returns:
             Formatted chunk text with source information
         """
-        # ✅ FIXED: Use safe metadata extraction
+        # ✅ Use safe metadata extraction
         chunk_metadata = self._safe_get_metadata(chunk)
         
         # Build header

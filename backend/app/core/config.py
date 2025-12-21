@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     rerank_top_k: int = 8
     similarity_threshold: float = Field(default=0.3, env="SIMILARITY_THRESHOLD")
     hybrid_alpha: float = 0.7
+
+    # Dynamic retrieval settings
+    enable_dynamic_scope: bool = Field(default=True, env="ENABLE_DYNAMIC_SCOPE")
+    min_relevance_for_scoped_search: float = Field(default=0.5, env="MIN_RELEVANCE_SCOPED")
+    global_search_top_k: int = Field(default=7, env="GLOBAL_SEARCH_TOP_K")
+    scoped_search_top_k: int = Field(default=5, env="SCOPED_SEARCH_TOP_K")
     
     # Generation Configuration
     max_context_tokens: int = 12000
@@ -120,6 +126,10 @@ class Settings(BaseSettings):
     enable_output_guardrails: bool = True
     hallucination_threshold: float = 0.3
     
+    # Query Classification
+    enable_llm_classification: bool = Field(default=True, env="ENABLE_LLM_CLASSIFICATION")
+    classification_cache_ttl: int = Field(default=3600, env="CLASSIFICATION_CACHE_TTL")
+
     # Context Management Configuration
     context_timeout_hours: int = Field(default=1, env="CONTEXT_TIMEOUT_HOURS")
     context_max_documents: int = Field(default=5, env="CONTEXT_MAX_DOCUMENTS")

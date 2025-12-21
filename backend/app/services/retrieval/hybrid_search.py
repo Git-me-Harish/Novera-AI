@@ -126,19 +126,21 @@ class HybridSearchService:
     def _reciprocal_rank_fusion(
         self,
         results: Dict[str, Dict[str, Any]],
-        boost_documents: Optional[List[str]] = None  # NEW
+        boost_documents: Optional[List[str]] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
-        Apply Reciprocal Rank Fusion with optional document boosting.
+        Apply Reciprocal Rank Fusion with SOFT document boosting.
+        
+        CHANGED: Boost instead of hard filter
         
         Args:
             results: Dictionary of chunk results
-            boost_documents: List of document names to boost
+            boost_documents: List of document names to boost (not filter)
             
         Returns:
             Results with fused scores
         """
-        boost_factor = 1.5  # Boost multiplier for prioritized documents
+        boost_factor = 1.3  # REDUCED from 1.5 for subtler boosting
         
         for chunk_id, chunk in results.items():
             rrf_score = 0.0
@@ -153,13 +155,20 @@ class HybridSearchService:
                 keyword_contribution = 1.0 / (self.rrf_k + chunk['keyword_rank'])
                 rrf_score += keyword_contribution * (1 - self.alpha)
             
-            # Apply boost if document is in boost list
             if boost_documents:
-                doc_name = chunk.get('document_name') or chunk.get('metadata', {}).get('document_title')
-                if doc_name and any(boost_doc in doc_name for boost_doc in boost_documents):
+                doc_name = chunk.get('document_name') or chunk.get('metadata', {}).get('document_title', '')
+                
+                is_boosted = any(
+                    boost_doc.lower() in doc_name.lower() or doc_name.lower() in boost_doc.lower()
+                    for boost_doc in boost_documents
+                )
+                
+                if is_boosted:
                     rrf_score *= boost_factor
                     chunk['boosted'] = True
                     logger.debug(f"Boosted chunk from {doc_name}: {rrf_score:.4f}")
+                else:
+                    chunk['boosted'] = False
             
             chunk['fused_score'] = rrf_score
             
