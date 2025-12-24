@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Users, FileText, HardDrive, Activity, TrendingUp, Shield } from 'lucide-react';
 import api, { SystemStats, UserStats } from '../../services/api';
 
+
 export default function AdminDashboard() {
   const [systemStats, setSystemStats] = useState<SystemStats | null>(null);
   const [userStats, setUserStats] = useState<UserStats | null>(null);
@@ -35,21 +36,21 @@ export default function AdminDashboard() {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-50">
-      <div className="max-w-7xl mx-auto px-6 py-8">
+    <div className="h-full overflow-y-auto bg-gray-50 scroll-smooth-touch">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
         {/* Header */}
-        <div className="mb-8">
+        <div className="mb-6 sm:mb-8">
           <div className="flex items-center gap-2 mb-2">
-            <Shield className="w-8 h-8 text-primary-600" />
-            <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
+            <Shield className="w-6 h-6 sm:w-8 sm:h-8 text-primary-600" />
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Admin Dashboard</h1>
           </div>
-          <p className="text-gray-600">System overview and analytics</p>
+          <p className="text-sm sm:text-base text-gray-600">System overview and analytics</p>
         </div>
 
         {/* System Stats */}
-        <div className="mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">System Statistics</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="mb-6 sm:mb-8">
+          <h2 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">System Statistics</h2>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
             <StatCard
               icon={Users}
               label="Total Users"
@@ -78,9 +79,9 @@ export default function AdminDashboard() {
         </div>
 
         {/* User Stats */}
-        <div className="mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">User Analytics</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="mb-6 sm:mb-8">
+          <h2 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">User Analytics</h2>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
             <StatCard
               icon={Users}
               label="Active Users"
@@ -111,8 +112,8 @@ export default function AdminDashboard() {
 
         {/* Quick Actions */}
         <div>
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <h2 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">Quick Actions</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
             <QuickActionCard
               title="User Management"
               description="Manage users, roles, and permissions"
@@ -126,11 +127,10 @@ export default function AdminDashboard() {
               icon={FileText}
             />
             <QuickActionCard
-              title="System Settings"
-              description="Configure system settings"
-              link="/admin/settings"
+              title="Customization"
+              description="Customize branding and appearance"
+              link="/admin/customization"
               icon={Activity}
-              disabled
             />
           </div>
         </div>
@@ -157,14 +157,14 @@ function StatCard({ icon: Icon, label, value, color, subtitle }: StatCardProps) 
   };
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6">
-      <div className="flex items-center justify-between mb-4">
-        <div className={`p-3 rounded-lg ${colorClasses[color]}`}>
-          <Icon className="w-6 h-6" />
+    <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6 hover:shadow-md transition-shadow">
+      <div className="flex items-center justify-between mb-3 sm:mb-4">
+        <div className={`p-2 sm:p-3 rounded-lg ${colorClasses[color]}`}>
+          <Icon className="w-5 h-5 sm:w-6 sm:h-6" />
         </div>
       </div>
-      <h3 className="text-2xl font-bold text-gray-900 mb-1">{value}</h3>
-      <p className="text-sm text-gray-600">{label}</p>
+      <h3 className="text-xl sm:text-2xl font-bold text-gray-900 mb-1 break-words">{value}</h3>
+      <p className="text-xs sm:text-sm text-gray-600">{label}</p>
       {subtitle && <p className="text-xs text-gray-500 mt-1">{subtitle}</p>}
     </div>
   );
@@ -182,20 +182,20 @@ function QuickActionCard({ title, description, link, icon: Icon, disabled }: Qui
   return (
     <a
       href={disabled ? '#' : link}
-      className={`block bg-white rounded-lg border border-gray-200 p-6 transition-all ${
+      className={`block bg-white rounded-lg border border-gray-200 p-4 sm:p-6 transition-all min-touch-target ${
         disabled
           ? 'opacity-50 cursor-not-allowed'
           : 'hover:shadow-md hover:border-primary-300'
       }`}
       onClick={(e) => disabled && e.preventDefault()}
     >
-      <div className="flex items-start space-x-4">
-        <div className="p-2 bg-primary-50 rounded-lg">
-          <Icon className="w-6 h-6 text-primary-600" />
+      <div className="flex items-start gap-3 sm:gap-4">
+        <div className="p-2 bg-primary-50 rounded-lg flex-shrink-0">
+          <Icon className="w-5 h-5 sm:w-6 sm:h-6 text-primary-600" />
         </div>
-        <div className="flex-1">
-          <h3 className="font-semibold text-gray-900 mb-1">{title}</h3>
-          <p className="text-sm text-gray-600">{description}</p>
+        <div className="flex-1 min-w-0">
+          <h3 className="font-semibold text-gray-900 mb-1 text-sm sm:text-base break-words">{title}</h3>
+          <p className="text-xs sm:text-sm text-gray-600 break-words">{description}</p>
           {disabled && (
             <span className="inline-block mt-2 text-xs text-gray-500">Coming soon</span>
           )}

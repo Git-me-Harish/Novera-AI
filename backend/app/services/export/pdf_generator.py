@@ -1,6 +1,6 @@
 """
-Enhanced PDF export service for conversations.
-Generates professional, well-structured PDFs with rich formatting.
+Professional corporate-grade PDF export service.
+Generates executive-level, publication-quality PDFs with precise formatting.
 """
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -8,24 +8,28 @@ from io import BytesIO
 import re
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    PageBreak, HRFlowable, KeepTogether, ListFlowable, ListItem
+    PageBreak, HRFlowable, KeepTogether, Frame, PageTemplate
 )
-from reportlab.pdfgen import canvas
+from reportlab.pdfgen import canvas as pdfcanvas
 from loguru import logger
 
 
-class NumberedCanvas(canvas.Canvas):
-    """Custom canvas for page numbering."""
+class ProfessionalCanvas(pdfcanvas.Canvas):
+    """
+    Professional canvas with corporate header/footer.
+    Implements consistent branding across all pages.
+    """
     
     def __init__(self, *args, **kwargs):
-        canvas.Canvas.__init__(self, *args, **kwargs)
+        pdfcanvas.Canvas.__init__(self, *args, **kwargs)
         self._saved_page_states = []
+        self.page_count = 0
 
     def showPage(self):
         self._saved_page_states.append(dict(self.__dict__))
@@ -35,183 +39,185 @@ class NumberedCanvas(canvas.Canvas):
         num_pages = len(self._saved_page_states)
         for state in self._saved_page_states:
             self.__dict__.update(state)
-            self.draw_page_number(num_pages)
-            canvas.Canvas.showPage(self)
-        canvas.Canvas.save(self)
+            self.draw_page_elements(num_pages)
+            pdfcanvas.Canvas.showPage(self)
+        pdfcanvas.Canvas.save(self)
 
-    def draw_page_number(self, page_count):
-        self.setFont("Helvetica", 9)
-        self.setFillColor(colors.grey)
-        self.drawRightString(
-            letter[0] - 40,
-            30,
-            f"Page {self._pageNumber} of {page_count}"
-        )
+    def draw_page_elements(self, page_count):
+        """Draw header and footer with professional styling."""
+        page_width = letter[0]
+        page_height = letter[1]
+        
+        # Footer - Page numbers and confidentiality notice
+        self.setFont("Helvetica", 8)
+        self.setFillColor(colors.HexColor('#6b7280'))
+        
+        # Left: Confidential notice
         self.drawString(
             40,
             30,
-            "Novera AI • Confidential"
+            "NOVERA AI • CONFIDENTIAL"
         )
+        
+        # Right: Page number
+        self.drawRightString(
+            page_width - 40,
+            30,
+            f"Page {self._pageNumber} of {page_count}"
+        )
+        
+        # Top border line
+        self.setStrokeColor(colors.HexColor('#e5e7eb'))
+        self.setLineWidth(0.5)
+        self.line(40, page_height - 50, page_width - 40, page_height - 50)
+        
+        # Bottom border line
+        self.line(40, 45, page_width - 40, 45)
 
 
-class EnhancedPDFGenerator:
-    """Generate professional, well-structured PDFs from conversation data."""
+class CorporatePDFGenerator:
+    """
+    Corporate-grade PDF generator with executive presentation quality.
+    Designed for professional distribution and archival.
+    """
     
     def __init__(self):
         self.styles = getSampleStyleSheet()
-        self._setup_custom_styles()
+        self._setup_corporate_styles()
         
-        # Color scheme
-        self.primary_color = colors.HexColor('#1e3a8a')      # Dark blue
-        self.secondary_color = colors.HexColor('#3b82f6')    # Blue
-        self.accent_color = colors.HexColor('#60a5fa')       # Light blue
-        self.user_color = colors.HexColor('#059669')         # Green
-        self.ai_color = colors.HexColor('#7c3aed')           # Purple
-        self.text_color = colors.HexColor('#1f2937')         # Dark gray
-        self.light_gray = colors.HexColor('#f3f4f6')
-        self.border_color = colors.HexColor('#e5e7eb')
+        # Professional color palette (corporate blue-gray theme)
+        self.primary = colors.HexColor('#1e40af')      # Professional blue
+        self.secondary = colors.HexColor('#475569')     # Slate gray
+        self.accent = colors.HexColor('#0ea5e9')        # Sky blue
+        self.success = colors.HexColor('#059669')       # Emerald green
+        self.text_primary = colors.HexColor('#1f2937')  # Near black
+        self.text_secondary = colors.HexColor('#6b7280') # Medium gray
+        self.bg_light = colors.HexColor('#f8fafc')      # Very light gray
+        self.border = colors.HexColor('#e2e8f0')        # Light border
+        
+        logger.info("Corporate PDF Generator initialized")
     
-    def _setup_custom_styles(self):
-        """Create comprehensive custom paragraph styles."""
+    def _setup_corporate_styles(self):
+        """
+        Define corporate typography and styling standards.
+        Based on professional document design principles.
+        """
         
-        # Title style
+        # === COVER PAGE STYLES ===
+        
         self.styles.add(ParagraphStyle(
-            name='CustomTitle',
+            name='CoverTitle',
             parent=self.styles['Heading1'],
-            fontSize=28,
-            textColor=colors.HexColor('#1e3a8a'),
-            spaceAfter=12,
+            fontSize=32,
+            textColor=colors.HexColor('#1e40af'),
+            spaceAfter=16,
             spaceBefore=0,
             alignment=TA_CENTER,
             fontName='Helvetica-Bold',
-            leading=34
+            leading=38
         ))
         
-        # Subtitle style
         self.styles.add(ParagraphStyle(
-            name='CustomSubtitle',
+            name='CoverSubtitle',
             parent=self.styles['Normal'],
-            fontSize=12,
-            textColor=colors.HexColor('#6b7280'),
-            spaceAfter=24,
+            fontSize=14,
+            textColor=colors.HexColor('#475569'),
+            spaceAfter=8,
             alignment=TA_CENTER,
             fontName='Helvetica',
-            leading=16
+            leading=18
         ))
         
-        # Section header
+        # === SECTION STYLES ===
+        
         self.styles.add(ParagraphStyle(
-            name='SectionHeader',
+            name='SectionTitle',
+            parent=self.styles['Heading1'],
+            fontSize=18,
+            textColor=colors.HexColor('#1e40af'),
+            spaceAfter=16,
+            spaceBefore=24,
+            fontName='Helvetica-Bold',
+            leading=22,
+            borderPadding=0
+        ))
+        
+        self.styles.add(ParagraphStyle(
+            name='SubsectionTitle',
             parent=self.styles['Heading2'],
-            fontSize=16,
-            textColor=colors.HexColor('#1e3a8a'),
+            fontSize=14,
+            textColor=colors.HexColor('#475569'),
             spaceAfter=12,
-            spaceBefore=20,
+            spaceBefore=16,
             fontName='Helvetica-Bold',
-            borderWidth=0,
-            borderPadding=0,
-            leading=20
+            leading=18
         ))
         
-        # Message header - User
+        # === MESSAGE STYLES ===
+        
         self.styles.add(ParagraphStyle(
-            name='UserHeader',
-            parent=self.styles['Heading3'],
-            fontSize=11,
-            textColor=colors.HexColor('#059669'),
-            spaceAfter=6,
-            spaceBefore=0,
+            name='MessageHeader',
+            parent=self.styles['Normal'],
+            fontSize=10,
+            textColor=colors.HexColor('#475569'),
+            spaceAfter=8,
             fontName='Helvetica-Bold',
             leading=14
         ))
         
-        # Message header - AI
         self.styles.add(ParagraphStyle(
-            name='AIHeader',
-            parent=self.styles['Heading3'],
-            fontSize=11,
-            textColor=colors.HexColor('#7c3aed'),
-            spaceAfter=6,
-            spaceBefore=0,
-            fontName='Helvetica-Bold',
-            leading=14
-        ))
-        
-        # User message content
-        self.styles.add(ParagraphStyle(
-            name='UserMessage',
+            name='MessageBody',
             parent=self.styles['Normal'],
             fontSize=10,
             textColor=colors.HexColor('#1f2937'),
-            spaceAfter=4,
-            leftIndent=20,
-            rightIndent=20,
-            fontName='Helvetica',
-            leading=15,
-            alignment=TA_LEFT
-        ))
-        
-        # AI message content
-        self.styles.add(ParagraphStyle(
-            name='AIMessage',
-            parent=self.styles['Normal'],
-            fontSize=10,
-            textColor=colors.HexColor('#374151'),
-            spaceAfter=4,
-            leftIndent=20,
-            rightIndent=20,
+            spaceAfter=6,
+            leftIndent=0,
+            rightIndent=0,
             fontName='Helvetica',
             leading=16,
             alignment=TA_JUSTIFY
         ))
         
-        # Bullet point style
         self.styles.add(ParagraphStyle(
-            name='BulletPoint',
+            name='BulletItem',
             parent=self.styles['Normal'],
             fontSize=10,
             textColor=colors.HexColor('#374151'),
-            leftIndent=35,
-            rightIndent=20,
+            leftIndent=24,
+            bulletIndent=12,
             fontName='Helvetica',
-            leading=15,
-            spaceAfter=4,
-            bulletIndent=20,
-            bulletFontSize=10
+            leading=16,
+            spaceAfter=6
         ))
         
-        # Source citation style
+        # === METADATA STYLES ===
+        
         self.styles.add(ParagraphStyle(
-            name='SourceText',
+            name='MetadataLabel',
             parent=self.styles['Normal'],
             fontSize=9,
             textColor=colors.HexColor('#6b7280'),
-            leftIndent=25,
-            fontName='Helvetica-Oblique',
-            leading=13,
-            spaceAfter=2
+            fontName='Helvetica-Bold',
+            leading=13
         ))
         
-        # Metadata style
         self.styles.add(ParagraphStyle(
-            name='MetadataText',
+            name='MetadataValue',
             parent=self.styles['Normal'],
             fontSize=9,
-            textColor=colors.HexColor('#9ca3af'),
+            textColor=colors.HexColor('#374151'),
             fontName='Helvetica',
-            leading=12
+            leading=13
         ))
         
-        # Info box style
         self.styles.add(ParagraphStyle(
-            name='InfoBox',
+            name='SourceCitation',
             parent=self.styles['Normal'],
-            fontSize=10,
-            textColor=colors.HexColor('#1f2937'),
-            fontName='Helvetica',
-            leading=14,
-            leftIndent=10,
-            rightIndent=10
+            fontSize=8,
+            textColor=colors.HexColor('#6b7280'),
+            fontName='Helvetica-Oblique',
+            leading=12,
+            leftIndent=16
         ))
     
     def generate_conversation_pdf(
@@ -220,472 +226,591 @@ class EnhancedPDFGenerator:
         analytics: Optional[Dict[str, Any]] = None
     ) -> BytesIO:
         """
-        Generate a professional, well-structured PDF from conversation data.
+        Generate professional, publication-quality PDF.
+        
+        Structure:
+        1. Cover page with metadata
+        2. Executive summary (if analytics provided)
+        3. Conversation transcript
+        4. Analytics appendix (if provided)
         """
         buffer = BytesIO()
         
-        # Create document with custom canvas for page numbers
         doc = SimpleDocTemplate(
             buffer,
             pagesize=letter,
-            rightMargin=60,
-            leftMargin=60,
-            topMargin=60,
-            bottomMargin=60,
-            title=f"Novera Conversation {conversation['id'][:8]}"
+            rightMargin=72,      # 1 inch margins
+            leftMargin=72,
+            topMargin=72,
+            bottomMargin=72,
+            title=f"Novera AI - Conversation Report",
+            author="Novera AI System"
         )
         
         story = []
         
-        # Header section
-        story.extend(self._create_header_section(conversation))
+        # === COVER PAGE ===
+        story.extend(self._create_cover_page(conversation))
+        story.append(PageBreak())
         
-        # Metadata info box
-        story.extend(self._create_info_box(conversation, analytics))
+        # === EXECUTIVE SUMMARY ===
+        if analytics:
+            story.extend(self._create_executive_summary(conversation, analytics))
+            story.append(PageBreak())
         
-        # Main separator
-        story.append(Spacer(1, 20))
-        story.append(HRFlowable(
-            width="100%",
-            thickness=2,
-            color=self.primary_color,
-            spaceAfter=20
-        ))
+        # === CONVERSATION TRANSCRIPT ===
+        story.extend(self._create_conversation_section(conversation))
         
-        # Messages section
-        story.extend(self._create_messages_section(conversation))
-        
-        # Analytics section (if available)
+        # === ANALYTICS APPENDIX ===
         if analytics:
             story.append(PageBreak())
-            story.extend(self._create_analytics_section(analytics))
+            story.extend(self._create_analytics_appendix(analytics))
         
-        # Footer
-        story.extend(self._create_footer())
-        
-        # Build PDF with custom canvas
-        doc.build(story, canvasmaker=NumberedCanvas)
+        # Build PDF
+        doc.build(story, canvasmaker=ProfessionalCanvas)
         
         buffer.seek(0)
-        logger.info(f"Generated enhanced PDF for conversation {conversation['id']}")
+        logger.info(f"Generated professional PDF: {len(conversation.get('messages', []))} messages")
         return buffer
     
-    def _create_header_section(self, conversation: Dict[str, Any]) -> List:
-        """Create enhanced header with logo area and title."""
+    def _create_cover_page(self, conversation: Dict[str, Any]) -> List:
+        """
+        Create professional cover page with corporate branding.
+        """
         elements = []
         
-        # Logo placeholder (you can add actual logo here)
-        # For now, we'll use a styled title box
+        # Top spacing
+        elements.append(Spacer(1, 1.5*inch))
         
-        # Title
-        title = Paragraph(
-            "Novera AI<br/>Conversation Export",
-            self.styles['CustomTitle']
-        )
-        elements.append(title)
+        # Company/Product name
+        elements.append(Paragraph(
+            "NOVERA AI",
+            self.styles['CoverTitle']
+        ))
         
-        # Date subtitle
+        # Document type
+        elements.append(Paragraph(
+            "Conversation Analysis Report",
+            self.styles['CoverSubtitle']
+        ))
+        
+        elements.append(Spacer(1, 0.5*inch))
+        
+        # Decorative line
+        elements.append(HRFlowable(
+            width="40%",
+            thickness=2,
+            color=self.primary,
+            spaceAfter=32,
+            spaceBefore=0,
+            hAlign='CENTER'
+        ))
+        
+        elements.append(Spacer(1, 0.75*inch))
+        
+        # Metadata table
+        metadata = conversation.get('metadata', {})
         created_date = datetime.fromisoformat(conversation['created_at'])
-        subtitle = Paragraph(
-            f"Generated on {created_date.strftime('%B %d, %Y at %I:%M %p')}",
-            self.styles['CustomSubtitle']
-        )
-        elements.append(subtitle)
         
-        return elements
-    
-    def _create_info_box(
-        self,
-        conversation: Dict[str, Any],
-        analytics: Optional[Dict[str, Any]]
-    ) -> List:
-        """Create an information box with key metadata."""
-        elements = []
-        
-        # Prepare data
-        total_messages = len(conversation.get('messages', []))
-        user_count = len([m for m in conversation['messages'] if m['role'] == 'user'])
-        ai_count = len([m for m in conversation['messages'] if m['role'] == 'assistant'])
-        
-        # Create table data
         data = [
-            ['Conversation ID:', conversation['id'][:16] + '...'],
-            ['Total Messages:', str(total_messages)],
-            ['User Queries:', str(user_count)],
-            ['AI Responses:', str(ai_count)],
+            ['Conversation ID', conversation['id'][:24] + '...'],
+            ['Date Generated', created_date.strftime('%B %d, %Y')],
+            ['Time Generated', created_date.strftime('%I:%M %p')],
+            ['Total Messages', str(len(conversation.get('messages', [])))],
         ]
         
-        if analytics:
-            data.append(['Documents Referenced:', str(analytics.get('total_documents', 0))])
-            data.append(['Sources Cited:', str(analytics.get('total_sources_cited', 0))])
+        # Add selective export info if present
+        if metadata.get('is_selective_export'):
+            data.append([
+                'Export Type',
+                f"Selective ({metadata.get('exported_message_count', 0)} of {metadata.get('total_messages_in_conversation', 0)} messages)"
+            ])
         
-        # Create table
-        table = Table(data, colWidths=[2*inch, 4*inch])
+        table = Table(data, colWidths=[2.5*inch, 3*inch])
         table.setStyle(TableStyle([
-            # Background
-            ('BACKGROUND', (0, 0), (-1, -1), self.light_gray),
-            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#dbeafe')),
-            
-            # Text styling
-            ('TEXTCOLOR', (0, 0), (-1, -1), self.text_color),
+            ('BACKGROUND', (0, 0), (0, -1), self.bg_light),
+            ('TEXTCOLOR', (0, 0), (-1, -1), self.text_primary),
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
-            
-            # Alignment
             ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
             ('ALIGN', (1, 0), (1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            
-            # Padding
-            ('LEFTPADDING', (0, 0), (-1, -1), 12),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-            ('TOPPADDING', (0, 0), (-1, -1), 8),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-            
-            # Border
-            ('BOX', (0, 0), (-1, -1), 1, self.border_color),
-            ('LINEBELOW', (0, 0), (-1, -2), 0.5, self.border_color),
+            ('LEFTPADDING', (0, 0), (-1, -1), 16),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+            ('TOPPADDING', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ('BOX', (0, 0), (-1, -1), 1, self.border),
+            ('LINEBELOW', (0, 0), (-1, -2), 0.5, self.border),
         ]))
         
         elements.append(table)
         
+        # Bottom spacing and confidentiality notice
+        elements.append(Spacer(1, 2*inch))
+        elements.append(Paragraph(
+            "<i>CONFIDENTIAL - FOR AUTHORIZED USE ONLY</i>",
+            self.styles['MetadataLabel']
+        ))
+        
         return elements
     
-    def _create_messages_section(self, conversation: Dict[str, Any]) -> List:
-        """Create well-formatted messages section with proper structure."""
+    def _create_executive_summary(
+        self,
+        conversation: Dict[str, Any],
+        analytics: Dict[str, Any]
+    ) -> List:
+        """Create executive summary with key metrics."""
         elements = []
         
-        # Section header
-        header = Paragraph("Conversation Messages", self.styles['SectionHeader'])
-        elements.append(header)
-        elements.append(Spacer(1, 10))
+        elements.append(Paragraph("EXECUTIVE SUMMARY", self.styles['SectionTitle']))
+        elements.append(Spacer(1, 16))
+        
+        # Key metrics in grid layout
+        metrics = [
+            ['Metric', 'Value', 'Details'],
+            [
+                'Total Exchanges',
+                str(analytics.get('user_queries', 0)),
+                'User questions asked'
+            ],
+            [
+                'AI Responses',
+                str(analytics.get('ai_responses', 0)),
+                'Answers provided'
+            ],
+            [
+                'Documents Referenced',
+                str(analytics.get('total_documents', 0)),
+                'Unique documents consulted'
+            ],
+            [
+                'Source Citations',
+                str(analytics.get('total_sources_cited', 0)),
+                'Total citations provided'
+            ],
+            [
+                'Duration',
+                f"{analytics.get('duration_minutes', 0)} min",
+                'Conversation length'
+            ],
+        ]
+        
+        table = Table(metrics, colWidths=[2*inch, 1.2*inch, 2.3*inch])
+        table.setStyle(TableStyle([
+            # Header row
+            ('BACKGROUND', (0, 0), (-1, 0), self.primary),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+            
+            # Body
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('TEXTCOLOR', (0, 1), (-1, -1), self.text_primary),
+            ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('ALIGN', (0, 1), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 1), (1, -1), 'CENTER'),
+            ('ALIGN', (2, 1), (2, -1), 'LEFT'),
+            
+            # Styling
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 12),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, self.border),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, self.bg_light]),
+        ]))
+        
+        elements.append(table)
+        elements.append(Spacer(1, 24))
+        
+        # Confidence distribution
+        conf_dist = analytics.get('confidence_distribution', {})
+        if conf_dist:
+            elements.append(Paragraph("Response Quality", self.styles['SubsectionTitle']))
+            elements.append(Spacer(1, 8))
+            
+            conf_data = [
+                ['Quality Level', 'Count', 'Percentage'],
+                [
+                    'High Confidence',
+                    str(conf_dist.get('high', 0)),
+                    f"{self._percentage(conf_dist.get('high', 0), analytics.get('ai_responses', 1))}%"
+                ],
+                [
+                    'Medium Confidence',
+                    str(conf_dist.get('medium', 0)),
+                    f"{self._percentage(conf_dist.get('medium', 0), analytics.get('ai_responses', 1))}%"
+                ],
+                [
+                    'Low Confidence',
+                    str(conf_dist.get('low', 0)),
+                    f"{self._percentage(conf_dist.get('low', 0), analytics.get('ai_responses', 1))}%"
+                ],
+            ]
+            
+            conf_table = Table(conf_data, colWidths=[2.5*inch, 1.5*inch, 1.5*inch])
+            conf_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), self.secondary),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 9),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 10),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+                ('TOPPADDING', (0, 0), (-1, -1), 7),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+                ('GRID', (0, 0), (-1, -1), 0.5, self.border),
+            ]))
+            
+            elements.append(conf_table)
+        
+        return elements
+    
+    def _create_conversation_section(self, conversation: Dict[str, Any]) -> List:
+        """
+        Create conversation transcript with professional message formatting.
+        Preserves tables, lists, and formatting from original content.
+        """
+        elements = []
+        
+        elements.append(Paragraph("CONVERSATION TRANSCRIPT", self.styles['SectionTitle']))
+        elements.append(Spacer(1, 16))
         
         messages = conversation.get('messages', [])
         
-        for idx, message in enumerate(messages):
+        for idx, message in enumerate(messages, 1):
             role = message.get('role', 'user')
             content = message.get('content', '')
             timestamp = message.get('timestamp', '')
             metadata = message.get('metadata', {})
             
-            # Create message block
+            # Create message container
             message_elements = []
             
-            # Header with timestamp
+            # === MESSAGE HEADER ===
+            header_parts = []
+            
             if role == 'user':
-                header_text = f"👤 <b>User</b> • {self._format_timestamp(timestamp)}"
-                header_style = 'UserHeader'
+                header_parts.append(f"<b>USER QUERY #{idx}</b>")
             else:
-                header_text = f"🤖 <b>AI Assistant</b> • {self._format_timestamp(timestamp)}"
-                header_style = 'AIHeader'
+                header_parts.append(f"<b>AI RESPONSE #{idx}</b>")
             
-            message_header = Paragraph(header_text, self.styles[header_style])
-            message_elements.append(message_header)
+            if timestamp:
+                formatted_time = self._format_timestamp(timestamp)
+                header_parts.append(f"• {formatted_time}")
             
-            # Content with proper formatting
-            formatted_content = self._format_message_content(
-                content,
-                role,
-                metadata
-            )
-            message_elements.extend(formatted_content)
+            header_text = " ".join(header_parts)
+            message_elements.append(Paragraph(header_text, self.styles['MessageHeader']))
+            message_elements.append(Spacer(1, 4))
             
-            # Sources (for AI messages)
+            # === MESSAGE CONTENT ===
+            # Parse and format content (handles tables, lists, paragraphs)
+            content_elements = self._parse_message_content(content, role)
+            message_elements.extend(content_elements)
+            
+            # === SOURCES (AI messages only) ===
             if role == 'assistant' and metadata.get('sources'):
-                message_elements.append(Spacer(1, 6))
-                sources_header = Paragraph(
-                    "<b>📚 Sources:</b>",
-                    self.styles['SourceText']
-                )
-                message_elements.append(sources_header)
+                message_elements.append(Spacer(1, 8))
+                message_elements.append(Paragraph(
+                    "<b>Sources Referenced:</b>",
+                    self.styles['MetadataLabel']
+                ))
+                message_elements.append(Spacer(1, 4))
                 
                 for source in metadata['sources'][:5]:
-                    doc_name = source.get('document', 'Unknown')
+                    doc_name = source.get('document', 'Unknown Document')
                     page = source.get('page', 'N/A')
-                    source_text = f"• {doc_name} (Page {page})"
-                    source_para = Paragraph(source_text, self.styles['SourceText'])
-                    message_elements.append(source_para)
+                    section = source.get('section')
+                    
+                    source_text = f"• {doc_name}"
+                    if page != 'N/A':
+                        source_text += f", Page {page}"
+                    if section:
+                        source_text += f", Section: {section}"
+                    
+                    message_elements.append(Paragraph(
+                        source_text,
+                        self.styles['SourceCitation']
+                    ))
             
-            # Confidence badge
+            # === CONFIDENCE BADGE (AI messages only) ===
             if role == 'assistant' and metadata.get('confidence'):
-                message_elements.append(Spacer(1, 4))
-                confidence = metadata['confidence']
-                conf_badge = self._create_confidence_badge(confidence)
-                message_elements.append(conf_badge)
+                message_elements.append(Spacer(1, 6))
+                badge = self._create_confidence_indicator(metadata['confidence'])
+                message_elements.append(badge)
             
-            # Keep message together on same page
+            # Keep message together
             message_block = KeepTogether(message_elements)
             elements.append(message_block)
             
-            # Separator
-            elements.append(Spacer(1, 12))
-            if idx < len(messages) - 1:
+            # Separator between messages
+            elements.append(Spacer(1, 16))
+            if idx < len(messages):
                 elements.append(HRFlowable(
-                    width="90%",
+                    width="100%",
                     thickness=0.5,
-                    color=self.border_color,
-                    spaceAfter=12
+                    color=self.border,
+                    spaceAfter=16
                 ))
         
         return elements
     
-    def _format_message_content(
-        self,
-        content: str,
-        role: str,
-        metadata: Dict[str, Any]
-    ) -> List:
+    def _parse_message_content(self, content: str, role: str) -> List:
         """
-        Format message content with proper paragraph and bullet handling.
+        Parse message content and extract:
+        - Tables (markdown tables)
+        - Bullet lists
+        - Numbered lists
+        - Paragraphs
+        - Bold/italic formatting
+        
+        Preserves all formatting in professional layout.
         """
         elements = []
         
         # Clean content
-        content = self._clean_content_for_pdf(content)
+        content = self._clean_content(content)
         
-        # Split into lines for bullet point detection
-        lines = content.split('\n')
+        # Split into blocks (separated by blank lines)
+        blocks = re.split(r'\n\s*\n', content)
         
-        current_paragraph = []
-        in_bullet_list = False
-        bullet_items = []
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+            
+            # Check if block is a table
+            if '|' in block and block.count('|') >= 3:
+                table_elem = self._parse_table(block)
+                if table_elem:
+                    elements.append(table_elem)
+                    elements.append(Spacer(1, 12))
+                    continue
+            
+            # Check if block is a bullet list
+            lines = block.split('\n')
+            if all(line.strip().startswith(('-', '•', '*')) for line in lines if line.strip()):
+                list_elements = self._parse_bullet_list(lines)
+                elements.extend(list_elements)
+                elements.append(Spacer(1, 8))
+                continue
+            
+            # Check if block is numbered list
+            if re.match(r'^\d+\.', lines[0].strip()):
+                list_elements = self._parse_numbered_list(lines)
+                elements.extend(list_elements)
+                elements.append(Spacer(1, 8))
+                continue
+            
+            # Regular paragraph
+            para_text = ' '.join(line.strip() for line in lines)
+            para_text = self._format_inline_text(para_text)
+            
+            elements.append(Paragraph(para_text, self.styles['MessageBody']))
+            elements.append(Spacer(1, 6))
         
-        style_name = 'UserMessage' if role == 'user' else 'AIMessage'
+        return elements
+    
+    def _parse_table(self, table_text: str) -> Optional[Table]:
+        """
+        Parse markdown table and create professional ReportLab table.
+        
+        Example input:
+        | Header 1 | Header 2 |
+        |----------|----------|
+        | Value 1  | Value 2  |
+        """
+        lines = [line.strip() for line in table_text.split('\n') if line.strip()]
+        
+        # Remove separator line (usually second line with dashes)
+        lines = [line for line in lines if not re.match(r'^\|[\s\-|]+\|$', line)]
+        
+        if len(lines) < 2:
+            return None
+        
+        # Parse rows
+        data = []
+        for line in lines:
+            # Split by | and clean
+            cells = [cell.strip() for cell in line.split('|') if cell.strip()]
+            if cells:
+                data.append(cells)
+        
+        if not data:
+            return None
+        
+        # Determine column widths
+        num_cols = len(data[0])
+        available_width = 5.5 * inch
+        col_width = available_width / num_cols
+        
+        table = Table(data, colWidths=[col_width] * num_cols)
+        table.setStyle(TableStyle([
+            # Header row
+            ('BACKGROUND', (0, 0), (-1, 0), self.primary),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            
+            # Body rows
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('TEXTCOLOR', (0, 1), (-1, -1), self.text_primary),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            
+            # Styling
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, self.border),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, self.bg_light]),
+        ]))
+        
+        return table
+    
+    def _parse_bullet_list(self, lines: List[str]) -> List:
+        """Parse bullet list into formatted elements."""
+        elements = []
         
         for line in lines:
             line = line.strip()
-            
             if not line:
-                # Empty line - flush current paragraph
-                if current_paragraph:
-                    para_text = ' '.join(current_paragraph)
-                    elements.append(Paragraph(para_text, self.styles[style_name]))
-                    elements.append(Spacer(1, 6))
-                    current_paragraph = []
-                
-                # Flush bullet list
-                if bullet_items:
-                    elements.extend(self._create_bullet_list(bullet_items))
-                    bullet_items = []
-                    in_bullet_list = False
-                
                 continue
             
-            # Check if line is a bullet point
-            is_bullet = line.startswith('•') or line.startswith('-') or line.startswith('*')
+            # Remove bullet marker
+            text = re.sub(r'^[\-•*]\s*', '', line)
+            text = self._format_inline_text(text)
             
-            if is_bullet:
-                # Flush current paragraph
-                if current_paragraph:
-                    para_text = ' '.join(current_paragraph)
-                    elements.append(Paragraph(para_text, self.styles[style_name]))
-                    elements.append(Spacer(1, 6))
-                    current_paragraph = []
-                
-                # Add to bullet list
-                bullet_text = line.lstrip('•-* ').strip()
-                bullet_items.append(bullet_text)
-                in_bullet_list = True
-            else:
-                # Flush bullet list
-                if bullet_items:
-                    elements.extend(self._create_bullet_list(bullet_items))
-                    bullet_items = []
-                    in_bullet_list = False
-                
-                # Add to paragraph
-                current_paragraph.append(line)
-        
-        # Flush remaining content
-        if current_paragraph:
-            para_text = ' '.join(current_paragraph)
-            elements.append(Paragraph(para_text, self.styles[style_name]))
-        
-        if bullet_items:
-            elements.extend(self._create_bullet_list(bullet_items))
+            elements.append(Paragraph(f"• {text}", self.styles['BulletItem']))
         
         return elements
     
-    def _create_bullet_list(self, items: List[str]) -> List:
-        """Create a properly formatted bullet list."""
+    def _parse_numbered_list(self, lines: List[str]) -> List:
+        """Parse numbered list into formatted elements."""
         elements = []
         
-        for item in items:
-            bullet_para = Paragraph(
-                f"• {item}",
-                self.styles['BulletPoint']
-            )
-            elements.append(bullet_para)
-        
-        elements.append(Spacer(1, 6))
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Extract number and text
+            match = re.match(r'^(\d+)\.\s*(.+)$', line)
+            if match:
+                num, text = match.groups()
+                text = self._format_inline_text(text)
+                elements.append(Paragraph(f"{num}. {text}", self.styles['BulletItem']))
         
         return elements
     
-    def _create_confidence_badge(self, confidence: str) -> Table:
-        """Create a colored confidence badge."""
+    def _format_inline_text(self, text: str) -> str:
+        """
+        Format inline markdown:
+        - **bold** → <b>bold</b>
+        - *italic* → <i>italic</i>
+        """
+        # Bold
+        text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+        # Italic
+        text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
+        # Escape XML
+        text = text.replace('&', '&amp;')
+        # Restore tags
+        text = text.replace('&amp;lt;', '<').replace('&amp;gt;', '>')
+        
+        return text
+    
+    def _clean_content(self, content: str) -> str:
+        """Remove inline citations and prepare content."""
+        # Remove [Document: X, Page: Y] citations
+        content = re.sub(r'\[Document:[^\]]+\]', '', content)
+        return content.strip()
+    
+    def _create_confidence_indicator(self, confidence: str) -> Table:
+        """Create minimal, professional confidence indicator."""
         conf_colors = {
-            'high': (colors.HexColor('#10b981'), colors.HexColor('#d1fae5')),
+            'high': (self.success, colors.HexColor('#d1fae5')),
             'medium': (colors.HexColor('#f59e0b'), colors.HexColor('#fef3c7')),
             'low': (colors.HexColor('#ef4444'), colors.HexColor('#fee2e2'))
         }
         
-        text_color, bg_color = conf_colors.get(confidence, (colors.grey, colors.lightgrey))
+        text_color, bg_color = conf_colors.get(confidence, (self.text_secondary, self.bg_light))
         
-        badge_text = f"<b>{confidence.upper()} CONFIDENCE</b>"
+        badge = Table([[Paragraph(
+            f"<b>CONFIDENCE: {confidence.upper()}</b>",
+            self.styles['MetadataLabel']
+        )]], colWidths=[1.8*inch])
         
-        badge = Table([[Paragraph(badge_text, self.styles['MetadataText'])]], colWidths=[2*inch])
         badge.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, -1), bg_color),
             ('TEXTCOLOR', (0, 0), (-1, -1), text_color),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('FONTSIZE', (0, 0), (-1, -1), 7),
             ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 8),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('BOX', (0, 0), (-1, -1), 1, text_color),
-            ('ROUNDEDCORNERS', [4, 4, 4, 4]),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('BOX', (0, 0), (-1, -1), 0.5, text_color),
         ]))
         
         return badge
     
-    def _create_analytics_section(self, analytics: Dict[str, Any]) -> List:
-        """Create detailed analytics section."""
+    def _create_analytics_appendix(self, analytics: Dict[str, Any]) -> List:
+        """Create detailed analytics appendix."""
         elements = []
         
-        # Title
-        title = Paragraph("Conversation Analytics", self.styles['CustomTitle'])
-        elements.append(title)
-        elements.append(Spacer(1, 20))
+        elements.append(Paragraph("APPENDIX: DETAILED ANALYTICS", self.styles['SectionTitle']))
+        elements.append(Spacer(1, 16))
         
-        # Analytics table
-        data = [
-            ['Metric', 'Value']
-        ]
-        
-        metrics = [
-            ('Total Messages', analytics.get('total_messages', 0)),
-            ('User Queries', analytics.get('user_queries', 0)),
-            ('AI Responses', analytics.get('ai_responses', 0)),
-            ('Documents Referenced', analytics.get('total_documents', 0)),
-            ('Total Sources Cited', analytics.get('total_sources_cited', 0)),
-            ('Duration', f"{analytics.get('duration_minutes', 0)} minutes"),
-        ]
-        
-        for metric, value in metrics:
-            data.append([metric, str(value)])
-        
-        # Confidence distribution
-        conf_dist = analytics.get('confidence_distribution', {})
-        if conf_dist:
-            data.append(['High Confidence Responses', str(conf_dist.get('high', 0))])
-            data.append(['Medium Confidence Responses', str(conf_dist.get('medium', 0))])
-            data.append(['Low Confidence Responses', str(conf_dist.get('low', 0))])
-        
-        table = Table(data, colWidths=[3.5*inch, 2*inch])
-        table.setStyle(TableStyle([
-            # Header
-            ('BACKGROUND', (0, 0), (-1, 0), self.primary_color),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 12),
-            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-            
-            # Body
-            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-            ('TEXTCOLOR', (0, 1), (-1, -1), self.text_color),
-            ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (1, 1), (1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 10),
-            ('ALIGN', (0, 1), (0, -1), 'LEFT'),
-            ('ALIGN', (1, 1), (1, -1), 'CENTER'),
-            
-            # Padding
-            ('LEFTPADDING', (0, 0), (-1, -1), 12),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-            ('TOPPADDING', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
-            
-            # Grid
-            ('GRID', (0, 0), (-1, -1), 1, self.border_color),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, self.light_gray]),
-        ]))
-        
-        elements.append(table)
-        elements.append(Spacer(1, 20))
-        
-        # Documents list
+        # Documents referenced
         if analytics.get('documents_referenced'):
-            docs_header = Paragraph(
-                "<b>📄 Documents Referenced:</b>",
-                self.styles['SectionHeader']
-            )
-            elements.append(docs_header)
-            elements.append(Spacer(1, 10))
+            elements.append(Paragraph("Documents Consulted", self.styles['SubsectionTitle']))
+            elements.append(Spacer(1, 8))
             
-            for doc in analytics['documents_referenced']:
-                doc_para = Paragraph(f"• {doc}", self.styles['BulletPoint'])
-                elements.append(doc_para)
+            for idx, doc in enumerate(analytics['documents_referenced'], 1):
+                elements.append(Paragraph(
+                    f"{idx}. {doc}",
+                    self.styles['BulletItem']
+                ))
+            
+            elements.append(Spacer(1, 16))
         
-        return elements
-    
-    def _create_footer(self) -> List:
-        """Create document footer."""
-        elements = []
-        
-        elements.append(Spacer(1, 30))
-        elements.append(HRFlowable(
-            width="100%",
-            thickness=1,
-            color=self.border_color
-        ))
-        elements.append(Spacer(1, 10))
-        
-        footer_text = Paragraph(
-            f"<i>Generated by Novera AI • {datetime.now().strftime('%B %d, %Y')} • Confidential</i>",
-            self.styles['MetadataText']
-        )
-        elements.append(footer_text)
+        # Primary document
+        if analytics.get('primary_document'):
+            elements.append(Paragraph(
+                f"<b>Primary Focus Document:</b> {analytics['primary_document']}",
+                self.styles['MetadataValue']
+            ))
+            elements.append(Spacer(1, 8))
         
         return elements
     
     def _format_timestamp(self, timestamp: str) -> str:
-        """Format ISO timestamp to readable format."""
+        """Format timestamp to readable format."""
         try:
             dt = datetime.fromisoformat(timestamp)
-            return dt.strftime('%I:%M %p')
+            return dt.strftime('%B %d, %Y at %I:%M %p')
         except:
             return timestamp
     
-    def _clean_content_for_pdf(self, content: str) -> str:
-        """Clean and prepare content for PDF rendering."""
-        # Remove inline citations
-        content = re.sub(r'\[Document:\s*[^\]]+\]', '', content)
-        
-        # Convert markdown bold to HTML
-        content = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', content)
-        
-        # Convert markdown italic to HTML
-        content = re.sub(r'\*(.+?)\*', r'<i>\1</i>', content)
-        
-        # Escape special XML characters
-        content = content.replace('&', '&amp;')
-        content = content.replace('<', '&lt;').replace('>', '&gt;')
-        
-        # Restore HTML tags
-        content = content.replace('&lt;b&gt;', '<b>').replace('&lt;/b&gt;', '</b>')
-        content = content.replace('&lt;i&gt;', '<i>').replace('&lt;/i&gt;', '</i>')
-        
-        # Handle very long content
-        if len(content) > 8000:
-            content = content[:8000] + "\n\n[Content truncated for PDF...]"
-        
-        return content
+    def _percentage(self, value: int, total: int) -> int:
+        """Calculate percentage safely."""
+        if total == 0:
+            return 0
+        return int((value / total) * 100)
 
 
 # Global instance
-pdf_generator = EnhancedPDFGenerator()
+pdf_generator = CorporatePDFGenerator()
 
-__all__ = ['EnhancedPDFGenerator', 'pdf_generator']
+__all__ = ['CorporatePDFGenerator', 'pdf_generator']

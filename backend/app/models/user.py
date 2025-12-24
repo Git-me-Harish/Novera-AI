@@ -3,7 +3,7 @@ Enhanced user models with authentication support.
 """
 from datetime import datetime
 from uuid import UUID, uuid4
-from sqlalchemy import Column, String, Boolean, DateTime, Index
+from sqlalchemy import Column, String, Boolean, DateTime, Index, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 
 from app.db.session import Base
@@ -29,6 +29,8 @@ class User(Base):
 
     # Role & Status
     role = Column(String(20), nullable=False, default="user")
+    # Organization (for customization)
+    organization_name = Column(String(255), nullable=True, default="default", index=True)
     is_active = Column(Boolean, default=True, nullable=False)
     is_verified = Column(Boolean, default=False, nullable=False)
 

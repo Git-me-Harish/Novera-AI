@@ -6,16 +6,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 import sys
+from pathlib import Path
 
 from app.core.config import settings
 from app.db.session import init_db, close_db
-from app.api.endpoints import health, documents, auth, chat, search, admin, document_editor
+from app.api.endpoints import health, documents, auth, chat, search, admin, document_editor, customization
 
 
 # Configure Loguru logger
-logger.remove()  # Remove default handler
+logger.remove()
 logger.add(
     sys.stdout,
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
@@ -48,11 +50,10 @@ async def lifespan(app: FastAPI):
         await init_db()
         logger.info("✅ Database initialized")
         
-        # TODO: Initialize Redis connection
-        # await init_redis()
-        
-        # TODO: Load embedding model
-        # await load_embedding_model()
+        # Create upload directories
+        Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+        Path(settings.upload_dir + "/branding").mkdir(parents=True, exist_ok=True)
+        logger.info("✅ Upload directories created")
         
         logger.info("🎉 Application startup complete!")
         
@@ -68,10 +69,6 @@ async def lifespan(app: FastAPI):
     try:
         await close_db()
         logger.info("✅ Database connections closed")
-        
-        # TODO: Close Redis connection
-        # await close_redis()
-        
         logger.info("👋 Shutdown complete")
         
     except Exception as e:
@@ -101,8 +98,12 @@ app.add_middleware(
 )
 
 
-# Add GZip compression for responses
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+upload_path = Path(settings.upload_dir)
+if upload_path.exists():
+    app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
+    logger.info(f"✅ Static files mounted at /uploads -> {upload_path}")
 
 
 # Include routers
@@ -134,6 +135,12 @@ app.include_router(
     chat.router,
     prefix=settings.api_v1_prefix,
     tags=["Chat"]
+)
+
+app.include_router(
+    customization.router,
+    prefix=settings.api_v1_prefix,
+    tags=["Customization"]
 )
 
 # Admin routes - requires admin role

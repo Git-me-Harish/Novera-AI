@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text
 from pydantic import BaseModel, Field
+from datetime import datetime
 from loguru import logger
 import json
 import time
@@ -428,7 +429,7 @@ def _export_to_markdown(conversation: Dict[str, Any]) -> str:
 @router.get("/chat/conversations/{conversation_id}/export")
 async def export_conversation(
     conversation_id: str,
-    format: str = Query("markdown", regex="^(markdown|json|pdf)$"),
+    format: str = Query("markdown", pattern="^(markdown|json|pdf)$"),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -765,5 +766,160 @@ async def list_gemini_models():
         }
     except Exception as e:
         return {'error': str(e)}
+    
+class SelectiveExportRequest(BaseModel):
+    """Request model for selective export."""
+    message_indices: List[int] = Field(..., description="Indices of messages to export")
+    format: str = Field("markdown", pattern="^(markdown|json|pdf)$")
+
+
+@router.post("/chat/conversations/{conversation_id}/export-selected")
+async def export_selected_messages(
+    conversation_id: str,
+    request: SelectiveExportRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Export selected messages from conversation.
+    
+    Supports PDF, Markdown, and JSON formats with professional formatting.
+    """
+    user_id = str(current_user.id)
+    
+    try:
+        # Get full conversation
+        conversation = await chat_service.get_conversation_history(
+            conversation_id=conversation_id,
+            user_id=user_id
+        )
+        
+        if 'error' in conversation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=conversation['error']
+            )
+        
+        # Filter messages by indices
+        all_messages = conversation.get('messages', [])
+        selected_messages = []
+        
+        for idx in sorted(request.message_indices):
+            if 0 <= idx < len(all_messages):
+                selected_messages.append(all_messages[idx])
+        
+        if not selected_messages:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid messages selected"
+            )
+        
+        # Create filtered conversation object
+        filtered_conversation = {
+            **conversation,
+            'messages': selected_messages,
+            'metadata': {
+                **conversation.get('metadata', {}),
+                'is_selective_export': True,
+                'total_messages_in_conversation': len(all_messages),
+                'exported_message_count': len(selected_messages),
+                'exported_indices': request.message_indices
+            }
+        }
+        
+        # Export based on format
+        if request.format == "json":
+            return filtered_conversation
+        
+        elif request.format == "markdown":
+            markdown = _export_selected_to_markdown(filtered_conversation)
+            return Response(
+                content=markdown,
+                media_type="text/markdown",
+                headers={
+                    "Content-Disposition": f"attachment; filename=conversation_selective_{conversation_id[:8]}.md"
+                }
+            )
+        
+        elif request.format == "pdf":
+            try:
+                from app.services.export.pdf_generator import pdf_generator
+                
+                # Generate PDF with selection info
+                pdf_buffer = pdf_generator.generate_conversation_pdf(filtered_conversation)
+                
+                return Response(
+                    content=pdf_buffer.read(),
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=conversation_selective_{conversation_id[:8]}.pdf"
+                    }
+                )
+            except Exception as e:
+                logger.error(f"PDF generation failed: {str(e)}", exc_info=True)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"PDF generation failed: {str(e)}"
+                )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in selective export: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
+def _export_selected_to_markdown(conversation: Dict[str, Any]) -> str:
+    """Convert selected messages to markdown format."""
+    metadata = conversation.get('metadata', {})
+    
+    lines = [
+        f"# Selective Conversation Export",
+        f"",
+        f"**Conversation ID:** {conversation['id']}",
+        f"**Created:** {conversation['created_at']}",
+        f"**Exported:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"",
+        f"**Selection:** {metadata.get('exported_message_count', 0)} of {metadata.get('total_messages_in_conversation', 0)} messages",
+        f"",
+        f"---",
+        f"",
+        f"## Selected Messages",
+        f"",
+    ]
+    
+    for idx, msg in enumerate(conversation['messages'], 1):
+        role = "**User**" if msg['role'] == 'user' else "**AI Assistant**"
+        timestamp = msg.get('timestamp', '')
+        
+        lines.append(f"### Message {idx}: {role}")
+        if timestamp:
+            try:
+                dt = datetime.fromisoformat(timestamp)
+                lines.append(f"*{dt.strftime('%I:%M %p')}*")
+            except Exception:
+                lines.append(f"*{timestamp}*")
+        lines.append(f"")
+        lines.append(msg['content'])
+        lines.append(f"")
+        
+        if msg['role'] == 'assistant':
+            msg_metadata = msg.get('metadata', {})
+            sources = msg_metadata.get('sources', [])
+            
+            if sources:
+                lines.append(f"**Sources:**")
+                for source in sources:
+                    doc_name = source.get('document', 'Unknown')
+                    page = source.get('page', 'N/A')
+                    lines.append(f"- {doc_name} (Page {page})")
+                lines.append(f"")
+        
+        lines.append(f"---")
+        lines.append(f"")
+    
+    return "\n".join(lines)
 
 __all__ = ['router']

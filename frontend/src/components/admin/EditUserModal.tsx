@@ -34,31 +34,32 @@ export default function EditUserModal({ user, onClose, onSuccess }: EditUserModa
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg max-w-md w-full p-6">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+      <div className="bg-white rounded-lg sm:rounded-xl max-w-md w-full p-4 sm:p-6 max-h-[95vh] overflow-y-auto scroll-smooth-touch">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-gray-900">Edit User</h2>
+        <div className="flex items-center justify-between mb-4 sm:mb-6">
+          <h2 className="text-lg sm:text-xl font-bold text-gray-900">Edit User</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600"
+            className="text-gray-400 hover:text-gray-600 p-2 -mr-2 min-touch-target"
+            aria-label="Close"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* User Info */}
-        <div className="mb-6 p-4 bg-gray-50 rounded-lg">
-          <p className="text-sm text-gray-600">Email</p>
-          <p className="font-medium text-gray-900">{user.email}</p>
-          <p className="text-sm text-gray-600 mt-2">Username</p>
-          <p className="font-medium text-gray-900">{user.username}</p>
+        <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-gray-50 rounded-lg">
+          <p className="text-xs sm:text-sm text-gray-600">Email</p>
+          <p className="font-medium text-gray-900 text-sm sm:text-base truncate">{user.email}</p>
+          <p className="text-xs sm:text-sm text-gray-600 mt-2">Username</p>
+          <p className="font-medium text-gray-900 text-sm sm:text-base truncate">{user.username}</p>
         </div>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800">
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs sm:text-sm text-red-800 break-words">
               {error}
             </div>
           )}
@@ -71,7 +72,7 @@ export default function EditUserModal({ user, onClose, onSuccess }: EditUserModa
               type="text"
               value={formData.full_name}
               onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm sm:text-base"
               placeholder="John Doe"
             />
           </div>
@@ -81,11 +82,11 @@ export default function EditUserModal({ user, onClose, onSuccess }: EditUserModa
               Role
             </label>
             <div className="relative">
-              <Shield className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <Shield className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 sm:w-5 sm:h-5 text-gray-400 pointer-events-none" />
               <select
                 value={formData.role}
                 onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                className="w-full pl-10 sm:pl-11 pr-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm sm:text-base appearance-none bg-white"
               >
                 <option value="user">User</option>
                 <option value="admin">Admin</option>
@@ -93,7 +94,7 @@ export default function EditUserModal({ user, onClose, onSuccess }: EditUserModa
             </div>
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-2 pt-2">
             <div className="flex items-center">
               <input
                 type="checkbox"
@@ -122,18 +123,18 @@ export default function EditUserModal({ user, onClose, onSuccess }: EditUserModa
           </div>
 
           {/* Actions */}
-          <div className="flex gap-3 pt-4">
+          <div className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-3 pt-4">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+              className="w-full sm:flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm sm:text-base font-medium min-touch-target"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={loading}
-              className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center justify-center"
+              className="w-full sm:flex-1 px-4 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 flex items-center justify-center text-sm sm:text-base font-medium min-touch-target"
             >
               {loading ? (
                 <>

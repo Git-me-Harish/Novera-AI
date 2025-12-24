@@ -2,6 +2,7 @@
  * API Service for communicating with the backend
  */
 import axios, { AxiosInstance } from 'axios';
+import type { Customization, CustomizationUpdateRequest } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const API_VERSION = '/api/v1';
@@ -662,6 +663,71 @@ class ApiService {
       
       throw new Error(errorMessage);
     }
+  }
+
+  // ============================================================================
+  // CUSTOMIZATION API
+  // ============================================================================
+
+  async getCurrentCustomization(): Promise<Customization> {
+    const response = await this.api.get('/customization/current');
+    return response.data;
+  }
+
+  async getAdminCustomization(organizationName: string = 'default'): Promise<Customization> {
+    const response = await this.api.get('/admin/customization', {
+      params: { organization_name: organizationName }
+    });
+    return response.data;
+  }
+
+  async updateCustomization(
+    data: CustomizationUpdateRequest,
+    organizationName: string = 'default'
+  ): Promise<Customization> {
+    const response = await this.api.put('/admin/customization', data, {
+      params: { organization_name: organizationName }
+    });
+    return response.data;
+  }
+
+  async uploadLogo(
+    file: File,
+    logoType: 'light' | 'dark' | 'favicon' = 'light',
+    organizationName: string = 'default'
+  ): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await this.api.post('/admin/customization/logo', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      params: {
+        organization_name: organizationName,
+        logo_type: logoType
+      }
+    });
+    return response.data;
+  }
+
+  async deleteLogo(
+    logoType: 'light' | 'dark' | 'favicon' = 'light',
+    organizationName: string = 'default'
+  ): Promise<void> {
+    await this.api.delete('/admin/customization/logo', {
+      params: {
+        logo_type: logoType,
+        organization_name: organizationName
+      }
+    });
+  }
+
+  async resetCustomization(organizationName: string = 'default'): Promise<any> {
+    const response = await this.api.post('/admin/customization/reset', null, {
+      params: { organization_name: organizationName }
+    });
+    return response.data;
   }
 }
 

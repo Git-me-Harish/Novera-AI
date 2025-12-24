@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { Download, FileText, FileJson, FileType, Loader2 } from 'lucide-react';
+import { Download, FileText, FileJson, FileType, Loader2, CheckSquare } from 'lucide-react';
 import { toast } from '../../utils/toast';
 
 interface ExportButtonProps {
   conversationId: string;
+  onSelectiveExport?: () => void; // New prop
 }
 
-export default function ExportButton({ conversationId }: ExportButtonProps) {
+export default function ExportButton({ conversationId, onSelectiveExport }: ExportButtonProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
 
@@ -31,12 +32,10 @@ export default function ExportButton({ conversationId }: ExportButtonProps) {
         throw new Error('Export failed');
       }
 
-      // Get filename from header or create default
       const contentDisposition = response.headers.get('Content-Disposition');
       const filenameMatch = contentDisposition?.match(/filename="?(.+)"?/);
       const filename = filenameMatch?.[1] || `conversation_${conversationId.slice(0, 8)}.${format}`;
 
-      // Download file
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -47,11 +46,9 @@ export default function ExportButton({ conversationId }: ExportButtonProps) {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      // Use your toast manager
       toast.success(`Successfully exported as ${format.toUpperCase()}`);
     } catch (error) {
       console.error('Export error:', error);
-      // Use your toast manager for errors
       toast.error('Failed to export conversation. Please try again.');
     } finally {
       setIsExporting(false);
@@ -77,14 +74,34 @@ export default function ExportButton({ conversationId }: ExportButtonProps) {
       {/* Dropdown Menu */}
       {showMenu && (
         <>
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 z-10"
-            onClick={() => setShowMenu(false)}
-          />
+          <div className="fixed inset-0 z-10" onClick={() => setShowMenu(false)} />
 
-          {/* Menu */}
-          <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+          <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+            {/* Selective Export Option */}
+            {onSelectiveExport && (
+              <>
+                <button
+                  onClick={() => {
+                    setShowMenu(false);
+                    onSelectiveExport();
+                  }}
+                  disabled={isExporting}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-purple-50 transition-colors disabled:opacity-50"
+                >
+                  <CheckSquare className="w-4 h-4 text-purple-600" />
+                  <div className="text-left">
+                    <p className="font-medium">Select Messages</p>
+                    <p className="text-xs text-gray-500">Choose specific messages</p>
+                  </div>
+                </button>
+                <div className="border-t border-gray-200 my-1">
+                  <div className="px-4 py-2">
+                    <p className="text-xs font-medium text-gray-500 uppercase">Export All</p>
+                  </div>
+                </div>
+              </>
+            )}
+
             <button
               onClick={() => handleExport('pdf')}
               disabled={isExporting}

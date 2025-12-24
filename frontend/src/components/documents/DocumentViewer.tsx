@@ -54,34 +54,35 @@ export default function DocumentViewer({ documentId, onClose }: DocumentViewerPr
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black bg-opacity-50">
-      <div className="flex items-center justify-center min-h-screen px-4 py-8">
-        <div className="relative bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 backdrop-blur-sm">
+      <div className="flex items-center justify-center min-h-screen p-2 sm:p-4 md:p-8">
+        <div className="relative bg-white rounded-lg sm:rounded-xl shadow-xl w-full max-w-6xl max-h-[95vh] sm:max-h-[90vh] flex flex-col">
           {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-gray-900">
+          <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200 flex-shrink-0">
+            <div className="flex-1 min-w-0 pr-2">
+              <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate">
                 {docInfo?.original_filename || 'Document Preview'}
               </h3>
               {docInfo && (
-                <p className="text-sm text-gray-600 mt-1">
+                <p className="text-xs sm:text-sm text-gray-600 mt-0.5 sm:mt-1 truncate">
                   {docInfo.doc_type} | {docInfo.file_size_mb} MB | {docInfo.total_pages} pages | {docInfo.total_chunks} chunks
                 </p>
               )}
             </div>
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center gap-2 flex-shrink-0">
               {docInfo && (
                 <button
                   onClick={handleDownload}
-                  className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                  className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors min-touch-target"
                 >
-                  <Download className="w-4 h-4 mr-2" />
-                  Download
+                  <Download className="w-4 h-4" />
+                  <span className="hidden xs:inline">Download</span>
                 </button>
               )}
               <button
                 onClick={onClose}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
+                className="text-gray-400 hover:text-gray-600 transition-colors p-2 -mr-2 min-touch-target"
+                aria-label="Close"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -89,51 +90,51 @@ export default function DocumentViewer({ documentId, onClose }: DocumentViewerPr
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-6 scroll-smooth-touch">
             {loading ? (
               <div className="flex items-center justify-center h-64">
                 <Loader2 className="w-8 h-8 text-primary-500 animate-spin" />
               </div>
             ) : error ? (
-              <div className="flex flex-col items-center justify-center h-64 text-center">
-                <AlertCircle className="w-16 h-16 text-red-400 mb-4" />
-                <p className="text-red-600">{error}</p>
+              <div className="flex flex-col items-center justify-center h-64 text-center px-4">
+                <AlertCircle className="w-12 h-12 sm:w-16 sm:h-16 text-red-400 mb-4" />
+                <p className="text-sm sm:text-base text-red-600">{error}</p>
               </div>
             ) : docInfo?.preview_type === 'text' && preview ? (
-              <div className="bg-gray-50 rounded-lg p-6 border border-gray-200">
-                <pre className="text-sm text-gray-800 whitespace-pre-wrap font-mono">
+              <div className="bg-gray-50 rounded-lg p-3 sm:p-6 border border-gray-200">
+                <pre className="text-xs sm:text-sm text-gray-800 whitespace-pre-wrap font-mono break-words">
                   {preview.content}
                 </pre>
                 {preview.is_truncated && (
-                  <p className="mt-4 text-sm text-gray-600 italic">
+                  <p className="mt-4 text-xs sm:text-sm text-gray-600 italic">
                     Preview truncated. Download the full document to see all content.
                   </p>
                 )}
               </div>
             ) : docInfo?.preview_type === 'pdf' ? (
-              <div className="flex flex-col items-center justify-center h-64 text-center">
-                <FileText className="w-16 h-16 text-gray-300 mb-4" />
-                <p className="text-gray-700 mb-4">PDF Preview</p>
-                <p className="text-sm text-gray-600 mb-6">
+              <div className="flex flex-col items-center justify-center h-64 text-center px-4">
+                <FileText className="w-12 h-12 sm:w-16 sm:h-16 text-gray-300 mb-4" />
+                <p className="text-sm sm:text-base text-gray-700 mb-4">PDF Preview</p>
+                <p className="text-xs sm:text-sm text-gray-600 mb-6">
                   PDF preview not available. Download the document to view it.
                 </p>
                 <button
                   onClick={handleDownload}
-                  className="flex items-center px-4 py-2 text-white bg-primary-600 rounded-lg hover:bg-primary-700 transition-colors"
+                  className="flex items-center gap-2 px-4 py-2.5 text-white bg-primary-600 rounded-lg hover:bg-primary-700 transition-colors text-sm sm:text-base min-touch-target"
                 >
-                  <Download className="w-4 h-4 mr-2" />
+                  <Download className="w-4 h-4" />
                   Download PDF
                 </button>
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center h-64 text-center">
-                <FileText className="w-16 h-16 text-gray-300 mb-4" />
-                <p className="text-gray-700 mb-4">Preview not available for this file type</p>
+              <div className="flex flex-col items-center justify-center h-64 text-center px-4">
+                <FileText className="w-12 h-12 sm:w-16 sm:h-16 text-gray-300 mb-4" />
+                <p className="text-sm sm:text-base text-gray-700 mb-4">Preview not available for this file type</p>
                 <button
                   onClick={handleDownload}
-                  className="flex items-center px-4 py-2 text-white bg-primary-600 rounded-lg hover:bg-primary-700 transition-colors"
+                  className="flex items-center gap-2 px-4 py-2.5 text-white bg-primary-600 rounded-lg hover:bg-primary-700 transition-colors text-sm sm:text-base min-touch-target"
                 >
-                  <Download className="w-4 h-4 mr-2" />
+                  <Download className="w-4 h-4" />
                   Download Document
                 </button>
               </div>

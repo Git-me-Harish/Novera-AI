@@ -123,14 +123,14 @@ export default function DocumentEditorPage() {
   if (error || !docInfo) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-center px-4">
-        <AlertCircle className="w-16 h-16 text-red-400 mb-4" />
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">Failed to Load Document</h2>
-        <p className="text-gray-600 mb-6">{error}</p>
+        <AlertCircle className="w-12 h-12 sm:w-16 sm:h-16 text-red-400 mb-4" />
+        <h2 className="text-lg sm:text-xl font-semibold text-gray-900 mb-2">Failed to Load Document</h2>
+        <p className="text-sm sm:text-base text-gray-600 mb-6">{error}</p>
         <button
           onClick={() => navigate('/documents')}
-          className="flex items-center px-4 py-2 text-white bg-primary-600 rounded-lg hover:bg-primary-700 transition-colors"
+          className="flex items-center gap-2 px-4 py-2.5 text-white bg-primary-600 rounded-lg hover:bg-primary-700 transition-colors min-touch-target"
         >
-          <ArrowLeft className="w-4 h-4 mr-2" />
+          <ArrowLeft className="w-4 h-4" />
           Back to Documents
         </button>
       </div>
@@ -140,95 +140,105 @@ export default function DocumentEditorPage() {
   return (
     <div className="h-full flex flex-col bg-gray-50">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-4">
+      <div className="bg-white border-b border-gray-200 px-3 sm:px-6 py-3 sm:py-4 flex-shrink-0">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4 mb-3 sm:mb-4">
+          <div className="flex items-start gap-2 sm:gap-4 min-w-0 flex-1">
             <button
               onClick={() => navigate('/documents')}
-              className="text-gray-600 hover:text-gray-900 transition-colors"
+              className="p-2 -ml-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors min-touch-target flex-shrink-0"
+              aria-label="Back to documents"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg sm:text-2xl font-bold text-gray-900 break-words">
                 {docInfo.original_filename}
               </h1>
-              <p className="text-sm text-gray-600 mt-1">
-                {docInfo.doc_type} {docInfo.department && `| ${docInfo.department}`} | 
-                {docInfo.file_size_mb} MB | {docInfo.total_pages} pages
+              <p className="text-xs sm:text-sm text-gray-600 mt-1 flex flex-wrap gap-x-2 gap-y-1">
+                <span>{docInfo.doc_type}</span>
+                {docInfo.department && (
+                  <>
+                    <span className="hidden sm:inline">|</span>
+                    <span>{docInfo.department}</span>
+                  </>
+                )}
+                <span className="hidden sm:inline">|</span>
+                <span>{docInfo.file_size_mb} MB</span>
+                <span className="hidden sm:inline">|</span>
+                <span>{docInfo.total_pages} pages</span>
               </p>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
             <button
               onClick={() => setShowDocViewer(true)}
-              className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+              className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors min-touch-target"
             >
-              <Eye className="w-4 h-4 mr-2" />
-              Preview
+              <Eye className="w-4 h-4" />
+              <span className="hidden xs:inline">Preview</span>
             </button>
             <button
               onClick={() => setShowMetadataEditor(true)}
-              className="flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+              className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors min-touch-target"
             >
-              <Edit className="w-4 h-4 mr-2" />
-              Metadata
+              <Edit className="w-4 h-4" />
+              <span className="hidden xs:inline">Metadata</span>
             </button>
           </div>
         </div>
 
         {/* Access Level Info */}
         {!isAdmin && (
-          <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg flex items-center gap-2">
-            <Info className="w-5 h-5 text-yellow-600" />
-            <p className="text-sm text-yellow-800">
+          <div className="mb-3 sm:mb-4 p-2.5 sm:p-3 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2">
+            <Info className="w-4 h-4 sm:w-5 sm:h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+            <p className="text-xs sm:text-sm text-yellow-800">
               You are viewing this document in read-only mode. Contact an administrator to make edits.
             </p>
           </div>
         )}
 
-        {/* Statistics */}
+        {/* Statistics - Responsive Grid */}
         {stats && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div className="bg-gray-50 rounded-lg p-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-4">
+            <div className="bg-gray-50 rounded-lg p-2.5 sm:p-3">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-gray-600">Total Chunks</span>
-                <FileText className="w-4 h-4 text-gray-400" />
+                <span className="text-xs text-gray-600 truncate">Total Chunks</span>
+                <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400 flex-shrink-0" />
               </div>
-              <p className="text-xl font-bold text-gray-900">{stats.total_chunks}</p>
+              <p className="text-lg sm:text-xl font-bold text-gray-900">{stats.total_chunks}</p>
             </div>
 
-            <div className="bg-green-50 rounded-lg p-3">
+            <div className="bg-green-50 rounded-lg p-2.5 sm:p-3">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-green-600">Edited</span>
-                <BarChart3 className="w-4 h-4 text-green-500" />
+                <span className="text-xs text-green-600 truncate">Edited</span>
+                <BarChart3 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-green-500 flex-shrink-0" />
               </div>
-              <p className="text-xl font-bold text-green-700">{stats.edited_chunks}</p>
+              <p className="text-lg sm:text-xl font-bold text-green-700">{stats.edited_chunks}</p>
             </div>
 
-            <div className="bg-blue-50 rounded-lg p-3">
+            <div className="bg-blue-50 rounded-lg p-2.5 sm:p-3">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-blue-600">Original</span>
-                <FileText className="w-4 h-4 text-blue-500" />
+                <span className="text-xs text-blue-600 truncate">Original</span>
+                <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-500 flex-shrink-0" />
               </div>
-              <p className="text-xl font-bold text-blue-700">{stats.unedited_chunks}</p>
+              <p className="text-lg sm:text-xl font-bold text-blue-700">{stats.unedited_chunks}</p>
             </div>
 
-            <div className="bg-purple-50 rounded-lg p-3">
+            <div className="bg-purple-50 rounded-lg p-2.5 sm:p-3">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-purple-600">Total Edits</span>
-                <Edit className="w-4 h-4 text-purple-500" />
+                <span className="text-xs text-purple-600 truncate">Total Edits</span>
+                <Edit className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-purple-500 flex-shrink-0" />
               </div>
-              <p className="text-xl font-bold text-purple-700">{stats.total_edits}</p>
+              <p className="text-lg sm:text-xl font-bold text-purple-700">{stats.total_edits}</p>
             </div>
 
-            <div className="bg-yellow-50 rounded-lg p-3">
+            <div className="bg-yellow-50 rounded-lg p-2.5 sm:p-3 col-span-2 sm:col-span-1">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-yellow-600">Edited %</span>
-                <BarChart3 className="w-4 h-4 text-yellow-500" />
+                <span className="text-xs text-yellow-600 truncate">Edited %</span>
+                <BarChart3 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-yellow-500 flex-shrink-0" />
               </div>
-              <p className="text-xl font-bold text-yellow-700">{stats.edit_percentage}%</p>
+              <p className="text-lg sm:text-xl font-bold text-yellow-700">{stats.edit_percentage}%</p>
             </div>
           </div>
         )}

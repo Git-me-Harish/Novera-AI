@@ -2,6 +2,48 @@
 @tailwind components;
 @tailwind utilities;
 
+/* CSS Variables for Dynamic Theming */
+:root {
+  --color-primary: #0ea5e9;
+  --color-secondary: #d946ef;
+  --color-accent: #8b5cf6;
+  --color-background: #ffffff;
+  --color-sidebar: #ffffff;
+  --color-text-primary: #111827;
+  --color-text-secondary: #6b7280;
+  --color-button-primary: #0ea5e9;
+  --color-button-text: #ffffff;
+  --color-primary-rgb: 14, 165, 233;
+}
+
+/* Base Styles */
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  body {
+    @apply antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Prevent text size adjustment on orientation change */
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* Safe area for notched devices */
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
 /* Enhanced Markdown Styles for Chat */
 .prose {
   max-width: none;
@@ -26,7 +68,7 @@
 
 .prose strong {
   font-weight: 600;
-  color: #111827;
+  color: var(--color-text-primary);
 }
 
 .prose code {
@@ -52,22 +94,43 @@
   margin-bottom: 0.5rem;
 }
 
-/* Custom scrollbar for chat */
-.overflow-y-auto::-webkit-scrollbar {
-  width: 6px;
+/* Responsive Prose Tables */
+.prose table {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
-.overflow-y-auto::-webkit-scrollbar-track {
-  background: #f1f1f1;
+/* Custom scrollbar (desktop only) */
+@media (min-width: 768px) {
+  .overflow-y-auto::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .overflow-y-auto::-webkit-scrollbar-track {
+    background: #f1f1f1;
+  }
+
+  .overflow-y-auto::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+  }
+
+  .overflow-y-auto::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
 }
 
-.overflow-y-auto::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 3px;
-}
-
-.overflow-y-auto::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+/* Mobile: Hide scrollbar but keep functionality */
+@media (max-width: 767px) {
+  .overflow-y-auto::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .overflow-y-auto {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
 }
 
 /* Smooth animations */
@@ -85,6 +148,7 @@
 .animate-in {
   animation: slideIn 0.3s ease-out;
 }
+
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -99,6 +163,7 @@
 .animate-fadeIn {
   animation: fadeIn 0.3s ease-out;
 }
+
 @keyframes slide-up {
   from {
     transform: translateY(100%);
@@ -112,4 +177,98 @@
 
 .animate-slide-up {
   animation: slide-up 0.3s ease-out;
+}
+
+/* Touch-friendly utilities */
+@layer utilities {
+  .tap-highlight-transparent {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .touch-manipulation {
+    touch-action: manipulation;
+  }
+
+  /* Minimum touch target size (44x44px for accessibility) */
+  .min-touch-target {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Prevent text selection on interactive elements */
+  .no-select {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+
+  /* Scrollable with momentum (iOS) */
+  .scroll-smooth-touch {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+  }
+}
+
+/* Mobile-specific styles */
+@media (max-width: 767px) {
+  /* Adjust font sizes for mobile */
+  .prose {
+    font-size: 0.9375rem;
+  }
+
+  /* Reduce padding on mobile */
+  .mobile-compact {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  /* Full width modals on mobile */
+  .modal-mobile-full {
+    margin: 0;
+    min-height: 100vh;
+    border-radius: 0;
+  }
+}
+
+/* Tablet-specific styles */
+@media (min-width: 768px) and (max-width: 1023px) {
+  /* Optimize for tablet */
+  .tablet-optimized {
+    max-width: 90%;
+  }
+}
+
+/* Prevent zoom on input focus (iOS) */
+@media (max-width: 767px) {
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="search"],
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Loading skeletons */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+.skeleton {
+  animation: shimmer 2s infinite linear;
+  background: linear-gradient(
+    to right,
+    #f0f0f0 0%,
+    #e0e0e0 50%,
+    #f0f0f0 100%
+  );
+  background-size: 1000px 100%;
 }
