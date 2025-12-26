@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Edit, FileText, CheckCircle, Search, Filter, X } from 'lucide-react';
+import { Edit, FileText, CheckCircle, Search, Filter, X, Sparkles } from 'lucide-react';
 import { ChunkData } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -14,9 +14,25 @@ export default function ChunkList({ chunks, onEditChunk }: ChunkListProps) {
   const [filterEdited, setFilterEdited] = useState<'all' | 'edited' | 'original'>('all');
   const [showFilters, setShowFilters] = useState(false);
 
+  // Helper function to get display title
+  const getChunkTitle = (chunk: ChunkData): string => {
+    if (chunk.title) {
+      return chunk.title;
+    }
+    
+    // Fallback: Use section title
+    if (chunk.section_title) {
+      return chunk.section_title;
+    }
+    
+    // Last resort: Generic title
+    return `Chunk #${chunk.chunk_index + 1}`;
+  };
+
   const filteredChunks = chunks.filter(chunk => {
+    const title = getChunkTitle(chunk);
     const matchesSearch = chunk.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         (chunk.section_title?.toLowerCase() || '').includes(searchQuery.toLowerCase());
+                         title.toLowerCase().includes(searchQuery.toLowerCase());
     
     const matchesFilter = filterEdited === 'all' ? true :
                          filterEdited === 'edited' ? chunk.is_edited :
@@ -136,65 +152,70 @@ export default function ChunkList({ chunks, onEditChunk }: ChunkListProps) {
           </div>
         ) : (
           <div className="p-3 sm:p-6 space-y-3">
-            {filteredChunks.map((chunk) => (
-              <div
-                key={chunk.id}
-                className="bg-white border border-gray-200 rounded-lg hover:shadow-md transition-shadow overflow-hidden"
-              >
-                <div className="p-3 sm:p-4">
-                  {/* Chunk Header */}
-                  <div className="flex items-start justify-between gap-2 mb-2 sm:mb-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <h3 className="text-sm sm:text-base font-semibold text-gray-900">
-                          Chunk #{chunk.chunk_index + 1}
-                        </h3>
-                        {chunk.is_edited && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                            <CheckCircle className="w-3 h-3 mr-1" />
-                            Edited ({chunk.edit_count}x)
-                          </span>
-                        )}
+            {filteredChunks.map((chunk) => {
+              const displayTitle = getChunkTitle(chunk);
+              const hasAITitle = !!chunk.title;
+              
+              return (
+                <div
+                  key={chunk.id}
+                  className="bg-white border border-gray-200 rounded-lg hover:shadow-md transition-shadow overflow-hidden"
+                >
+                  <div className="p-3 sm:p-4">
+                    {/* Chunk Header */}
+                    <div className="flex items-start justify-between gap-2 mb-2 sm:mb-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start gap-2 mb-1">
+                          {hasAITitle && (
+                            <Sparkles className="w-4 h-4 text-purple-500 flex-shrink-0 mt-0.5" title="AI-generated title" />
+                          )}
+                          <h3 className="text-sm sm:text-base font-semibold text-gray-900 break-words flex-1">
+                            {displayTitle}
+                          </h3>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs text-gray-500">#{chunk.chunk_index + 1}</span>
+                          {chunk.is_edited && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
+                              <CheckCircle className="w-3 h-3 mr-1" />
+                              Edited ({chunk.edit_count}x)
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 mt-1">
+                          <span>Type: {chunk.chunk_type}</span>
+                          <span className="hidden xs:inline">•</span>
+                          <span>Pages: {chunk.page_numbers.join(', ')}</span>
+                        </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
-                        <span>Type: {chunk.chunk_type}</span>
-                        <span className="hidden xs:inline">•</span>
-                        <span>Pages: {chunk.page_numbers.join(', ')}</span>
-                        {chunk.section_title && (
-                          <>
-                            <span className="hidden sm:inline">•</span>
-                            <span className="truncate max-w-[200px]">Section: {chunk.section_title}</span>
-                          </>
-                        )}
-                      </div>
+                      <button
+                        onClick={() => onEditChunk(chunk)}
+                        className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-medium text-primary-700 bg-primary-50 rounded-lg hover:bg-primary-100 transition-colors min-touch-target flex-shrink-0"
+                      >
+                        <Edit className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                        <span className="hidden xs:inline">{isAdmin ? 'Edit' : 'View'}</span>
+                      </button>
                     </div>
-                    <button
-                      onClick={() => onEditChunk(chunk)}
-                      className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-medium text-primary-700 bg-primary-50 rounded-lg hover:bg-primary-100 transition-colors min-touch-target flex-shrink-0"
-                    >
-                      <Edit className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                      <span className="hidden xs:inline">{isAdmin ? 'Edit' : 'View'}</span>
-                    </button>
-                  </div>
 
-                  {/* Chunk Preview */}
-                  <div className="bg-gray-50 rounded-lg p-2.5 sm:p-3 border border-gray-200">
-                    <p className="text-xs sm:text-sm text-gray-700 line-clamp-3 break-words">
-                      {chunk.content}
-                    </p>
-                  </div>
+                    {/* Chunk Preview */}
+                    <div className="bg-gray-50 rounded-lg p-2.5 sm:p-3 border border-gray-200">
+                      <p className="text-xs sm:text-sm text-gray-700 line-clamp-3 break-words">
+                        {chunk.content}
+                      </p>
+                    </div>
 
-                  {/* Chunk Stats */}
-                  <div className="mt-2 sm:mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-                    <span>Tokens: {chunk.token_count}</span>
-                    <span>Length: {chunk.content.length} chars</span>
-                    {chunk.edited_at && (
-                      <span className="hidden sm:inline">Last edited: {new Date(chunk.edited_at).toLocaleDateString()}</span>
-                    )}
+                    {/* Chunk Stats */}
+                    <div className="mt-2 sm:mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+                      <span>Tokens: {chunk.token_count}</span>
+                      <span>Length: {chunk.content.length} chars</span>
+                      {chunk.edited_at && (
+                        <span className="hidden sm:inline">Last edited: {new Date(chunk.edited_at).toLocaleDateString()}</span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

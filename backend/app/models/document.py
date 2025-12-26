@@ -115,6 +115,9 @@ class Chunk(Base):
     section_title = Column(String(512), nullable=True)
     preceding_context = Column(Text, nullable=True)
 
+    # AI-generated intelligent title
+    title = Column(String(200), nullable=True, index=True)
+
     # Embedding vector
     embedding = Column(Vector(1536), nullable=False)
 
@@ -164,6 +167,7 @@ class Chunk(Base):
             "chunk_type": self.chunk_type,
             "page_numbers": self.page_numbers,
             "section_title": self.section_title,
+            "title": self.title,
             "token_count": self.token_count,
             "metadata": self.chunk_metadata,
         }

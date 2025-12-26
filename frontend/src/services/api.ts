@@ -7,6 +7,11 @@ import type { Customization, CustomizationUpdateRequest } from '../types';
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const API_VERSION = '/api/v1';
 
+console.log('🔧 API Configuration:', {
+  baseURL: `${API_BASE_URL}${API_VERSION}`,
+  env: import.meta.env.MODE
+});
+
 // Types
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -153,6 +158,7 @@ export interface ChunkData {
   page_numbers: number[];
   section_title: string | null;
   token_count: number;
+  title: string | null;
   is_edited: boolean;
   edited_at: string | null;
   edited_by: string | null;
@@ -207,67 +213,136 @@ class ApiService {
         'Content-Type': 'application/json',
       },
       timeout: 60000,
+      withCredentials: true, // Important for CORS
     });
 
+    // Request interceptor
     this.api.interceptors.request.use(
       (config) => {
         const token = localStorage.getItem('access_token');
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
         }
+        
+        console.log('📤 API Request:', {
+          method: config.method?.toUpperCase(),
+          url: config.url,
+          baseURL: config.baseURL,
+          fullURL: `${config.baseURL}${config.url}`,
+          headers: {
+            ...config.headers,
+            Authorization: token ? 'Bearer ***' : 'None'
+          }
+        });
+        
         return config;
       },
-      (error) => Promise.reject(error)
-    );
-
-    this.api.interceptors.response.use(
-      (response) => response,
-      async (error) => {
-        const originalRequest = error.config;
-
-        if (error.response?.status === 422) {
-          console.error('Validation Error (422):', {
-            url: originalRequest.url,
-            method: originalRequest.method,
-            data: originalRequest.data,
-            errors: error.response.data.detail,
-          });
-        }
-
-        if (error.response?.status === 401 && !originalRequest._retry) {
-          originalRequest._retry = true;
-
-          try {
-            const refreshToken = localStorage.getItem('refresh_token');
-            if (refreshToken) {
-              const response = await axios.post(
-                `${API_BASE_URL}${API_VERSION}/auth/refresh`,
-                { refresh_token: refreshToken }
-              );
-
-              const { access_token } = response.data;
-              localStorage.setItem('access_token', access_token);
-
-              originalRequest.headers.Authorization = `Bearer ${access_token}`;
-              return this.api(originalRequest);
-            }
-          } catch (refreshError) {
-            localStorage.removeItem('access_token');
-            localStorage.removeItem('refresh_token');
-            window.location.href = '/login';
-            return Promise.reject(refreshError);
-          }
-        }
-
-        console.error('API Error:', error.response?.data || error.message);
+      (error) => {
+        console.error('❌ Request Error:', error);
         return Promise.reject(error);
       }
     );
+
+    // Response interceptor
+    this.api.interceptors.response.use(
+    (response) => {
+      console.log('✅ API Response:', {
+        status: response.status,
+        url: response.config.url,
+      });
+      return response;
+    },
+    async (error) => {
+      const originalRequest = error.config;
+
+      console.error('❌ API Error:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        url: originalRequest?.url,
+        method: originalRequest?.method,
+        hasToken: !!localStorage.getItem('access_token'),
+      });
+
+      // Handle authentication errors
+      if (error.response?.status === 401 && !originalRequest._retry) {
+        originalRequest._retry = true;
+
+        const refreshToken = localStorage.getItem('refresh_token');
+        
+        if (!refreshToken) {
+          console.error('No refresh token available, redirecting to login');
+          localStorage.clear();
+          window.location.href = '/login';
+          return Promise.reject(error);
+        }
+
+        try {
+          console.log('🔄 Attempting to refresh token...');
+          
+          const response = await axios.post(
+            `${API_BASE_URL}${API_VERSION}/auth/refresh`,
+            { refresh_token: refreshToken },
+            {
+              headers: {
+                'Content-Type': 'application/json',
+              }
+            }
+          );
+
+          const { access_token } = response.data;
+          
+          console.log('✅ Token refreshed successfully');
+          localStorage.setItem('access_token', access_token);
+
+          // Retry original request with new token
+          originalRequest.headers.Authorization = `Bearer ${access_token}`;
+          return this.api(originalRequest);
+          
+        } catch (refreshError: any) {
+          console.error('❌ Token refresh failed:', refreshError);
+          
+          // Clear tokens and redirect to login
+          localStorage.removeItem('access_token');
+          localStorage.removeItem('refresh_token');
+          
+          // Don't redirect if already on login page
+          if (!window.location.pathname.includes('/login')) {
+            window.location.href = '/login';
+          }
+          
+          return Promise.reject(refreshError);
+        }
+      }
+
+      // Handle validation errors
+      if (error.response?.status === 422) {
+        console.error('Validation Error (422):', {
+          url: originalRequest.url,
+          method: originalRequest.method,
+          data: originalRequest.data,
+          errors: error.response.data.detail,
+        });
+      }
+
+      // Handle network errors
+      if (error.message === 'Network Error') {
+        console.error('🚫 Network Error - Possible CORS issue or server not running');
+      }
+
+      return Promise.reject(error);
+    }
+  );
   }
 
   async healthCheck() {
-    const response = await this.api.get('/health');
-    return response.data;
+    try {
+      const response = await this.api.get('/health');
+      console.log('💚 Health check passed:', response.data);
+      return response.data;
+    } catch (error) {
+      console.error('💔 Health check failed:', error);
+      throw error;
+    }
   }
 
   async sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
@@ -443,7 +518,7 @@ class ApiService {
     });
   }
 
-   async forgotPassword(email: string): Promise<any> {
+  async forgotPassword(email: string): Promise<any> {
     try {
       const response = await this.api.post('/auth/forgot-password', {
         email,
@@ -726,6 +801,23 @@ class ApiService {
   async resetCustomization(organizationName: string = 'default'): Promise<any> {
     const response = await this.api.post('/admin/customization/reset', null, {
       params: { organization_name: organizationName }
+    });
+    return response.data;
+  }
+
+  async generateChunkTitle(chunkId: string): Promise<any> {
+    const response = await this.api.post(`/chunks/${chunkId}/generate-title`);
+    return response.data;
+  }
+
+  async generateAllTitles(documentId: string): Promise<any> {
+    const response = await this.api.post(`/documents/${documentId}/generate-all-titles`);
+    return response.data;
+  }
+
+  async updateChunkTitle(chunkId: string, title: string): Promise<any> {
+    const response = await this.api.put(`/chunks/${chunkId}/title`, null, {
+      params: { title }
     });
     return response.data;
   }

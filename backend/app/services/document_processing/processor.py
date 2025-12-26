@@ -4,7 +4,7 @@ Coordinates extraction, chunking, embedding, and storage operations.
 """
 from pathlib import Path
 from typing import Dict, Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -14,6 +14,7 @@ from app.models.document import Document, Chunk as ChunkModel
 from app.services.document_processing.text_extractor import text_extractor
 from app.services.document_processing.chunker import semantic_chunker
 from app.services.embedding.embedding_service import embedding_service
+from app.services.generation.title_generator import title_generator
 
 
 class DocumentProcessor:
@@ -79,8 +80,8 @@ class DocumentProcessor:
                 document_title=document.filename
             )
             
-            # Step 4: Store chunks in database
-            logger.info("Step 4: Storing chunks in database")
+            # Step 4: Store chunks in database WITH TITLE GENERATION
+            logger.info("Step 4: Storing chunks with embeddings and generating titles")
             await self._store_chunks(
                 document_id,
                 chunks_with_embeddings,
@@ -139,7 +140,7 @@ class DocumentProcessor:
         db: AsyncSession
     ) -> None:
         """
-        Store chunks with embeddings in database.
+        Store chunks with embeddings and AI-generated titles in database.
         
         Args:
             document_id: Parent document ID
@@ -149,7 +150,23 @@ class DocumentProcessor:
         chunk_models = []
         
         for chunk_data in chunks:
+            # Generate AI title for this chunk
+            title = None
+            try:
+                title = await title_generator.generate_title(
+                    content=chunk_data['content'],
+                    chunk_type=chunk_data['chunk_type'],
+                    section_title=chunk_data.get('section_title'),
+                    page_numbers=chunk_data.get('page_numbers'),
+                    chunk_index=chunk_data['chunk_index']
+                )
+                logger.debug(f"Generated title for chunk {chunk_data['chunk_index']}: '{title}'")
+            except Exception as e:
+                logger.warning(f"Title generation failed for chunk {chunk_data['chunk_index']}: {e}")
+                title = None  # Will use fallback in frontend
+            
             chunk_model = ChunkModel(
+                id=uuid4(),
                 document_id=document_id,
                 chunk_index=chunk_data['chunk_index'],
                 content=chunk_data['content'],
@@ -158,8 +175,9 @@ class DocumentProcessor:
                 chunk_type=chunk_data['chunk_type'],
                 page_numbers=chunk_data['page_numbers'],
                 section_title=chunk_data.get('section_title'),
+                title=title,  # NEW: AI-generated title
                 embedding=chunk_data['embedding'],
-                metadata=chunk_data.get('metadata', {})
+                chunk_metadata=chunk_data.get('metadata', {})
             )
             
             chunk_models.append(chunk_model)
@@ -168,7 +186,8 @@ class DocumentProcessor:
         db.add_all(chunk_models)
         await db.commit()
         
-        logger.info(f"Stored {len(chunk_models)} chunks for document {document_id}")
+        titles_generated = sum(1 for c in chunk_models if c.title)
+        logger.info(f"Stored {len(chunk_models)} chunks for document {document_id}, generated {titles_generated} titles")
     
     async def reprocess_document(
         self,

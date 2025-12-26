@@ -6,6 +6,7 @@ from typing import List, Optional, Union
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+import json
 
 class Settings(BaseSettings):
     """Application settings with validation and type safety."""
@@ -147,18 +148,39 @@ class Settings(BaseSettings):
     log_rotation: str = "10 MB"
     log_retention: str = "30 days"
     
-    # CORS Settings
-    cors_origins: Union[str, List[str]] = "http://localhost:3000,http://localhost:5173"
+    # CORS Settings - FIXED FOR DOCKER
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+    )
     cors_allow_credentials: bool = True
-    
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v):
-        """Parse CORS origins from string or list."""
-        if isinstance(v, str):
-            v = v.strip('[]"\'')
-            return [origin.strip() for origin in v.split(",")]
-        return v
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Parse CORS origins string into list."""
+        if isinstance(self.cors_origins, str):
+            # Remove any brackets, quotes, and whitespace
+            cleaned = self.cors_origins.strip().strip('[]"\'')
+            # Split by comma and clean each origin
+            origins = [origin.strip().strip('"\'') for origin in cleaned.split(",") if origin.strip()]
+            
+            # Add default localhost variations if not present
+            default_origins = [
+                "http://localhost:3000",
+                "http://localhost:5173",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:5173"
+            ]
+            
+            # Combine and deduplicate
+            all_origins = list(set(origins + default_origins))
+            return all_origins
+        
+        return [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173"
+        ]
     
     @field_validator("gemini_api_key", "cohere_api_key", "secret_key")
     @classmethod

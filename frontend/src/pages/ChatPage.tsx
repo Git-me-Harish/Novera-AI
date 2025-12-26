@@ -9,16 +9,26 @@ import ExportButton from '../components/chat/ExportButton';
 import AnalyticsModal from '../components/chat/AnalyticsModal';
 import { useConversation } from '../contexts/ConversationContext';
 import SelectiveExportModal from '../components/chat/SelectiveExportModal';
+import { useCustomization } from '../contexts/CustomizationContext';
 import { MessageBubbleSkeleton, SourceCardSkeleton } from '../components/common/Skeletons';
 
 // Memoize components for better performance
 const MemoizedMessageBubble = memo(MessageBubble);
 const MemoizedSourceCard = memo(SourceCard);
 
+// Helper function to get full image URL
+function getFullImageUrl(path: string | null): string {
+  if (!path) return '';
+  if (path.startsWith('http')) return path;
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+  return `${API_BASE}${path}`;
+}
+
 export default function ChatPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
   const { setCurrentConversationId } = useConversation();
+  const { customization } = useCustomization();
   
   // ALL STATE DECLARATIONS FIRST
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -37,9 +47,22 @@ export default function ChatPage() {
   // NEW: Mobile sources drawer state
   const [showSourcesDrawer, setShowSourcesDrawer] = useState(false);
   
+  // NEW: Dark mode detection state
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  
   // REFS
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Detect dark mode
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    setIsDarkMode(mediaQuery.matches);
+
+    const handler = (e: MediaQueryListEvent) => setIsDarkMode(e.matches);
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, []);
 
   // Update global conversation context whenever local conversation ID changes
   useEffect(() => {
@@ -235,6 +258,20 @@ export default function ChatPage() {
     'What was the Q4 revenue?',
   ], []);
 
+  // Get logo based on dark mode preference
+  const currentLogo = useMemo(() => {
+    if (isDarkMode && customization?.logo_dark_url) {
+      return getFullImageUrl(customization.logo_dark_url);
+    }
+    if (customization?.logo_url) {
+      return getFullImageUrl(customization.logo_url);
+    }
+    return null;
+  }, [isDarkMode, customization]);
+
+  // Get app name from customization
+  const appName = customization?.branding?.app_name || 'Novera AI';
+
   return (
     <div className="flex h-full bg-gray-50 relative">
       {/* Mobile Sources Drawer Overlay */}
@@ -255,7 +292,7 @@ export default function ChatPage() {
             </div>
             <div className="min-w-0 flex-1">
               <h1 className="text-sm sm:text-lg font-semibold text-gray-900 truncate">
-                {currentConversationIdLocal ? 'Chat with Novera' : 'New Conversation'}
+                {currentConversationIdLocal ? `Chat with ${appName}` : 'New Conversation'}
               </h1>
               <p className="text-xs text-gray-500 hidden sm:block">AI-powered document assistant</p>
             </div>
@@ -321,14 +358,37 @@ export default function ChatPage() {
             {messages.length === 0 && (
               <div className="h-full flex items-center justify-center py-8 sm:py-12">
                 <div className="text-center max-w-2xl px-4">
-                  <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-blue-100 to-purple-100 rounded-2xl mx-auto mb-4 sm:mb-6 flex items-center justify-center shadow-lg">
-                    <Sparkles className="w-8 h-8 sm:w-10 sm:h-10 text-blue-600" />
-                  </div>
+                  {/* Logo Display with Dark Mode Support */}
+                  {currentLogo ? (
+                    <div className="mx-auto mb-4 sm:mb-6 flex items-center justify-center">
+                      <img
+                        src={currentLogo}
+                        alt={appName}
+                        className="h-16 sm:h-20 w-auto object-contain max-w-[200px] sm:max-w-[280px]"
+                        onError={(e) => {
+                          console.error('Failed to load logo:', currentLogo);
+                          e.currentTarget.style.display = 'none';
+                          const parent = e.currentTarget.parentElement;
+                          if (parent && !parent.querySelector('.logo-fallback')) {
+                            const fallback = document.createElement('div');
+                            fallback.className = 'logo-fallback w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-blue-100 to-purple-100 rounded-2xl mx-auto flex items-center justify-center shadow-lg';
+                            fallback.innerHTML = `<span class="text-4xl sm:text-5xl">${appName.charAt(0)}</span>`;
+                            parent.appendChild(fallback);
+                          }
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-blue-100 to-purple-100 rounded-2xl mx-auto mb-4 sm:mb-6 flex items-center justify-center shadow-lg">
+                      <Sparkles className="w-8 h-8 sm:w-10 sm:h-10 text-blue-600" />
+                    </div>
+                  )}
+                  
                   <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 sm:mb-3">
-                    Welcome to Novera AI
+                    Welcome to {appName}
                   </h2>
                   <p className="text-sm sm:text-base text-gray-600 mb-6 sm:mb-8 leading-relaxed">
-                    I'm your AI assistant specialized in Finance and HRMS documents. Ask me anything about your uploaded documents, policies, or just have a conversation!
+                    {customization?.branding?.app_tagline || "I'm your AI assistant specialized in Finance and HRMS documents. Ask me anything about your uploaded documents, policies, or just have a conversation!"}
                   </p>
                   
                   <div className="space-y-3">

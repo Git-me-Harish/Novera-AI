@@ -70,13 +70,12 @@ async def upload_document(
     department: Optional[str] = Query(None, description="Department name"),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_admin_user)  # CHANGED: Only admins can upload
 ):
     """
     Upload a new document for processing.
     
-    Admins can upload any document.
-    Regular users can upload documents but have read-only access.
+    ADMIN ONLY - Regular users have read-only access to documents.
     
     Flow:
     1. Validate file
@@ -84,7 +83,7 @@ async def upload_document(
     3. Create database record
     4. Queue background processing
     """
-    logger.info(f"Document upload request: {file.filename} (type: {doc_type}) by user {current_user.email}")
+    logger.info(f"Document upload request: {file.filename} (type: {doc_type}) by admin {current_user.email}")
     
     # Step 1: Validate file
     is_valid, error_message = FileValidator.validate_file(file)
@@ -207,10 +206,10 @@ async def list_documents(
     current_user: User = Depends(get_current_active_user)
 ):
     """
-    List documents with optional filtering.
+    List all documents with optional filtering.
     
-    Regular users: See only their own documents (read-only)
-    Admins: See all documents
+    ALL USERS: Can view all documents (read-only for regular users)
+    ADMINS: Full access to manage documents
     
     Query parameters:
     - skip: Pagination offset
@@ -219,12 +218,11 @@ async def list_documents(
     - status: Filter by processing status
     - department: Filter by department
     """
-    # Build query
+    # Build query - ALL users can see ALL documents
     query = select(Document)
     
-    # Regular users see only their documents
-    if not current_user.is_admin():
-        query = query.where(Document.uploaded_by == current_user.id)
+    # REMOVED: No user-specific filtering
+    # All authenticated users can see all documents
     
     # Apply filters
     if doc_type:
@@ -245,6 +243,8 @@ async def list_documents(
     query = query.order_by(Document.upload_date.desc()).offset(skip).limit(limit)
     result = await db.execute(query)
     documents = result.scalars().all()
+    
+    logger.info(f"User {current_user.email} (admin={current_user.is_admin()}) retrieved {len(documents)} documents")
     
     # Convert to response model
     document_list = [
@@ -277,15 +277,10 @@ async def get_document_status(
     """
     Get processing status of a specific document.
     
-    Regular users: Can view only their own documents
-    Admins: Can view any document
+    ALL USERS: Can view any document status (read-only)
     """
-    # Build query
+    # Build query - all users can view all documents
     query = select(Document).where(Document.id == document_id)
-    
-    # Regular users can only see their own documents
-    if not current_user.is_admin():
-        query = query.where(Document.uploaded_by == current_user.id)
     
     result = await db.execute(query)
     document = result.scalar_one_or_none()
@@ -293,7 +288,7 @@ async def get_document_status(
     if not document:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found or you don't have permission to view it"
+            detail="Document not found"
         )
     
     return ProcessingStatusResponse(
@@ -318,7 +313,7 @@ async def delete_document(
     Delete a document and all its chunks.
     Also removes the file from disk.
     
-    ADMIN ONLY - Regular users cannot delete documents (read-only access).
+    ADMIN ONLY - Regular users have read-only access.
     """
     # Get document (admin can delete any document)
     result = await db.execute(

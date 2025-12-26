@@ -3,10 +3,11 @@ Main FastAPI application entry point.
 Configures routes, middleware, and application lifecycle events.
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from loguru import logger
 import sys
 from pathlib import Path
@@ -44,6 +45,7 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting Novera AI Knowledge Assistant...")
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug mode: {settings.debug}")
+    logger.info(f"CORS Origins: {settings.cors_origins_list}")
     
     try:
         # Initialize database
@@ -87,19 +89,26 @@ app = FastAPI(
 )
 
 
-# Configure CORS
+# Configure CORS - USING PROPERTY FOR DOCKER COMPATIBILITY
+logger.info(f"🔐 Configuring CORS with origins: {settings.cors_origins_list}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=settings.cors_allow_credentials,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["*"]
+    expose_headers=["*"],
+    max_age=3600,
 )
 
+logger.info("✅ CORS middleware configured successfully")
 
+
+# Add GZip compression
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# Mount static files for uploads
 upload_path = Path(settings.upload_dir)
 if upload_path.exists():
     app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
@@ -164,23 +173,138 @@ async def root():
         "name": settings.app_name,
         "version": settings.app_version,
         "status": "operational",
-        "docs": "/api/docs" if settings.debug else "disabled in production"
+        "docs": "/api/docs" if settings.debug else "disabled in production",
+        "cors_enabled": True,
+        "allowed_origins": settings.cors_origins_list if settings.debug else "configured"
     }
 
 
-# Global exception handler
+# Add OPTIONS handler for preflight requests
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    """Handle preflight OPTIONS requests."""
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
+
+# Global exception handler - FIXED
 @app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    """Catch all unhandled exceptions."""
-    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
-    return {
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch all unhandled exceptions and return proper JSON response."""
+    
+    # Log the full error with traceback
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}")
+    logger.error(f"Exception type: {type(exc).__name__}")
+    logger.error(f"Exception message: {str(exc)}")
+    logger.exception("Full traceback:", exc_info=exc)
+    
+    # Determine status code
+    status_code = 500
+    
+    # Build error response
+    error_detail = {
         "error": "Internal server error",
-        "message": str(exc) if settings.debug else "An error occurred"
+        "message": str(exc) if settings.debug else "An unexpected error occurred",
+        "type": type(exc).__name__ if settings.debug else None,
+        "path": str(request.url.path)
     }
+    
+    # Return JSONResponse instead of dict
+    return JSONResponse(
+        status_code=status_code,
+        content=error_detail
+    )
+
+
+# Add specific exception handlers for common errors
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+@app.exception_handler(SQLAlchemyError)
+async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
+    """Handle SQLAlchemy database errors."""
+    logger.error(f"Database error on {request.method} {request.url.path}: {str(exc)}")
+    logger.exception("Database error details:", exc_info=exc)
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Database error",
+            "message": "A database error occurred" if not settings.debug else str(exc),
+            "type": "DatabaseError"
+        }
+    )
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_exception_handler(request: Request, exc: IntegrityError):
+    """Handle database integrity errors (unique constraints, etc)."""
+    logger.error(f"Integrity error on {request.method} {request.url.path}: {str(exc)}")
+    
+    # Parse common integrity errors
+    error_msg = str(exc.orig) if hasattr(exc, 'orig') else str(exc)
+    
+    if "duplicate key" in error_msg.lower() or "unique constraint" in error_msg.lower():
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "Conflict",
+                "message": "A record with this information already exists",
+                "type": "IntegrityError"
+            }
+        )
+    
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "Invalid data",
+            "message": "The provided data violates database constraints",
+            "type": "IntegrityError"
+        }
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle request validation errors."""
+    logger.error(f"Validation error on {request.method} {request.url.path}: {exc.errors()}")
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "Validation error",
+            "message": "Invalid request data",
+            "details": exc.errors() if settings.debug else None
+        }
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Handle HTTP exceptions."""
+    logger.warning(f"HTTP {exc.status_code} on {request.method} {request.url.path}: {exc.detail}")
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "message": exc.detail,
+            "status_code": exc.status_code
+        }
+    )
 
 
 if __name__ == "__main__":
     import uvicorn
+    
+    logger.info(f"🚀 Starting server on {settings.host}:{settings.port}")
     
     uvicorn.run(
         "app.main:app",

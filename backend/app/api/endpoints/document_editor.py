@@ -16,7 +16,8 @@ from app.models.user import User
 from app.api.dependencies.auth import get_current_active_user, get_current_admin_user
 from app.services.document_editing.chunk_editor import chunk_editor_service
 from app.services.document_editing.document_viewer import document_viewer_service
-
+from app.services.generation.title_generator import title_generator
+from app.models.document import Chunk as ChunkModel
 
 router = APIRouter()
 
@@ -44,6 +45,7 @@ class ChunkResponse(BaseModel):
     page_numbers: List[int]
     section_title: Optional[str]
     token_count: int
+    title: Optional[str] = None
     is_edited: bool
     edited_at: Optional[str]
     edited_by: Optional[str]
@@ -328,6 +330,177 @@ async def get_document_edit_stats(
     stats = await chunk_editor_service.get_document_edit_stats(document_id, db)
     
     return DocumentEditStatsResponse(**stats)
+
+@router.post("/chunks/{chunk_id}/generate-title")
+async def generate_chunk_title(
+    chunk_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin_user)
+):
+    """
+    Generate/regenerate AI title for a specific chunk.
+    ADMIN ONLY.
+    """
+    from sqlalchemy import select, update
+    
+    # Get chunk
+    result = await db.execute(
+        select(ChunkModel).where(ChunkModel.id == chunk_id)
+    )
+    chunk = result.scalar_one_or_none()
+    
+    if not chunk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chunk not found"
+        )
+    
+    try:
+        # Generate new title
+        title = await title_generator.generate_title(
+            content=chunk.content,
+            chunk_type=chunk.chunk_type,
+            section_title=chunk.section_title,
+            page_numbers=chunk.page_numbers,
+            chunk_index=chunk.chunk_index
+        )
+        
+        # Update chunk
+        await db.execute(
+            update(ChunkModel)
+            .where(ChunkModel.id == chunk_id)
+            .values(title=title)
+        )
+        await db.commit()
+        
+        logger.info(f"Admin {admin.email} generated title for chunk {chunk_id}: '{title}'")
+        
+        return {
+            "chunk_id": str(chunk_id),
+            "title": title,
+            "message": "Title generated successfully"
+        }
+        
+    except Exception as e:
+        logger.error(f"Title generation failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Title generation failed: {str(e)}"
+        )
+
+
+@router.post("/documents/{document_id}/generate-all-titles")
+async def generate_all_titles(
+    document_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin_user)
+):
+    """
+    Generate titles for all chunks in a document.
+    ADMIN ONLY - runs in background.
+    """
+    from sqlalchemy import select, update
+    
+    # Get all chunks for document
+    result = await db.execute(
+        select(ChunkModel)
+        .where(ChunkModel.document_id == document_id)
+        .order_by(ChunkModel.chunk_index)
+    )
+    chunks = result.scalars().all()
+    
+    if not chunks:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No chunks found for this document"
+        )
+    
+    logger.info(f"Admin {admin.email} requested title generation for {len(chunks)} chunks")
+    
+    # Generate titles for all chunks
+    success_count = 0
+    failed_count = 0
+    
+    for chunk in chunks:
+        try:
+            title = await title_generator.generate_title(
+                content=chunk.content,
+                chunk_type=chunk.chunk_type,
+                section_title=chunk.section_title,
+                page_numbers=chunk.page_numbers,
+                chunk_index=chunk.chunk_index
+            )
+            
+            await db.execute(
+                update(ChunkModel)
+                .where(ChunkModel.id == chunk.id)
+                .values(title=title)
+            )
+            
+            success_count += 1
+            
+        except Exception as e:
+            logger.error(f"Failed to generate title for chunk {chunk.id}: {e}")
+            failed_count += 1
+            continue
+    
+    await db.commit()
+    
+    logger.info(f"Generated {success_count} titles, {failed_count} failed")
+    
+    return {
+        "document_id": str(document_id),
+        "total_chunks": len(chunks),
+        "success": success_count,
+        "failed": failed_count,
+        "message": f"Generated titles for {success_count} chunks"
+    }
+
+
+@router.put("/chunks/{chunk_id}/title")
+async def update_chunk_title(
+    chunk_id: UUID,
+    title: str,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin_user)
+):
+    """
+    Manually update chunk title.
+    ADMIN ONLY.
+    """
+    from sqlalchemy import select, update
+    
+    if len(title) > 200:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Title too long (max 200 characters)"
+        )
+    
+    # Update title
+    result = await db.execute(
+        update(ChunkModel)
+        .where(ChunkModel.id == chunk_id)
+        .values(title=title)
+        .returning(ChunkModel.id)
+    )
+    
+    updated = result.scalar_one_or_none()
+    
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chunk not found"
+        )
+    
+    await db.commit()
+    
+    logger.info(f"Admin {admin.email} manually updated title for chunk {chunk_id}")
+    
+    return {
+        "chunk_id": str(chunk_id),
+        "title": title,
+        "message": "Title updated successfully"
+    }
 
 
 __all__ = ['router']

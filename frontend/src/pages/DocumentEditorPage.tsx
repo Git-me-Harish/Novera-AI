@@ -8,7 +8,8 @@ import {
   BarChart3,
   Loader2,
   AlertCircle,
-  Info
+  Info,
+  Sparkles
 } from 'lucide-react';
 import api, { DocumentInfo, ChunkData, DocumentEditStats } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -34,6 +35,9 @@ export default function DocumentEditorPage() {
   const [showMetadataEditor, setShowMetadataEditor] = useState(false);
   const [selectedChunk, setSelectedChunk] = useState<ChunkData | null>(null);
   const [historyChunkId, setHistoryChunkId] = useState<string | null>(null);
+  
+  // Title generation state
+  const [generatingTitles, setGeneratingTitles] = useState(false);
 
   useEffect(() => {
     if (documentId) {
@@ -108,6 +112,30 @@ export default function DocumentEditorPage() {
     }
   };
 
+  const handleGenerateAllTitles = async () => {
+    if (!documentId) return;
+    
+    if (!confirm(`Generate AI titles for all ${chunks.length} chunks? This may take a moment.`)) {
+      return;
+    }
+    
+    setGeneratingTitles(true);
+    try {
+      const result = await api.generateAllTitles(documentId);
+      
+      toast.success(`Generated ${result.success} titles successfully!`);
+      
+      // Reload document to show new titles
+      await loadDocument();
+      
+    } catch (err: any) {
+      console.error('Title generation failed:', err);
+      toast.error(err.response?.data?.detail || 'Failed to generate titles');
+    } finally {
+      setGeneratingTitles(false);
+    }
+  };
+
   const handleSaveMetadata = async (metadata: any) => {
     toast.info('Metadata update feature coming soon');
   };
@@ -136,6 +164,10 @@ export default function DocumentEditorPage() {
       </div>
     );
   }
+
+  // Count chunks with AI titles
+  const chunksWithTitles = chunks.filter(c => c.title).length;
+  const titleCoverage = chunks.length > 0 ? Math.round((chunksWithTitles / chunks.length) * 100) : 0;
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
@@ -170,7 +202,7 @@ export default function DocumentEditorPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
             <button
               onClick={() => setShowDocViewer(true)}
               className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors min-touch-target"
@@ -178,6 +210,7 @@ export default function DocumentEditorPage() {
               <Eye className="w-4 h-4" />
               <span className="hidden xs:inline">Preview</span>
             </button>
+            
             <button
               onClick={() => setShowMetadataEditor(true)}
               className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors min-touch-target"
@@ -185,6 +218,27 @@ export default function DocumentEditorPage() {
               <Edit className="w-4 h-4" />
               <span className="hidden xs:inline">Metadata</span>
             </button>
+
+            {isAdmin && (
+              <button
+                onClick={handleGenerateAllTitles}
+                disabled={generatingTitles}
+                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors min-touch-target disabled:opacity-50 disabled:cursor-not-allowed"
+                title={`${titleCoverage}% chunks have AI titles`}
+              >
+                {generatingTitles ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="hidden xs:inline">Generating...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span className="hidden xs:inline">AI Titles</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
 
@@ -195,6 +249,21 @@ export default function DocumentEditorPage() {
             <p className="text-xs sm:text-sm text-yellow-800">
               You are viewing this document in read-only mode. Contact an administrator to make edits.
             </p>
+          </div>
+        )}
+
+        {/* Title Coverage Info */}
+        {isAdmin && titleCoverage < 100 && (
+          <div className="mb-3 sm:mb-4 p-2.5 sm:p-3 bg-purple-50 border border-purple-200 rounded-lg flex items-start gap-2">
+            <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-purple-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-xs sm:text-sm text-purple-900 font-medium">
+                {titleCoverage}% of chunks have AI-generated titles ({chunksWithTitles}/{chunks.length})
+              </p>
+              <p className="text-xs text-purple-700 mt-1">
+                Click "AI Titles" to generate intelligent titles for all chunks
+              </p>
+            </div>
           </div>
         )}
 

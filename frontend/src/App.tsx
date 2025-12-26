@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { useState } from 'react';
 import { AuthProvider } from './contexts/AuthContext';
 import { ConversationProvider } from './contexts/ConversationContext';
@@ -90,9 +90,8 @@ function App() {
     <AuthProvider>
       <CustomizationProvider>
         <ConversationProvider>
-          <Router>
-            <AppContent />
-          </Router>
+          {/* ❌ REMOVED: <Router> - It's already in main.tsx */}
+          <AppContent />
         </ConversationProvider>
       </CustomizationProvider>
     </AuthProvider>
