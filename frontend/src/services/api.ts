@@ -2,7 +2,7 @@
  * API Service for communicating with the backend
  */
 import axios, { AxiosInstance } from 'axios';
-import type { Customization, CustomizationUpdateRequest } from '../types';
+import type { Customization, CustomizationUpdateRequest, ThemePreset } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const API_VERSION = '/api/v1';
@@ -820,6 +820,60 @@ class ApiService {
       params: { title }
     });
     return response.data;
+  }
+
+  async getThemePresets(): Promise<ThemePreset[]> {
+    const response = await this.api.get('/admin/customization/presets');
+    return response.data;
+  }
+
+  async applyThemePreset(
+    presetName: string,
+    organizationName: string = 'default'
+  ): Promise<any> {
+    const response = await this.api.post('/admin/customization/apply-preset', null, {
+      params: {
+        preset_name: presetName,
+        organization_name: organizationName
+      }
+    });
+    return response.data;
+  }
+
+  async exportCustomization(organizationName: string = 'default'): Promise<Customization> {
+    const response = await this.api.get('/admin/customization/export', {
+      params: { organization_name: organizationName }
+    });
+    return response.data;
+  }
+
+  async validateColorContrast(
+    backgroundColor: string,
+    textColor: string
+  ): Promise<{ ratio: number; passes_aa: boolean; passes_aaa: boolean }> {
+    // Client-side WCAG contrast calculation
+    const getLuminance = (color: string): number => {
+      const hex = color.replace('#', '');
+      const r = parseInt(hex.substr(0, 2), 16) / 255;
+      const g = parseInt(hex.substr(2, 2), 16) / 255;
+      const b = parseInt(hex.substr(4, 2), 16) / 255;
+      
+      const [rs, gs, bs] = [r, g, b].map(c => 
+        c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+      );
+      
+      return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+    };
+
+    const l1 = getLuminance(backgroundColor);
+    const l2 = getLuminance(textColor);
+    const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+    
+    return {
+      ratio: Math.round(ratio * 100) / 100,
+      passes_aa: ratio >= 4.5,
+      passes_aaa: ratio >= 7
+    };
   }
 }
 

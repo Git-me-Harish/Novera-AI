@@ -111,7 +111,7 @@ export default function Layout({ children, sidebarOpen, setSidebarOpen }: Layout
 
   // Get app name and logo from customization or use defaults
   const appName = customization?.branding?.app_name || 'Novera';
-  const logoUrl = customization?.logo_url ? getFullImageUrl(customization.logo_url) : null;
+  const logoUrl = customization?.branding?.logo_url ? getFullImageUrl(customization.branding.logo_url) : null;
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">

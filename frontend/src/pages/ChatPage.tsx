@@ -10,7 +10,6 @@ import AnalyticsModal from '../components/chat/AnalyticsModal';
 import { useConversation } from '../contexts/ConversationContext';
 import SelectiveExportModal from '../components/chat/SelectiveExportModal';
 import { useCustomization } from '../contexts/CustomizationContext';
-import { MessageBubbleSkeleton, SourceCardSkeleton } from '../components/common/Skeletons';
 
 // Memoize components for better performance
 const MemoizedMessageBubble = memo(MessageBubble);
@@ -46,6 +45,7 @@ export default function ChatPage() {
   
   // NEW: Mobile sources drawer state
   const [showSourcesDrawer, setShowSourcesDrawer] = useState(false);
+  const [showSourcesPanel, setShowSourcesPanel] = useState(true)
   
   // NEW: Dark mode detection state
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -260,14 +260,14 @@ export default function ChatPage() {
 
   // Get logo based on dark mode preference
   const currentLogo = useMemo(() => {
-    if (isDarkMode && customization?.logo_dark_url) {
-      return getFullImageUrl(customization.logo_dark_url);
-    }
-    if (customization?.logo_url) {
-      return getFullImageUrl(customization.logo_url);
-    }
-    return null;
-  }, [isDarkMode, customization]);
+  if (isDarkMode && customization?.branding?.logo_dark_url) {
+    return getFullImageUrl(customization.branding.logo_dark_url);
+  }
+  if (customization?.branding?.logo_url) {
+    return getFullImageUrl(customization.branding.logo_url);
+  }
+  return null;
+}, [isDarkMode, customization]);
 
   // Get app name from customization
   const appName = customization?.branding?.app_name || 'Novera AI';
@@ -310,6 +310,20 @@ export default function ChatPage() {
                   <FileText className="w-4 h-4" />
                   <span className="hidden xs:inline">Sources</span>
                   <span className="absolute -top-1 -right-1 w-5 h-5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center">
+                    {sources.length}
+                  </span>
+                </button>
+              )}
+              {/* Desktop Sources Toggle Button */}
+              {sources.length > 0 && (
+                <button
+                  onClick={() => setShowSourcesPanel(!showSourcesPanel)}
+                  className="hidden lg:flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors min-touch-target"
+                  title={showSourcesPanel ? 'Hide sources panel' : 'Show sources panel'}
+                >
+                  <FileText className="w-4 h-4" />
+                  <span>{showSourcesPanel ? 'Hide' : 'Show'} Sources</span>
+                  <span className="ml-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-semibold">
                     {sources.length}
                   </span>
                 </button>
@@ -523,7 +537,7 @@ export default function ChatPage() {
       </div>
 
       {/* Sources Sidebar - Desktop */}
-      {sources.length > 0 && (
+      {sources.length > 0 && showSourcesPanel && (
         <div className="hidden lg:block w-80 border-l border-gray-200 bg-white overflow-y-auto scroll-smooth-touch flex-shrink-0">
           <div className="p-4 border-b border-gray-200 bg-gray-50 sticky top-0 z-10">
             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
@@ -543,7 +557,6 @@ export default function ChatPage() {
           </div>
         </div>
       )}
-
       {/* Sources Drawer - Mobile */}
       {sources.length > 0 && (
         <div
