@@ -1,264 +1,328 @@
 """
-Smart suggestion service for follow-up questions.
-Context-aware and intent-driven suggestion generation.
+LLM-powered suggestion service for intelligent follow-up questions.
+Generates context-aware suggestions using Gemini for natural conversation flow.
 """
 from typing import List, Dict, Any, Optional
 from loguru import logger
-import re
+import asyncio
 
 
 class SuggestionService:
     """
-    Generates smart follow-up question suggestions based on conversation context.
-    Uses intent, entities, and document context to create relevant suggestions.
+    Generates intelligent follow-up question suggestions using LLM.
+    Analyzes conversation context, last response, and document sources
+    to provide relevant, natural suggestions.
     """
     
-    def generate_suggestions(
+    async def generate_suggestions(
         self,
         last_query: str,
         last_response: str,
         context_summary: Dict[str, Any],
         sources: List[Dict[str, Any]],
-        processed_query: Optional[Dict[str, Any]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None
     ) -> List[str]:
         """
-        Generate smart follow-up suggestions.
+        Generate 3-4 intelligent, context-aware follow-up suggestions using LLM.
         
         Args:
             last_query: User's last query
             last_response: AI's last response
-            context_summary: Current conversation context
+            context_summary: Current conversation context from context_manager
             sources: Sources used in last response
-            processed_query: Processed query information (optional)
+            conversation_history: Recent conversation turns (last 2-3 exchanges)
             
         Returns:
-            List of suggested follow-up questions (max 4)
+            List of 3-4 suggested follow-up questions
         """
-        suggestions = []
+        logger.info("Generating LLM-powered context-aware suggestions")
         
-        # Get context information
-        primary_doc = context_summary.get('primary_document')
-        intent = context_summary.get('last_intent')
-        time_period = context_summary.get('recent_time_period')
+        try:
+            # Import here to avoid circular dependency
+            from app.services.generation.llm_service import llm_service
+            
+            # Build context-rich prompt
+            prompt = self._build_suggestion_prompt(
+                last_query=last_query,
+                last_response=last_response,
+                context_summary=context_summary,
+                sources=sources,
+                conversation_history=conversation_history
+            )
+            
+            # Generate suggestions using Gemini Flash (fast + cheap)
+            suggestions = await llm_service.generate_follow_up_suggestions(prompt)
+            
+            # Validate and filter suggestions
+            valid_suggestions = self._validate_suggestions(suggestions, last_query)
+            
+            # Return top 4
+            final_suggestions = valid_suggestions[:4]
+            
+            logger.info(f"✅ Generated {len(final_suggestions)} context-aware suggestions")
+            logger.debug(f"Suggestions: {final_suggestions}")
+            
+            return final_suggestions
+            
+        except Exception as e:
+            logger.error(f"Suggestion generation failed: {str(e)}", exc_info=True)
+            
+            # Fallback to basic contextual suggestions
+            return self._get_fallback_suggestions(context_summary, last_response)
+    
+    def _build_suggestion_prompt(
+        self,
+        last_query: str,
+        last_response: str,
+        context_summary: Dict[str, Any],
+        sources: List[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> str:
+        """
+        Build a comprehensive prompt for LLM suggestion generation.
+        
+        Returns:
+            Formatted prompt string
+        """
+        # Extract context information
+        primary_doc = context_summary.get('primary_document', 'N/A')
+        intent = context_summary.get('last_intent', 'general')
         entities = context_summary.get('entities', {})
+        time_period = context_summary.get('recent_time_period')
         
-        logger.debug(f"Generating suggestions: intent={intent}, doc={primary_doc}, time={time_period}")
+        # Build source summary
+        source_info = "No sources"
+        if sources:
+            unique_docs = set(s.get('document', 'Unknown') for s in sources)
+            source_info = f"{len(sources)} chunks from: {', '.join(list(unique_docs)[:3])}"
         
-        # 1. Intent-based suggestions (highest priority)
-        intent_suggestions = self._get_intent_based_suggestions(
-            intent, last_query, last_response
-        )
-        suggestions.extend(intent_suggestions)
+        # Build conversation context
+        conv_context = ""
+        if conversation_history and len(conversation_history) > 0:
+            conv_context = "**Recent Conversation:**\n"
+            for msg in conversation_history[-4:]:  # Last 2 exchanges (4 messages)
+                role = "User" if msg['role'] == 'user' else "AI"
+                content = msg['content'][:150]  # Truncate for brevity
+                conv_context += f"{role}: {content}...\n"
         
-        # 2. Document-specific suggestions
-        if primary_doc and sources:
-            doc_suggestions = self._get_document_suggestions(primary_doc, sources)
-            suggestions.extend(doc_suggestions)
+        # Truncate response for prompt (save tokens)
+        response_preview = last_response[:800] if len(last_response) > 800 else last_response
         
-        # 3. Entity-based suggestions
-        if entities:
-            entity_suggestions = self._get_entity_suggestions(entities, time_period)
-            suggestions.extend(entity_suggestions)
-        
-        # 4. Response-based suggestions (analyze AI's answer)
-        response_suggestions = self._get_response_based_suggestions(last_response)
-        suggestions.extend(response_suggestions)
-        
-        # 5. General helpful suggestions (fallback)
-        if len(suggestions) < 2:
-            general_suggestions = self._get_general_suggestions()
-            suggestions.extend(general_suggestions)
-        
-        # Deduplicate and return top 4
-        unique_suggestions = self._deduplicate_suggestions(suggestions)
-        
-        final_suggestions = unique_suggestions[:4]
-        logger.info(f"Generated {len(final_suggestions)} suggestions: {final_suggestions}")
-        
-        return final_suggestions
+        # Build comprehensive prompt
+        prompt = f"""You are an AI assistant helping generate intelligent follow-up questions for a conversation about documents.
+
+**Current Context:**
+- Document Focus: {primary_doc}
+- Query Intent: {intent}
+- Sources Used: {source_info}
+{f"- Time Period: {time_period}" if time_period else ""}
+
+{conv_context}
+
+**Latest Exchange:**
+User Question: "{last_query}"
+
+AI Response: "{response_preview}"
+
+**Your Task:**
+Generate 3-4 natural, intelligent follow-up questions that:
+
+1. **Are HIGHLY RELEVANT** to what was just discussed
+2. **Build naturally** on the AI's response
+3. **Consider the document context** ({primary_doc})
+4. **Match the conversation intent** ({intent})
+5. **Are specific and actionable** - no generic questions
+6. **Sound conversational** - like a real person asking
+7. **Explore different angles** - clarification, deeper detail, related topics, practical application
+
+**Examples of GOOD suggestions:**
+- "How do I apply for this leave?"
+- "What are the eligibility criteria?"
+- "Can you show me the calculation for this?"
+- "What documents do I need to submit?"
+
+**Examples of BAD suggestions (avoid these):**
+- "Tell me more" (too generic)
+- "Explain in simpler terms" (not specific)
+- "What else is there?" (too vague)
+- "Can you elaborate?" (not actionable)
+
+**Output Format:**
+Provide ONLY the questions, one per line, no numbering, no bullets:
+
+Question 1
+Question 2
+Question 3
+Question 4
+
+Generate the suggestions now:"""
+
+        return prompt
     
-    def _get_intent_based_suggestions(
+    def _validate_suggestions(
         self,
-        intent: Optional[str],
-        query: str,
-        response: str
+        suggestions: List[str],
+        last_query: str
     ) -> List[str]:
-        """Generate suggestions based on query intent."""
-        suggestions = []
+        """
+        Validate and filter generated suggestions.
         
-        if intent == 'financial':
-            # Financial queries often need breakdowns and comparisons
-            suggestions.extend([
-                "Show me a detailed breakdown",
-                "Compare with previous period",
-            ])
+        Args:
+            suggestions: Raw suggestions from LLM
+            last_query: User's last query (to avoid duplicates)
             
-            # If specific numbers mentioned, suggest analysis
-            if any(symbol in response for symbol in ['$', '%', 'revenue', 'expense', 'profit']):
-                suggestions.append("What drove these numbers?")
-            
-            # If trends or patterns mentioned
-            if any(word in response.lower() for word in ['increase', 'decrease', 'growth', 'decline']):
-                suggestions.append("What are the trends over time?")
-        
-        elif intent == 'procedural':
-            # How-to queries need follow-ups
-            suggestions.extend([
-                "What are the exceptions?",
-                "Who do I contact for help?",
-            ])
-            
-            # If steps mentioned
-            if any(word in response.lower() for word in ['step', 'first', 'then', 'next']):
-                suggestions.append("What documents do I need?")
-        
-        elif intent == 'compliance':
-            # Policy questions need clarification
-            suggestions.extend([
-                "Are there recent updates?",
-                "What happens if I don't comply?",
-            ])
-        
-        elif intent == 'factual':
-            # Information queries can go deeper
-            suggestions.extend([
-                "Tell me more about this",
-                "Can you give an example?",
-            ])
-        
-        elif intent == 'analytical':
-            # Comparison queries need more analysis
-            suggestions.extend([
-                "What are the key differences?",
-                "Which option is better?",
-            ])
-        
-        return suggestions
-    
-    def _get_document_suggestions(
-        self,
-        primary_doc: str,
-        sources: List[Dict[str, Any]]
-    ) -> List[str]:
-        """Generate document-specific suggestions."""
-        suggestions = []
-        
-        # Clean document name for display
-        doc_name = primary_doc.replace('.pdf', '').replace('_', ' ')
-        
-        # Suggest exploring the same document
-        suggestions.append(f"What else is in this document?")
-        
-        # If multiple pages referenced
-        pages = set()
-        for source in sources:
-            if source.get('page'):
-                pages.add(source['page'])
-        
-        if len(pages) > 2:
-            suggestions.append("Summarize the key points")
-        
-        # If multiple documents in sources
-        unique_docs = set(s.get('document') for s in sources if s.get('document'))
-        if len(unique_docs) > 1:
-            suggestions.append("Compare across these documents")
-        
-        return suggestions
-    
-    def _get_entity_suggestions(
-        self,
-        entities: Dict[str, List[str]],
-        time_period: Optional[str]
-    ) -> List[str]:
-        """Generate suggestions based on extracted entities."""
-        suggestions = []
-        
-        # Financial amounts
-        if 'amount' in entities and entities['amount']:
-            suggestions.append("How does this compare to budget?")
-        
-        # Percentages
-        if 'percentage' in entities and entities['percentage']:
-            suggestions.append("What affects this percentage?")
-        
-        # Time periods
-        if time_period:
-            # Extract period type (Q1, FY2024, etc.)
-            if 'Q' in time_period:
-                # Quarterly data
-                quarter_match = re.search(r'Q(\d)', time_period)
-                if quarter_match:
-                    q_num = int(quarter_match.group(1))
-                    if q_num > 1:
-                        suggestions.append(f"Compare with Q{q_num-1}")
-                    if q_num < 4:
-                        suggestions.append(f"Show Q{q_num+1} projections")
-            
-            elif 'FY' in time_period or re.search(r'\b20\d{2}\b', time_period):
-                # Yearly data
-                suggestions.append("Show year-over-year trends")
-        
-        return suggestions
-    
-    def _get_response_based_suggestions(self, response: str) -> List[str]:
-        """Analyze AI response to generate relevant follow-ups."""
-        suggestions = []
-        response_lower = response.lower()
-        
-        # If response mentions multiple options/items
-        if any(word in response_lower for word in ['option', 'options', 'types', 'categories']):
-            suggestions.append("Which one should I choose?")
-        
-        # If response has lists (bullet points)
-        bullet_count = response.count('\n-') + response.count('\n•') + response.count('\n*')
-        if bullet_count > 2:
-            suggestions.append("Explain the most important one")
-        
-        # If response mentions requirements
-        if any(word in response_lower for word in ['must', 'required', 'mandatory', 'need to']):
-            suggestions.append("What if I can't meet these?")
-        
-        # If response mentions deadlines
-        if any(word in response_lower for word in ['deadline', 'due date', 'by', 'before']):
-            suggestions.append("Can deadlines be extended?")
-        
-        # If response mentions contact/department
-        if any(word in response_lower for word in ['contact', 'department', 'hr', 'finance']):
-            suggestions.append("How do I reach them?")
-        
-        # If response mentions approval/process
-        if any(word in response_lower for word in ['approval', 'approve', 'process', 'application']):
-            suggestions.append("How long does this take?")
-        
-        # If response has specific amounts
-        if '$' in response or re.search(r'\d+%', response):
-            suggestions.append("Show me the calculation")
-        
-        return suggestions
-    
-    def _get_general_suggestions(self) -> List[str]:
-        """Get general helpful suggestions (fallback)."""
-        return [
-            "Explain in simpler terms",
-            "Give me an example",
-            "What should I do next?",
-            "Where is the official document?",
-        ]
-    
-    def _deduplicate_suggestions(self, suggestions: List[str]) -> List[str]:
-        """Remove duplicates while preserving order and priority."""
-        seen = set()
-        unique = []
+        Returns:
+            Filtered list of valid suggestions
+        """
+        valid = []
+        last_query_lower = last_query.lower().strip()
         
         for suggestion in suggestions:
-            # Normalize for comparison
-            normalized = suggestion.lower().strip().rstrip('?')
+            # Clean suggestion
+            cleaned = suggestion.strip()
             
-            if normalized not in seen:
-                seen.add(normalized)
-                unique.append(suggestion)
+            # Remove numbering/bullets if present
+            cleaned = self._remove_numbering(cleaned)
+            
+            # Skip empty
+            if not cleaned or len(cleaned) < 10:
+                continue
+            
+            # Skip if too similar to last query
+            if self._is_too_similar(cleaned, last_query_lower):
+                logger.debug(f"Skipping similar suggestion: {cleaned}")
+                continue
+            
+            # Skip generic/template phrases
+            if self._is_generic(cleaned):
+                logger.debug(f"Skipping generic suggestion: {cleaned}")
+                continue
+            
+            # Add question mark if missing
+            if not cleaned.endswith('?'):
+                cleaned += '?'
+            
+            valid.append(cleaned)
         
-        return unique
+        return valid
+    
+    def _remove_numbering(self, text: str) -> str:
+        """Remove numbering/bullets from suggestion."""
+        import re
+        
+        # Remove patterns like "1. ", "1) ", "- ", "• ", etc.
+        patterns = [
+            r'^\d+\.\s*',      # "1. "
+            r'^\d+\)\s*',      # "1) "
+            r'^[-•*]\s*',      # "- ", "• ", "* "
+            r'^Question\s*\d+:\s*',  # "Question 1: "
+        ]
+        
+        for pattern in patterns:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+        
+        return text.strip()
+    
+    def _is_too_similar(self, suggestion: str, last_query: str) -> bool:
+        """Check if suggestion is too similar to last query."""
+        suggestion_lower = suggestion.lower()
+        
+        # Simple similarity check (can be enhanced)
+        common_words = set(suggestion_lower.split()) & set(last_query.split())
+        
+        # If >70% words overlap, consider too similar
+        if len(common_words) / max(len(suggestion_lower.split()), 1) > 0.7:
+            return True
+        
+        return False
+    
+    def _is_generic(self, suggestion: str) -> bool:
+        """Check if suggestion is too generic."""
+        generic_phrases = [
+            'tell me more',
+            'explain in simpler terms',
+            'can you elaborate',
+            'give me an example',
+            'what else',
+            'tell me about',
+            'can you explain',
+            'show me more',
+            'provide more details',
+            'give more information',
+        ]
+        
+        suggestion_lower = suggestion.lower()
+        
+        for phrase in generic_phrases:
+            if phrase in suggestion_lower:
+                return True
+        
+        return False
+    
+    def _get_fallback_suggestions(
+        self,
+        context_summary: Dict[str, Any],
+        last_response: str
+    ) -> List[str]:
+        """
+        Generate basic fallback suggestions if LLM generation fails.
+        
+        Args:
+            context_summary: Context information
+            last_response: Last AI response
+            
+        Returns:
+            List of basic but contextual suggestions
+        """
+        logger.warning("Using fallback suggestion generation")
+        
+        suggestions = []
+        
+        intent = context_summary.get('last_intent', 'general')
+        primary_doc = context_summary.get('primary_document')
+        
+        # Intent-based fallbacks (better than completely generic)
+        if intent == 'financial':
+            suggestions.extend([
+                "Can you show me the detailed breakdown?",
+                "How does this compare to previous periods?",
+                "What are the key drivers of these numbers?",
+            ])
+        elif intent == 'procedural':
+            suggestions.extend([
+                "What are the step-by-step instructions?",
+                "Who should I contact for this?",
+                "What documents are required?",
+            ])
+        elif intent == 'compliance':
+            suggestions.extend([
+                "Are there any recent policy updates?",
+                "What are the consequences of non-compliance?",
+                "Who is responsible for enforcement?",
+            ])
+        else:
+            # General fallbacks
+            suggestions.extend([
+                "Can you provide more specific details?",
+                "What are the key points I should know?",
+                "Where can I find the official documentation?",
+            ])
+        
+        # Add document-specific suggestion if available
+        if primary_doc:
+            suggestions.append(f"What else does {primary_doc} cover?")
+        
+        # Response-based suggestions
+        if any(word in last_response.lower() for word in ['must', 'required', 'mandatory']):
+            suggestions.append("What if I cannot meet these requirements?")
+        
+        if any(word in last_response.lower() for word in ['deadline', 'due', 'by']):
+            suggestions.append("Can the deadline be extended?")
+        
+        # Deduplicate and return top 4
+        unique_suggestions = list(dict.fromkeys(suggestions))  # Preserve order
+        
+        return unique_suggestions[:4]
     
     def filter_suggestions_by_confidence(
         self,
@@ -267,15 +331,24 @@ class SuggestionService:
     ) -> List[str]:
         """
         Filter suggestions based on response confidence.
-        Low confidence → offer simpler follow-ups
+        For low confidence, prioritize clarification questions.
+        
+        Args:
+            suggestions: Generated suggestions
+            confidence: Response confidence level
+            
+        Returns:
+            Filtered suggestions
         """
         if confidence == 'low':
-            # For low confidence, suggest clarification
-            return [
-                "Can you rephrase that?",
-                "Show me related information",
-                "Search in a different document"
-            ][:2] + suggestions[:2]
+            # For low confidence, add clarification suggestions
+            clarification_suggestions = [
+                "Can you rephrase my question?",
+                "Can you search in different documents?",
+            ]
+            
+            # Combine with original suggestions
+            return clarification_suggestions[:2] + suggestions[:2]
         
         return suggestions
 

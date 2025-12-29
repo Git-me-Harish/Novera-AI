@@ -1,12 +1,17 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import api from '../services/api';
 import type { Customization } from '../types';
+import { ThemeValidator } from '../utils/themeValidator';
 
 interface CustomizationContextType {
   customization: Customization | null;
   loading: boolean;
+  darkMode: boolean;
+  toggleDarkMode: () => void;
   refreshCustomization: () => Promise<void>;
-  applyTheme: (customization: Customization) => void;
+  applyTheme: (customization: Customization, forceDarkMode?: boolean) => void;
+  validateTheme: (formData: any) => any;
+  generateDarkMode: (lightColors: any) => any;
 }
 
 const CustomizationContext = createContext<CustomizationContextType | undefined>(undefined);
@@ -14,23 +19,52 @@ const CustomizationContext = createContext<CustomizationContextType | undefined>
 export function CustomizationProvider({ children }: { children: ReactNode }) {
   const [customization, setCustomization] = useState<Customization | null>(null);
   const [loading, setLoading] = useState(true);
+  const [darkMode, setDarkMode] = useState(false);
 
   useEffect(() => {
+    // Load saved dark mode preference FIRST
+    const savedDarkMode = localStorage.getItem('darkMode') === 'true';
+    setDarkMode(savedDarkMode);
+    
+    if (savedDarkMode) {
+      document.documentElement.classList.add('dark');
+    }
+
+    // Then load customization
     loadCustomization();
+    
+    // Poll for updates every 30 seconds
+    const interval = setInterval(() => {
+      loadCustomization(true);
+    }, 30000);
+
+    return () => {
+      clearInterval(interval);
+    };
   }, []);
 
-  const loadCustomization = async () => {
+  const loadCustomization = async (silent = false) => {
+    if (!silent) setLoading(true);
+    
     try {
       console.log('Loading customization from API...');
       const data = await api.getCurrentCustomization();
       console.log('Customization loaded:', data);
+      
       setCustomization(data);
-      applyTheme(data);
+      
+      // CRITICAL: Use current darkMode state, not localStorage
+      // This prevents polling from overwriting user's toggle
+      const currentDarkMode = localStorage.getItem('darkMode') === 'true';
+      applyTheme(data, currentDarkMode);
+      
+      if (silent) {
+        console.log('🔄 Background update - preserving dark mode state:', currentDarkMode);
+      }
     } catch (error) {
       console.error('Failed to load customization:', error);
-      // Keep existing customization or use default
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -38,54 +72,104 @@ export function CustomizationProvider({ children }: { children: ReactNode }) {
     await loadCustomization();
   };
 
-  const applyTheme = (customization: Customization) => {
+  const toggleDarkMode = () => {
+    setDarkMode(prev => {
+      const newValue = !prev;
+      localStorage.setItem('darkMode', String(newValue));
+      
+      if (newValue) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      
+      if (customization) {
+        applyTheme(customization, newValue);
+      }
+      
+      console.log('🌙 Dark mode toggled:', newValue);
+      
+      return newValue;
+    });
+  };
+
+  const applyTheme = (customization: Customization, forceDarkMode?: boolean) => {
     console.log('Applying comprehensive theme...');
     const root = document.documentElement;
+    const isDark = forceDarkMode !== undefined ? forceDarkMode : darkMode;
 
-    // Apply brand colors
-    root.style.setProperty('--color-primary', customization.colors.primary);
-    root.style.setProperty('--color-secondary', customization.colors.secondary);
-    root.style.setProperty('--color-accent', customization.colors.accent);
+    // Determine which colors to use
+    let colors = customization.colors;
     
-    // Apply semantic colors
-    root.style.setProperty('--color-success', customization.colors.success);
-    root.style.setProperty('--color-warning', customization.colors.warning);
-    root.style.setProperty('--color-error', customization.colors.error);
-    root.style.setProperty('--color-info', customization.colors.info);
-    
-    // Apply background colors
-    root.style.setProperty('--color-background', customization.colors.background);
-    root.style.setProperty('--color-background-secondary', customization.colors.background_secondary);
-    root.style.setProperty('--color-background-tertiary', customization.colors.background_tertiary);
-    root.style.setProperty('--color-sidebar', customization.colors.sidebar);
-    
-    // Apply text colors
-    root.style.setProperty('--color-text-primary', customization.colors.text_primary);
-    root.style.setProperty('--color-text-secondary', customization.colors.text_secondary);
-    
-    // Apply border and shadow
-    root.style.setProperty('--color-border', customization.colors.border);
-    root.style.setProperty('--color-shadow', customization.colors.shadow);
+    if (isDark && customization.dark_mode.enabled && customization.dark_mode.colors) {
+      const darkColors = customization.dark_mode.colors;
+      
+      // Merge dark colors with light colors as fallback
+      colors = {
+        primary: customization.colors.primary, // Keep brand colors
+        secondary: customization.colors.secondary,
+        accent: customization.colors.accent,
+        success: customization.colors.success,
+        warning: customization.colors.warning,
+        error: customization.colors.error,
+        info: customization.colors.info,
+        background: darkColors.background || '#1f2937',
+        background_secondary: darkColors.background_secondary || '#111827',
+        background_tertiary: darkColors.background_tertiary || '#0f172a',
+        sidebar: darkColors.background || '#1f2937',
+        text_primary: darkColors.text_primary || '#f9fafb',
+        text_secondary: darkColors.text_secondary || '#d1d5db',
+        border: darkColors.border || '#374151',
+        shadow: darkColors.shadow || 'rgba(0, 0, 0, 0.4)',
+      };
+      
+      console.log('🌙 Using dark mode colors:', darkColors);
+    }
 
-    // Apply button styling
+    // Apply colors
+    root.style.setProperty('--color-primary', colors.primary);
+    root.style.setProperty('--color-secondary', colors.secondary);
+    root.style.setProperty('--color-accent', colors.accent);
+    
+    root.style.setProperty('--color-success', colors.success);
+    root.style.setProperty('--color-warning', colors.warning);
+    root.style.setProperty('--color-error', colors.error);
+    root.style.setProperty('--color-info', colors.info);
+    
+    root.style.setProperty('--color-background', colors.background);
+    root.style.setProperty('--color-background-secondary', colors.background_secondary);
+    root.style.setProperty('--color-background-tertiary', colors.background_tertiary);
+    root.style.setProperty('--color-sidebar', colors.sidebar);
+
+    root.style.setProperty('--nav-text-color', isDark ? colors.text_secondary : customization.navigation.text_color);
+    root.style.setProperty('--nav-active-color', customization.navigation.active_color);
+    root.style.setProperty('--nav-hover-color', isDark 
+      ? `rgba(${hexToRgb(customization.colors.primary)?.r || 14}, ${hexToRgb(customization.colors.primary)?.g || 165}, ${hexToRgb(customization.colors.primary)?.b || 233}, 0.15)`
+      : customization.navigation.hover_color
+    );
+    
+    root.style.setProperty('--color-text-primary', colors.text_primary);
+    root.style.setProperty('--color-text-secondary', colors.text_secondary);
+    
+    root.style.setProperty('--color-border', colors.border);
+    root.style.setProperty('--color-shadow', colors.shadow);
+
+    // Apply component styling (these should adapt in dark mode)
     root.style.setProperty('--button-primary-bg', customization.buttons.primary_color);
     root.style.setProperty('--button-primary-text', customization.buttons.primary_text);
-    root.style.setProperty('--button-secondary-bg', customization.buttons.secondary_color);
-    root.style.setProperty('--button-secondary-text', customization.buttons.secondary_text);
+    root.style.setProperty('--button-secondary-bg', isDark ? colors.background_tertiary : customization.buttons.secondary_color);
+    root.style.setProperty('--button-secondary-text', isDark ? colors.text_primary : customization.buttons.secondary_text);
     root.style.setProperty('--button-border-radius', customization.buttons.border_radius);
 
-    // Apply input styling
-    root.style.setProperty('--input-border-color', customization.inputs.border_color);
+    root.style.setProperty('--input-border-color', isDark ? colors.border : customization.inputs.border_color);
     root.style.setProperty('--input-focus-color', customization.inputs.focus_color);
     root.style.setProperty('--input-border-radius', customization.inputs.border_radius);
 
-    // Apply card styling
-    root.style.setProperty('--card-background', customization.cards.background);
-    root.style.setProperty('--card-border-color', customization.cards.border_color);
+    root.style.setProperty('--card-background', isDark ? colors.background_secondary : customization.cards.background);
+    root.style.setProperty('--card-border-color', isDark ? colors.border : customization.cards.border_color);
     root.style.setProperty('--card-border-radius', customization.cards.border_radius);
     root.style.setProperty('--card-shadow', customization.cards.shadow);
 
-    // Apply navigation styling
     root.style.setProperty('--nav-background', customization.navigation.background);
     root.style.setProperty('--nav-text-color', customization.navigation.text_color);
     root.style.setProperty('--nav-active-color', customization.navigation.active_color);
@@ -120,7 +204,7 @@ export function CustomizationProvider({ children }: { children: ReactNode }) {
       root.style.setProperty('--animation-speed', '0ms');
     }
 
-    // Generate color shades for Tailwind compatibility
+    // Generate color shades
     const rgb = hexToRgb(customization.colors.primary);
     if (rgb) {
       root.style.setProperty('--color-primary-rgb', `${rgb.r}, ${rgb.g}, ${rgb.b}`);
@@ -129,12 +213,12 @@ export function CustomizationProvider({ children }: { children: ReactNode }) {
       generateColorShades(customization.colors.accent, 'accent');
     }
 
-    // Apply custom CSS if provided
+    // Apply custom CSS
     if (customization.advanced.custom_css) {
       applyCustomCSS(customization.advanced.custom_css);
     }
 
-    // Update favicon if provided
+    // Update favicon
     if (customization.branding.favicon_url) {
       const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
       const fullFaviconUrl = customization.branding.favicon_url.startsWith('http')
@@ -143,19 +227,31 @@ export function CustomizationProvider({ children }: { children: ReactNode }) {
       updateFavicon(fullFaviconUrl);
     }
 
-    // Update document title if app name is provided
+    // Update document title
     if (customization.branding.app_name) {
       document.title = customization.branding.app_name;
     }
 
-    console.log('Theme application complete!');
+    console.log('Theme application complete! Dark mode:', isDark);
+  };
+
+  const validateTheme = (formData: any) => {
+    return ThemeValidator.validateTheme(formData);
+  };
+
+  const generateDarkMode = (lightColors: any) => {
+    return ThemeValidator.generateDarkModeColors(lightColors);
   };
 
   const value = {
     customization,
     loading,
+    darkMode,
+    toggleDarkMode,
     refreshCustomization,
     applyTheme,
+    validateTheme,
+    generateDarkMode,
   };
 
   return (

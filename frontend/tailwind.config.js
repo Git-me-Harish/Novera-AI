@@ -4,9 +4,9 @@ export default {
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
+  darkMode: 'class',
   theme: {
     extend: {
-      // Enhanced responsive breakpoints
       screens: {
         'xs': '475px',
         'sm': '640px',
@@ -16,30 +16,132 @@ export default {
         '2xl': '1536px',
       },
       colors: {
+        // Map Tailwind color names to CSS variables
         primary: {
-          50: '#f0f9ff',
-          100: '#e0f2fe',
-          200: '#bae6fd',
-          300: '#7dd3fc',
-          400: '#38bdf8',
-          500: '#0ea5e9',
-          600: '#0284c7',
-          700: '#0369a1',
-          800: '#075985',
-          900: '#0c4a6e',
+          DEFAULT: 'var(--color-primary)',
+          50: 'var(--color-primary-50)',
+          100: 'var(--color-primary-100)',
+          200: 'var(--color-primary-200)',
+          300: 'var(--color-primary-300)',
+          400: 'var(--color-primary-400)',
+          500: 'var(--color-primary-500)',
+          600: 'var(--color-primary-600)',
+          700: 'var(--color-primary-700)',
+          800: 'var(--color-primary-800)',
+          900: 'var(--color-primary-900)',
         },
         secondary: {
-          50: '#fdf4ff',
-          100: '#fae8ff',
-          200: '#f5d0fe',
-          300: '#f0abfc',
-          400: '#e879f9',
-          500: '#d946ef',
-          600: '#c026d3',
-          700: '#a21caf',
-          800: '#86198f',
-          900: '#701a75',
+          DEFAULT: 'var(--color-secondary)',
+          50: 'var(--color-secondary-50)',
+          100: 'var(--color-secondary-100)',
+          200: 'var(--color-secondary-200)',
+          300: 'var(--color-secondary-300)',
+          400: 'var(--color-secondary-400)',
+          500: 'var(--color-secondary-500)',
+          600: 'var(--color-secondary-600)',
+          700: 'var(--color-secondary-700)',
+          800: 'var(--color-secondary-800)',
+          900: 'var(--color-secondary-900)',
         },
+        accent: {
+          DEFAULT: 'var(--color-accent)',
+          50: 'var(--color-accent-50)',
+          100: 'var(--color-accent-100)',
+          200: 'var(--color-accent-200)',
+          300: 'var(--color-accent-300)',
+          400: 'var(--color-accent-400)',
+          500: 'var(--color-accent-500)',
+          600: 'var(--color-accent-600)',
+          700: 'var(--color-accent-700)',
+          800: 'var(--color-accent-800)',
+          900: 'var(--color-accent-900)',
+        },
+        success: 'var(--color-success)',
+        warning: 'var(--color-warning)',
+        error: 'var(--color-error)',
+        info: 'var(--color-info)',
+        
+        // Background colors
+        background: {
+          DEFAULT: 'var(--color-background)',
+          secondary: 'var(--color-background-secondary)',
+          tertiary: 'var(--color-background-tertiary)',
+        },
+        
+        // Text colors
+        text: {
+          primary: 'var(--color-text-primary)',
+          secondary: 'var(--color-text-secondary)',
+        },
+        
+        // Border and shadow
+        border: 'var(--color-border)',
+        
+        // Component-specific
+        sidebar: 'var(--color-sidebar)',
+        card: {
+          DEFAULT: 'var(--card-background)',
+          border: 'var(--card-border-color)',
+        },
+        nav: {
+          DEFAULT: 'var(--nav-background)',
+          text: 'var(--nav-text-color)',
+          active: 'var(--nav-active-color)',
+          hover: 'var(--nav-hover-color)',
+        },
+        input: {
+          border: 'var(--input-border-color)',
+          focus: 'var(--input-focus-color)',
+        },
+        button: {
+          primary: {
+            DEFAULT: 'var(--button-primary-bg)',
+            text: 'var(--button-primary-text)',
+          },
+          secondary: {
+            DEFAULT: 'var(--button-secondary-bg)',
+            text: 'var(--button-secondary-text)',
+          },
+        },
+      },
+      borderRadius: {
+        DEFAULT: 'var(--border-radius)',
+        'button': 'var(--button-border-radius)',
+        'input': 'var(--input-border-radius)',
+        'card': 'var(--card-border-radius)',
+      },
+      boxShadow: {
+        'card': 'var(--card-shadow)',
+        'theme': 'var(--color-shadow)',
+      },
+      spacing: {
+        'xs': 'var(--spacing-xs)',
+        'sm': 'var(--spacing-sm)',
+        'md': 'var(--spacing-md)',
+        'lg': 'var(--spacing-lg)',
+        'xl': 'var(--spacing-xl)',
+      },
+      fontFamily: {
+        'theme': 'var(--font-family)',
+      },
+      fontSize: {
+        'theme-base': 'var(--font-size-base)',
+        'theme-heading': 'var(--font-size-heading)',
+      },
+      fontWeight: {
+        'theme-normal': 'var(--font-weight-normal)',
+        'theme-medium': 'var(--font-weight-medium)',
+        'theme-bold': 'var(--font-weight-bold)',
+      },
+      lineHeight: {
+        'theme-base': 'var(--line-height-base)',
+        'theme-heading': 'var(--line-height-heading)',
+      },
+      letterSpacing: {
+        'theme': 'var(--letter-spacing)',
+      },
+      transitionDuration: {
+        'theme': 'var(--animation-speed)',
       },
       keyframes: {
         'pulse-slow': {
@@ -102,23 +204,6 @@ export default {
         'slideInLeft': 'slideInLeft 0.3s ease-out',
         'slideOutLeft': 'slideOutLeft 0.3s ease-out',
         'shimmer': 'shimmer 2s infinite',
-      },
-      fontSize: {
-        'xs': ['0.75rem', { lineHeight: '1rem' }],
-        'sm': ['0.875rem', { lineHeight: '1.25rem' }],
-        'base': ['1rem', { lineHeight: '1.5rem' }],
-        'lg': ['1.125rem', { lineHeight: '1.75rem' }],
-        'xl': ['1.25rem', { lineHeight: '1.75rem' }],
-        '2xl': ['1.5rem', { lineHeight: '2rem' }],
-        '3xl': ['1.875rem', { lineHeight: '2.25rem' }],
-        '4xl': ['2.25rem', { lineHeight: '2.5rem' }],
-        '5xl': ['3rem', { lineHeight: '1' }],
-      },
-      spacing: {
-        'safe-top': 'env(safe-area-inset-top)',
-        'safe-bottom': 'env(safe-area-inset-bottom)',
-        'safe-left': 'env(safe-area-inset-left)',
-        'safe-right': 'env(safe-area-inset-right)',
       },
     },
   },

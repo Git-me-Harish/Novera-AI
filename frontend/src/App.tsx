@@ -1,5 +1,5 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { useState } from 'react';
+import { Routes, Route, Navigate, useLocation  } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import { AuthProvider } from './contexts/AuthContext';
 import { ConversationProvider } from './contexts/ConversationContext';
 import { CustomizationProvider } from './contexts/CustomizationContext';
@@ -22,7 +22,23 @@ import CustomizationPage from './pages/admin/CustomizationPage';
 function AppContent() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const commandPalette = useCommandPalette();
+  const location = useLocation();
+  useEffect(() => {
+    const publicPaths = ['/login', '/register', '/forgot-password', '/reset-password'];
+    const isPublicPage = publicPaths.some(path => location.pathname.startsWith(path));
+    
+    if (isPublicPage) {
+      document.documentElement.classList.remove('dark');
+    } else {
+      // Restore dark mode if it was enabled
+      const savedDarkMode = localStorage.getItem('darkMode') === 'true';
+      if (savedDarkMode) {
+        document.documentElement.classList.add('dark');
+      }
+    }
+  }, [location.pathname]);
 
+  
   return (
     <>
       <ToastContainer />
@@ -90,7 +106,6 @@ function App() {
     <AuthProvider>
       <CustomizationProvider>
         <ConversationProvider>
-          {/* ❌ REMOVED: <Router> - It's already in main.tsx */}
           <AppContent />
         </ConversationProvider>
       </CustomizationProvider>

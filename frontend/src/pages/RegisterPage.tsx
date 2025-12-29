@@ -98,7 +98,7 @@ export default function RegisterPage() {
   // Success screen after registration
   if (registrationSuccess) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="light-mode-only min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-md w-full">
           <div className="text-center mb-8">
             <div className="flex justify-center mb-6">
@@ -166,7 +166,7 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="light-mode-only min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         {/* Header */}
         <div className="text-center">

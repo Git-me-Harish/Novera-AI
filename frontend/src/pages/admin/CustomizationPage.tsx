@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react';
 import { 
   Palette, Upload, Save, RotateCcw, Eye, X, ChevronDown, ChevronUp,
-  Sparkles, Type, Layout as LayoutIcon, Package, Settings
+  Sparkles, Type, Layout as LayoutIcon, Package, Settings, Moon, Sun,
+  BookOpen, AlertCircle, CheckCircle, Download, Upload as UploadIcon,
+  Lightbulb, Zap
 } from 'lucide-react';
+import Editor from '@monaco-editor/react';
 import api from '../../services/api';
 import { useCustomization } from '../../contexts/CustomizationContext';
 import { toast } from '../../utils/toast';
 import type { CustomizationUpdateRequest, ThemePreset } from '../../types';
 import ImagePreviewModal from '../../components/admin/ImagePreviewModal';
-
-
+import { CSS_TEMPLATES, CSSTemplate } from '../../utils/cssTemplates';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -19,15 +21,27 @@ function getFullImageUrl(path: string | null): string {
   return `${API_BASE}${path}`;
 }
 
-type SectionKey = 'branding' | 'colors' | 'typography' | 'layout' | 'components' | 'advanced';
+type SectionKey = 'branding' | 'colors' | 'typography' | 'layout' | 'components' | 'darkmode' | 'advanced';
+
+interface DarkModeColors {
+  background: string;
+  background_secondary: string;
+  background_tertiary: string;
+  text_primary: string;
+  text_secondary: string;
+  border: string;
+  shadow: string;
+}
 
 export default function CustomizationPage() {
-  const { refreshCustomization } = useCustomization();
+  const { refreshCustomization, validateTheme, generateDarkMode, darkMode, toggleDarkMode } = useCustomization();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(true);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [presets, setPresets] = useState<ThemePreset[]>([]);
+  const [validationResults, setValidationResults] = useState<any>(null);
+  const [showTemplates, setShowTemplates] = useState(false);
 
   const [expandedSections, setExpandedSections] = useState<Record<SectionKey, boolean>>({
     branding: true,
@@ -35,6 +49,7 @@ export default function CustomizationPage() {
     typography: false,
     layout: false,
     components: false,
+    darkmode: false,
     advanced: false,
   });
 
@@ -98,6 +113,16 @@ export default function CustomizationPage() {
     theme_description: '',
   });
 
+  const [darkModeColors, setDarkModeColors] = useState<DarkModeColors>({
+    background: '#1f2937',
+    background_secondary: '#111827',
+    background_tertiary: '#0f172a',
+    text_primary: '#f9fafb',
+    text_secondary: '#d1d5db',
+    border: '#374151',
+    shadow: '#00000040',
+  });
+
   const [logos, setLogos] = useState({
     light: null as string | null,
     dark: null as string | null,
@@ -118,18 +143,15 @@ export default function CustomizationPage() {
     loadPresets();
   }, []);
 
+  useEffect(() => {
+    const results = validateTheme(formData);
+    setValidationResults(results);
+  }, [formData]);
+
   const loadCustomization = async () => {
     setLoading(true);
     try {
       const data = await api.getAdminCustomization(organizationName);
-      // ADD THIS LOG TO SEE RAW RESPONSE
-    console.log('RAW API RESPONSE:', {
-      primary: data.colors.primary,
-      secondary: data.colors.secondary,
-      accent: data.colors.accent,
-      background: data.colors.background,
-      theme_name: data.metadata?.theme_name
-    });
       
       setFormData({
         app_name: data.branding.app_name || '',
@@ -188,13 +210,19 @@ export default function CustomizationPage() {
         theme_name: data.metadata.theme_name || '',
         theme_description: data.metadata.theme_description || '',
       });
-      
-      console.log('FormData updated with new colors:', {
-      primary: data.colors.primary,
-      secondary: data.colors.secondary,
-      accent: data.colors.accent,
-      background: data.colors.background
-    });
+
+      if (data.dark_mode.colors && Object.keys(data.dark_mode.colors).length > 0) {
+        const loadedColors: DarkModeColors = {
+          background: data.dark_mode.colors.background || '#1f2937',
+          background_secondary: data.dark_mode.colors.background_secondary || '#111827',
+          background_tertiary: data.dark_mode.colors.background_tertiary || '#0f172a',
+          text_primary: data.dark_mode.colors.text_primary || '#f9fafb',
+          text_secondary: data.dark_mode.colors.text_secondary || '#d1d5db',
+          border: data.dark_mode.colors.border || '#374151',
+          shadow: data.dark_mode.colors.shadow || '#00000040',
+        };
+        setDarkModeColors(loadedColors);
+      }
       
       setLogos({
         light: data.branding.logo_url ? getFullImageUrl(data.branding.logo_url) : null,
@@ -227,6 +255,23 @@ export default function CustomizationPage() {
 
   const handleFieldChange = (field: string, value: any) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleGenerateDarkMode = () => {
+    const generated = generateDarkMode(formData);
+    
+    const validatedColors: DarkModeColors = {
+      background: generated.background || '#1f2937',
+      background_secondary: generated.background_secondary || '#111827',
+      background_tertiary: generated.background_tertiary || '#0f172a',
+      text_primary: generated.text_primary || '#f9fafb',
+      text_secondary: generated.text_secondary || '#d1d5db',
+      border: generated.border || '#374151',
+      shadow: generated.shadow || '#00000040',
+    };
+    
+    setDarkModeColors(validatedColors);
+    toast.success('Dark mode colors generated! Review and adjust as needed.');
   };
 
   const handleLogoUpload = async (
@@ -312,27 +357,22 @@ export default function CustomizationPage() {
 
   const handleApplyPreset = async (presetName: string) => {
     console.log('Applying preset:', presetName);
-    setLoading(true); // Show loading state
+    setLoading(true);
     
     try {
-      // Apply preset on backend
       const response = await api.applyThemePreset(presetName, organizationName);
       console.log('Preset applied on backend:', response);
       
-      // Mark as active
       setActivePreset(presetName);
       
-      // Reload customization from backend
       await loadCustomization();
       console.log('Customization reloaded');
       
-      // Refresh global context
       await refreshCustomization();
       console.log('Global context refreshed');
       
       toast.success(`Theme preset "${presetName}" applied successfully!`);
       
-      // Optional: Scroll to preview to show changes
       const preview = document.querySelector('.lg\\:col-span-1');
       if (preview) {
         preview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -346,22 +386,95 @@ export default function CustomizationPage() {
     }
   };
 
+  const handleApplyTemplate = (template: CSSTemplate) => {
+    setFormData(prev => ({
+      ...prev,
+      custom_css: prev.custom_css
+        ? `${prev.custom_css}\n\n${template.cssCode}`
+        : template.cssCode
+    }));
+    setShowTemplates(false);
+    toast.success(`Template "${template.name}" added to Custom CSS!`);
+  };
+
+  const handleExportTheme = () => {
+    const themeData = {
+      ...formData,
+      dark_mode_colors: darkModeColors,
+      exported_at: new Date().toISOString(),
+      version: '1.0.0'
+    };
+
+    const blob = new Blob([JSON.stringify(themeData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `theme-${formData.theme_name || 'custom'}-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success('Theme exported successfully!');
+  };
+
+  const handleImportTheme = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target?.result as string);
+        
+        setFormData(prev => ({
+          ...prev,
+          ...imported,
+        }));
+
+        if (imported.dark_mode_colors) {
+          setDarkModeColors(imported.dark_mode_colors);
+        }
+
+        toast.success('Theme imported successfully!');
+      } catch (error) {
+        toast.error('Invalid theme file');
+        console.error(error);
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  };
+
   const handleSave = async () => {
+    if (validationResults && !validationResults.valid) {
+      toast.error('Please fix validation errors before saving');
+      return;
+    }
+
     setSaving(true);
     try {
-      const updateData: CustomizationUpdateRequest = { ...formData };
+      const updateData: CustomizationUpdateRequest = { 
+        ...formData,
+        dark_mode_colors: formData.dark_mode_enabled ? darkModeColors : undefined
+      };
 
-      await api.updateCustomization(updateData, organizationName);
+      console.log('💾 Saving customization:', {
+        dark_mode_enabled: updateData.dark_mode_enabled,
+        dark_mode_colors: updateData.dark_mode_colors,
+      });
+
+      const response = await api.updateCustomization(updateData, organizationName);
+      
+      console.log('✅ Server response:', response);
+      
+      // Refresh the customization context
       await refreshCustomization();
       
-      toast.success('Customization saved! Page will reload to apply changes...');
+      toast.success('Customization saved successfully! Theme applied.');
       
-      setTimeout(() => {
-        window.location.reload();
-      }, 1500);
     } catch (error: any) {
-      toast.error('Failed to save customization');
-      console.error(error);
+      console.error('❌ Save error:', error.response?.data || error);
+      toast.error('Failed to save customization: ' + (error.response?.data?.detail || error.message));
     } finally {
       setSaving(false);
     }
@@ -406,10 +519,20 @@ export default function CustomizationPage() {
                 <Palette className="w-6 h-6 sm:w-8 sm:h-8 text-primary-600" />
                 <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Customization</h1>
               </div>
-              <p className="text-sm sm:text-base text-gray-600">Comprehensive theme customization for your organization</p>
+              <p className="text-sm sm:text-base text-gray-600">
+                Visual theme editor
+              </p>
             </div>
 
             <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+              <button
+                onClick={toggleDarkMode}
+                className="flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm sm:text-base font-medium min-touch-target"
+                title="Toggle preview dark mode"
+              >
+                {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                {darkMode ? 'Light' : 'Dark'}
+              </button>
               <button
                 onClick={() => setShowPreview(!showPreview)}
                 className="flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm sm:text-base font-medium min-touch-target"
@@ -427,22 +550,72 @@ export default function CustomizationPage() {
               </button>
               <button
                 onClick={handleSave}
-                disabled={saving}
-                className="flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 text-sm sm:text-base font-medium min-touch-target"
+                disabled={saving || (validationResults && !validationResults.valid)}
+                className="flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base font-medium min-touch-target"
               >
                 <Save className="w-4 h-4" />
                 {saving ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </div>
+
+          {/* Validation Status */}
+          {validationResults && (
+            <div className="mt-4">
+              {validationResults.valid ? (
+                <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 px-4 py-2 rounded-lg">
+                  <CheckCircle className="w-4 h-4" />
+                  <span>All validation checks passed ✓</span>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {validationResults.errors.map((error: string, i: number) => (
+                    <div key={i} className="flex items-start gap-2 text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg">
+                      <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                      <span>{error}</span>
+                    </div>
+                  ))}
+                  {validationResults.warnings.map((warning: string, i: number) => (
+                    <div key={i} className="flex items-start gap-2 text-sm text-yellow-600 bg-yellow-50 px-4 py-2 rounded-lg">
+                      <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                      <span>{warning}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Theme Presets */}
         {presets.length > 0 && (
           <div className="mb-6 bg-white rounded-lg border border-gray-200 p-4 sm:p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <Sparkles className="w-5 h-5 text-primary-600" />
-              <h2 className="text-lg font-semibold text-gray-900">Quick Start with Presets</h2>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-primary-600" />
+                <h2 className="text-lg font-semibold text-gray-900">Quick Start Presets</h2>
+              </div>
+              <div className="flex gap-2">
+                <label className="cursor-pointer">
+                  <input
+                    type="file"
+                    accept=".json"
+                    onChange={handleImportTheme}
+                    className="hidden"
+                  />
+                  <div className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                    <UploadIcon className="w-4 h-4" />
+                    Import
+                  </div>
+                </label>
+                <button
+                  onClick={handleExportTheme}
+                  className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  Export
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
               {presets.map((preset) => (
@@ -499,7 +672,7 @@ export default function CustomizationPage() {
                       type="text"
                       value={formData.app_name}
                       onChange={(e) => handleFieldChange('app_name', e.target.value)}
-                      placeholder="Novera AI"
+                      placeholder="My Company"
                       className="w-full px-3 sm:px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm sm:text-base"
                     />
                   </div>
@@ -1061,7 +1234,89 @@ export default function CustomizationPage() {
               </div>
             </AccordionSection>
 
-            {/* Section 6: Advanced Settings */}
+            {/* Section 6: Dark Mode */}
+            <AccordionSection
+              title="Dark Mode (Hybrid)"
+              icon={<Moon className="w-5 h-5" />}
+              isExpanded={expandedSections.darkmode}
+              onToggle={() => toggleSection('darkmode')}
+            >
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-4 bg-purple-50 border border-purple-200 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <Zap className="w-5 h-5 text-purple-600" />
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-900">Auto-Generate Dark Colors</h4>
+                      <p className="text-xs text-gray-600 mt-1">
+                        Automatically create dark mode variants from your light theme
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleGenerateDarkMode}
+                    className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-medium whitespace-nowrap"
+                  >
+                    Generate
+                  </button>
+                </div>
+
+                <div>
+                  <label className="flex items-center gap-2 cursor-pointer mb-4">
+                    <input
+                      type="checkbox"
+                      checked={formData.dark_mode_enabled}
+                      onChange={(e) => handleFieldChange('dark_mode_enabled', e.target.checked)}
+                      className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+                    />
+                    <span className="text-sm font-medium text-gray-700">Enable Dark Mode Support</span>
+                  </label>
+                </div>
+
+                {formData.dark_mode_enabled && (
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-semibold text-gray-700">Dark Mode Colors (Override)</h3>
+                    <p className="text-xs text-gray-600">
+                      These colors will be used when dark mode is active. Leave as-is to use auto-generated values.
+                    </p>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                      <ColorPicker
+                        label="Dark Background"
+                        value={darkModeColors.background}
+                        onChange={(value) => setDarkModeColors(prev => ({ ...prev, background: value }))}
+                      />
+                      <ColorPicker
+                        label="Dark BG Secondary"
+                        value={darkModeColors.background_secondary}
+                        onChange={(value) => setDarkModeColors(prev => ({ ...prev, background_secondary: value }))}
+                      />
+                      <ColorPicker
+                        label="Dark BG Tertiary"
+                        value={darkModeColors.background_tertiary}
+                        onChange={(value) => setDarkModeColors(prev => ({ ...prev, background_tertiary: value }))}
+                      />
+                      <ColorPicker
+                        label="Dark Text Primary"
+                        value={darkModeColors.text_primary}
+                        onChange={(value) => setDarkModeColors(prev => ({ ...prev, text_primary: value }))}
+                      />
+                      <ColorPicker
+                        label="Dark Text Secondary"
+                        value={darkModeColors.text_secondary}
+                        onChange={(value) => setDarkModeColors(prev => ({ ...prev, text_secondary: value }))}
+                      />
+                      <ColorPicker
+                        label="Dark Border"
+                        value={darkModeColors.border}
+                        onChange={(value) => setDarkModeColors(prev => ({ ...prev, border: value }))}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </AccordionSection>
+
+            {/* Section 7: Advanced Settings */}
             <AccordionSection
               title="Advanced Settings"
               icon={<Settings className="w-5 h-5" />}
@@ -1106,35 +1361,89 @@ export default function CustomizationPage() {
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-700 mb-3">Dark Mode (Beta)</h3>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.dark_mode_enabled}
-                      onChange={(e) => handleFieldChange('dark_mode_enabled', e.target.checked)}
-                      className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
-                    />
-                    <span className="text-sm font-medium text-gray-700">Enable Dark Mode Support</span>
-                  </label>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Dark mode variants will be automatically generated from your colors
-                  </p>
-                </div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700">
+                        Custom CSS (Advanced)
+                      </label>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Add custom styles to override or extend the theme
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setShowTemplates(!showTemplates)}
+                      className="flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      <BookOpen className="w-4 h-4" />
+                      Templates
+                    </button>
+                  </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Custom CSS
-                  </label>
-                  <textarea
-                    value={formData.custom_css}
-                    onChange={(e) => handleFieldChange('custom_css', e.target.value)}
-                    placeholder="/* Add custom CSS here */&#10;.custom-class {&#10;  property: value;&#10;}"
-                    rows={8}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Advanced: Add custom CSS to override or extend styles
-                  </p>
+                  {showTemplates && (
+                    <div className="mb-4 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                      <h4 className="text-sm font-medium text-gray-700 mb-3">CSS Templates</h4>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-60 overflow-y-auto">
+                        {CSS_TEMPLATES.map((template) => (
+                          <button
+                            key={template.id}
+                            onClick={() => handleApplyTemplate(template)}
+                            className="text-left p-3 border border-gray-200 rounded-lg hover:border-primary-500 hover:bg-white transition-all group"
+                          >
+                            <div className="flex items-start justify-between mb-1">
+                              <span className="text-xs font-medium text-gray-900 group-hover:text-primary-600">
+                                {template.name}
+                              </span>
+                              <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                template.difficulty === 'beginner' ? 'bg-green-100 text-green-700' :
+                                template.difficulty === 'intermediate' ? 'bg-yellow-100 text-yellow-700' :
+                                'bg-red-100 text-red-700'
+                              }`}>
+                                {template.difficulty}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 line-clamp-2">
+                              {template.description}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="border border-gray-300 rounded-lg overflow-hidden">
+                    <Editor
+                      height="400px"
+                      defaultLanguage="css"
+                      value={formData.custom_css}
+                      onChange={(value) => handleFieldChange('custom_css', value || '')}
+                      theme="vs-light"
+                      options={{
+                        minimap: { enabled: false },
+                        fontSize: 13,
+                        lineNumbers: 'on',
+                        scrollBeyondLastLine: false,
+                        wordWrap: 'on',
+                        automaticLayout: true,
+                        tabSize: 2,
+                        suggest: {
+                          showKeywords: true,
+                          showSnippets: true,
+                        },
+                      }}
+                    />
+                  </div>
+                  
+                  <div className="mt-2 flex items-start gap-2 text-xs text-gray-500">
+                    <Lightbulb className="w-4 h-4 mt-0.5 flex-shrink-0 text-yellow-500" />
+                    <div>
+                      <p className="font-medium text-gray-700">Tips:</p>
+                      <ul className="list-disc list-inside space-y-1 mt-1">
+                        <li>Use CSS variables like <code className="bg-gray-100 px-1 rounded">var(--color-primary)</code></li>
+                        <li>Click "Templates" above for ready-made effects</li>
+                        <li>Changes apply globally across the app</li>
+                      </ul>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1179,6 +1488,7 @@ export default function CustomizationPage() {
                 <LivePreview
                   formData={formData}
                   logoUrl={logos.light}
+                  validationResults={validationResults}
                 />
               </div>
             </div>
@@ -1199,9 +1509,8 @@ export default function CustomizationPage() {
   );
 }
 
-// Supporting Components for CustomizationPage
+// Supporting Components
 
-// AccordionSection Component
 interface AccordionSectionProps {
   title: string;
   icon: React.ReactNode;
@@ -1236,7 +1545,6 @@ function AccordionSection({ title, icon, isExpanded, onToggle, children }: Accor
   );
 }
 
-// ColorPicker Component
 interface ColorPickerProps {
   label: string;
   value: string;
@@ -1275,7 +1583,6 @@ function ColorPicker({ label, value, onChange, description }: ColorPickerProps) 
   );
 }
 
-// LogoUploadCard Component
 interface LogoUploadCardProps {
   title: string;
   logoUrl: string | null;
@@ -1336,13 +1643,13 @@ function LogoUploadCard({ title, logoUrl, uploading, onUpload, onDelete }: LogoU
   );
 }
 
-// LivePreview Component
 interface LivePreviewProps {
   formData: any;
   logoUrl: string | null;
+  validationResults: any;
 }
 
-function LivePreview({ formData, logoUrl }: LivePreviewProps) {
+function LivePreview({ formData, logoUrl, validationResults }: LivePreviewProps) {
   return (
     <div className="space-y-4">
       {/* Logo Preview */}
@@ -1379,6 +1686,37 @@ function LivePreview({ formData, logoUrl }: LivePreviewProps) {
           </p>
         )}
       </div>
+
+      {/* Contrast Checker */}
+      {validationResults && (
+        <div className="border border-gray-200 rounded-lg p-3 sm:p-4 bg-gray-50">
+          <p className="text-xs font-medium text-gray-600 mb-3">Accessibility Check</p>
+          <div className="space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-gray-600">Text Contrast:</span>
+              <span className={`font-medium ${
+                validationResults.contrast.textOnBackground.passesAAA ? 'text-green-600' :
+                validationResults.contrast.textOnBackground.passesAA ? 'text-yellow-600' :
+                'text-red-600'
+              }`}>
+                {validationResults.contrast.textOnBackground.ratio}:1 
+                ({validationResults.contrast.textOnBackground.rating.toUpperCase()})
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-gray-600">Button Contrast:</span>
+              <span className={`font-medium ${
+                validationResults.contrast.buttonContrast.passesAAA ? 'text-green-600' :
+                validationResults.contrast.buttonContrast.passesAA ? 'text-yellow-600' :
+                'text-red-600'
+              }`}>
+                {validationResults.contrast.buttonContrast.ratio}:1 
+                ({validationResults.contrast.buttonContrast.rating.toUpperCase()})
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Color Palette */}
       <div className="border border-gray-200 rounded-lg p-3 sm:p-4 bg-gray-50">
@@ -1434,8 +1772,6 @@ function LivePreview({ formData, logoUrl }: LivePreviewProps) {
             borderRadius: formData.input_border_radius,
             color: formData.text_primary_color
           }}
-          onFocus={(e) => e.target.style.borderColor = formData.input_focus_color}
-          onBlur={(e) => e.target.style.borderColor = formData.input_border_color}
         />
       </div>
 
@@ -1464,7 +1800,7 @@ function LivePreview({ formData, logoUrl }: LivePreviewProps) {
         </p>
       </div>
 
-      {/* Text Preview */}
+      {/* Typography Preview */}
       <div 
         className="border border-gray-200 rounded-lg p-3 sm:p-4"
         style={{ backgroundColor: formData.background_color }}
@@ -1534,7 +1870,6 @@ function LivePreview({ formData, logoUrl }: LivePreviewProps) {
   );
 }
 
-// ColorSwatch Component
 interface ColorSwatchProps {
   label: string;
   color: string;

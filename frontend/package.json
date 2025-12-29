@@ -10,6 +10,7 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "axios": "^1.6.5",
     "clsx": "^2.1.0",
     "date-fns": "^3.2.0",
@@ -21,6 +22,7 @@
     "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
+    "@types/node": "^25.0.3",
     "@types/react": "^18.3.27",
     "@types/react-dom": "^18.3.7",
     "@typescript-eslint/eslint-plugin": "^6.19.0",

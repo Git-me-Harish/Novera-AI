@@ -41,6 +41,19 @@ export default function ToastContainer() {
     }
   };
 
+  const getTextColor = (type: ToastType) => {
+    switch (type) {
+      case 'success':
+        return 'text-green-900';
+      case 'error':
+        return 'text-red-900';
+      case 'warning':
+        return 'text-yellow-900';
+      default:
+        return 'text-blue-900';
+    }
+  };
+
   if (toasts.length === 0) return null;
 
   return (
@@ -56,7 +69,9 @@ export default function ToastContainer() {
           `}
         >
           {getIcon(t.type)}
-          <p className="flex-1 text-sm font-medium text-gray-900">{t.message}</p>
+          <p className={`flex-1 text-sm font-medium ${getTextColor(t.type)}`}>
+            {t.message}
+          </p>
           <button
             onClick={() => toast.remove(t.id)}
             className="text-gray-400 hover:text-gray-600 transition-colors"

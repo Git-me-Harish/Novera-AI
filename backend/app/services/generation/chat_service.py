@@ -270,13 +270,29 @@ class ChatService:
         # Generate smart suggestions with full context
         suggestions = []
         try:
-            suggestions = suggestion_service.generate_suggestions(
+            # Pass conversation history for better context
+            history_for_suggestions = conversation_manager.get_history(conversation_id, limit=2) if conversation_id else []
+            
+            suggestions = await suggestion_service.generate_suggestions(
                 last_query=query,
                 last_response=answer,
                 context_summary=conv_context.get_context_summary(),
                 sources=sources,
-                processed_query=processed_query
+                conversation_history=history_for_suggestions  # ← NEW: Added conversation history
             )
+            
+            # Filter by confidence if needed
+            if generation_result and generation_result.get('confidence') == 'low':
+                suggestions = suggestion_service.filter_suggestions_by_confidence(
+                    suggestions,
+                    'low'
+                )
+            
+            logger.info(f"✅ Generated {len(suggestions)} LLM-powered suggestions: {suggestions}")
+            
+        except Exception as e:
+            logger.error(f"Suggestion generation failed: {str(e)}", exc_info=True)
+            suggestions = []
             
             # Filter by confidence if needed
             if generation_result and generation_result.get('confidence') == 'low':
@@ -290,7 +306,6 @@ class ChatService:
             logger.error(f"Suggestion generation failed: {str(e)}", exc_info=True)
             suggestions = []
         
-        # ✅ Return statement MUST be here, OUTSIDE all try-except blocks
         # ✅ MUST be at top level, NOT in metadata
         response_data = {
             'answer': answer,
@@ -299,7 +314,7 @@ class ChatService:
             'citations': citations,
             'confidence': generation_result.get('confidence', 'medium') if generation_result else 'low',
             'status': 'success',
-            'suggestions': suggestions,  # ← MUST BE HERE
+            'suggestions': suggestions, 
             'metadata': {
                 'chunks_used': chunks_used,
                 'tokens': generation_result.get('usage', {}) if generation_result else {},

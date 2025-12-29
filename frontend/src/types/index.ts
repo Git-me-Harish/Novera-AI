@@ -191,7 +191,15 @@ export interface CustomizationUpdateRequest {
   
   // Dark Mode
   dark_mode_enabled?: boolean;
-  dark_mode_colors?: Record<string, any>;
+  dark_mode_colors?: {
+    background?: string;
+    background_secondary?: string;
+    background_tertiary?: string;
+    text_primary?: string;
+    text_secondary?: string;
+    border?: string;
+    shadow?: string;
+  };
   
   // Advanced
   custom_css?: string;

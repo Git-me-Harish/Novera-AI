@@ -648,8 +648,71 @@ Summary:"""
             
         except Exception as e:
             logger.error(f"Summary generation failed: {str(e)}")
+    
             return f"Summary unavailable for {document_title}"
 
+    async def generate_follow_up_suggestions(
+        self,
+        prompt: str
+    ) -> List[str]:
+        """
+        Generate intelligent follow-up question suggestions using Gemini Flash.
+        Optimized for speed and cost with minimal tokens.
+        
+        Args:
+            prompt: Comprehensive context prompt from suggestion_service
+            
+        Returns:
+            List of 3-4 follow-up question strings
+        """
+        logger.info("Generating follow-up suggestions with Gemini Flash")
+        
+        try:
+            loop = asyncio.get_event_loop()
+            
+            # Use Gemini Flash for fast, cheap generation
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.model.generate_content(
+                    prompt,
+                    generation_config={
+                        "temperature": 0.7, 
+                        "max_output_tokens": 200, 
+                        "top_p": 0.9,
+                    }
+                )
+            )
+            
+            answer = response.text
+            
+            # Parse suggestions (one per line)
+            suggestions = [
+                line.strip() 
+                for line in answer.split('\n') 
+                if line.strip() and len(line.strip()) > 10
+            ]
+            
+            # Log token usage
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage = response.usage_metadata
+                total = getattr(usage, 'total_token_count', 0)
+                cached = getattr(usage, 'cached_content_token_count', 0)
+                
+                logger.info(f"📊 Suggestion generation - Tokens: {total} (Cached: {cached})")
+                
+                # Calculate cost (Gemini Flash pricing)
+                regular_tokens = total - cached
+                cost = (cached * 0.00000003) + (regular_tokens * 0.0000003)
+                logger.info(f"💰 Suggestion cost: ${cost:.6f}")
+            
+            logger.info(f"✅ Generated {len(suggestions)} suggestions")
+            
+            return suggestions
+            
+        except Exception as e:
+            logger.error(f"Suggestion generation failed: {str(e)}", exc_info=True)
+            
+            return []
 
 # Global instance
 llm_service = LLMService()

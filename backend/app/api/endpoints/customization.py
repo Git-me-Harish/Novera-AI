@@ -37,6 +37,10 @@ class ColorValidator:
 class CustomizationUpdate(BaseModel):
     """Comprehensive customization update model."""
     organization_name: Optional[str] = Field(None, min_length=2, max_length=255)
+     
+    # Dark Mode
+    dark_mode_enabled: Optional[bool] = None
+    dark_mode_colors: Optional[dict] = None
     
     # Branding
     app_name: Optional[str] = Field(None, max_length=255)
@@ -406,14 +410,25 @@ async def update_customization(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user)
 ):
-    """Update customization settings comprehensively."""
     customization = await get_or_create_customization(db, organization_name)
     
     update_data = request.dict(exclude_unset=True)
     
+    # Debug logging
+    logger.info(f"Received update request: dark_mode_enabled={update_data.get('dark_mode_enabled')}")
+    
+    # Handle dark_mode_colors separately since it's a JSONB field
+    dark_mode_colors = update_data.pop('dark_mode_colors', None)
+    if dark_mode_colors is not None:
+        customization.dark_mode_colors = dark_mode_colors
+        logger.info(f"✅ Updated dark_mode_colors: {dark_mode_colors}")
+    
+    # Update other fields
     for field, value in update_data.items():
         if hasattr(customization, field) and value is not None:
             setattr(customization, field, value)
+            if field == 'dark_mode_enabled':
+                logger.info(f"✅ Dark mode enabled set to: {value}")
     
     customization.updated_at = datetime.utcnow()
     
@@ -423,7 +438,6 @@ async def update_customization(
     logger.info(f"Admin {admin.email} updated customization for {organization_name}")
     
     return customization.to_dict()
-
 
 @router.post("/admin/customization/logo")
 async def upload_logo(
