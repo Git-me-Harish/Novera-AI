@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { LogIn, Mail, Lock, AlertCircle, Loader2 } from 'lucide-react';
+import { LogIn, Mail, Lock, AlertCircle, Loader2, Sun, Moon } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useCustomization } from '../contexts/CustomizationContext';
 import VerificationReminder from '../components/auth/VerificationReminder';
 import api from '../services/api';
 
@@ -9,30 +10,28 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
+  const { darkMode, toggleDarkMode } = useCustomization();
 
+  const [mounted, setMounted] = useState(false);
   const [formData, setFormData] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showVerificationReminder, setShowVerificationReminder] = useState(false);
   const [userEmail, setUserEmail] = useState('');
-  const [isDarkMode, setIsDarkMode] = useState<boolean | null>(null); // null = not loaded yet
 
   const from = (location.state as any)?.from?.pathname || '/chat';
 
-  // Initialize dark mode immediately
+  // Apply global dark mode immediately to prevent flash
   useEffect(() => {
-    const storedTheme = localStorage.getItem('theme');
-    if (storedTheme === 'dark' || (!storedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      document.documentElement.classList.add('dark');
-      setIsDarkMode(true);
-    } else {
-      document.documentElement.classList.remove('dark');
-      setIsDarkMode(false);
-    }
-  }, []);
+    document.documentElement.classList.toggle('dark', darkMode);
+    setMounted(true);
+  }, [darkMode]);
 
-  // Wait until dark mode is loaded to render page
-  if (isDarkMode === null) return null;
+  if (!mounted) return null;
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,8 +40,8 @@ export default function LoginPage() {
 
     try {
       await login(formData.email, formData.password);
-
       const currentUser = await api.getCurrentUser();
+
       if (!currentUser.is_verified) {
         setUserEmail(currentUser.email);
         setShowVerificationReminder(true);
@@ -50,180 +49,164 @@ export default function LoginPage() {
         navigate(from, { replace: true });
       }
     } catch (err: any) {
-      console.error('Login error:', err);
-      let errorMessage = 'Login failed. Please check your credentials.';
+      let message = 'Login failed. Please check your credentials.';
       if (err.response?.data?.detail) {
-        if (typeof err.response.data.detail === 'string') {
-          errorMessage = err.response.data.detail;
-        } else if (Array.isArray(err.response.data.detail)) {
-          errorMessage = err.response.data.detail
-            .map((e: any) => `${e.loc?.join('.')}: ${e.msg}`)
-            .join(', ');
-        }
-      } else if (err.message) {
-        errorMessage = err.message;
+        message =
+          typeof err.response.data.detail === 'string'
+            ? err.response.data.detail
+            : err.response.data.detail.map((e: any) => e.msg).join(', ');
       }
-      setError(errorMessage);
+      setError(message);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
-  };
-
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 py-12 px-4 sm:px-6 lg:px-8 transition-colors">
+    <div
+      className="min-h-screen flex items-center justify-center px-4 py-12
+        bg-gradient-to-br from-primary-50 via-white to-secondary-50
+        dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 transition-colors duration-300"
+    >
       <div className="max-w-md w-full space-y-8">
+
         {/* Header */}
         <div className="text-center">
           <div className="flex justify-center mb-6">
-            <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-2xl flex items-center justify-center shadow-lg">
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center
+              bg-gradient-to-br from-primary-500 to-secondary-500 shadow-lg">
               <span className="text-white font-bold text-2xl">M</span>
             </div>
           </div>
-          <h2 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Welcome back</h2>
+
+          <div className="flex justify-center items-center gap-2">
+            <h2 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
+              Welcome back
+            </h2>
+            {/* Theme toggle */}
+            <button
+              type="button"
+              onClick={toggleDarkMode}
+              className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition"
+            >
+              {darkMode ? <Sun className="w-5 h-5 text-yellow-400" /> : <Moon className="w-5 h-5 text-gray-800" />}
+            </button>
+          </div>
+
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
             Sign in to your Novera account
           </p>
         </div>
 
-        {/* Login Form */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 transition-colors">
+        {/* Form */}
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 transition-colors duration-300">
           <form onSubmit={handleSubmit} className="space-y-6">
+
             {error && (
-              <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-red-900 border border-red-200 dark:border-red-700 rounded-lg">
-                <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0" />
-                <p className="text-sm text-red-800 dark:text-red-300">{error}</p>
+              <div className="flex items-center gap-2 p-3 rounded-lg
+                bg-red-50 dark:bg-red-900/30
+                border border-red-200 dark:border-red-700 transition-colors duration-300">
+                <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400" />
+                <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
               </div>
             )}
 
             {/* Email */}
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Email address
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Mail className="h-5 w-5 text-gray-400 dark:text-gray-500" />
-                </div>
+                <Mail className="absolute left-3 top-2.5 h-5 w-5 text-gray-400" />
                 <input
-                  id="email"
                   name="email"
                   type="email"
-                  autoComplete="email"
                   required
                   value={formData.email}
                   onChange={handleChange}
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
-                  placeholder="you@example.com"
                   disabled={loading}
+                  className="w-full pl-10 pr-3 py-2 rounded-lg
+                    bg-white dark:bg-gray-700
+                    text-gray-900 dark:text-gray-100
+                    border border-gray-300 dark:border-gray-600
+                    focus:ring-2 focus:ring-primary-500
+                    transition-colors duration-300"
+                  placeholder="you@example.com"
                 />
               </div>
             </div>
 
             {/* Password */}
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Password
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className="h-5 w-5 text-gray-400 dark:text-gray-500" />
-                </div>
+                <Lock className="absolute left-3 top-2.5 h-5 w-5 text-gray-400" />
                 <input
-                  id="password"
                   name="password"
                   type="password"
-                  autoComplete="current-password"
                   required
                   value={formData.password}
                   onChange={handleChange}
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500"
-                  placeholder="••••••••"
                   disabled={loading}
+                  className="w-full pl-10 pr-3 py-2 rounded-lg
+                    bg-white dark:bg-gray-700
+                    text-gray-900 dark:text-gray-100
+                    border border-gray-300 dark:border-gray-600
+                    focus:ring-2 focus:ring-primary-500
+                    transition-colors duration-300"
+                  placeholder="••••••••"
                 />
               </div>
             </div>
 
-            {/* Remember Me / Forgot */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <input
-                  id="remember-me"
-                  name="remember-me"
-                  type="checkbox"
-                  className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-600 rounded"
-                />
-                <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700 dark:text-gray-300">
-                  Remember me
-                </label>
-              </div>
-              <div className="text-sm">
-                <Link
-                  to="/forgot-password"
-                  className="font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300"
-                >
-                  Forgot password?
-                </Link>
-              </div>
+            {/* Remember / Forgot */}
+            <div className="flex justify-between items-center text-sm">
+              <label className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
+                <input type="checkbox" className="rounded border-gray-300 dark:border-gray-600" />
+                Remember me
+              </label>
+
+              <Link to="/forgot-password" className="text-primary-600 dark:text-primary-400">
+                Forgot password?
+              </Link>
             </div>
 
             {/* Submit */}
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center px-4 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-lg
+                bg-gradient-to-r from-primary-500 to-primary-600
+                text-white font-medium shadow
+                hover:from-primary-600 hover:to-primary-700
+                disabled:opacity-50
+                transition-colors duration-300"
             >
-              {loading ? (
-                <>
-                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                  Signing in...
-                </>
-              ) : (
-                <>
-                  <LogIn className="w-5 h-5 mr-2" />
-                  Sign in
-                </>
-              )}
+              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <LogIn className="w-5 h-5" />}
+              Sign in
             </button>
           </form>
 
-          {/* Register */}
-          <div className="mt-6 text-center">
-            <p className="text-sm text-gray-600 dark:text-gray-300">
-              Don't have an account?{' '}
-              <Link
-                to="/register"
-                className="font-medium text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300"
-              >
-                Sign up now
-              </Link>
-            </p>
-          </div>
+          <p className="mt-6 text-center text-sm text-gray-600 dark:text-gray-300">
+            Don’t have an account?{' '}
+            <Link to="/register" className="text-primary-600 dark:text-primary-400 font-medium">
+              Sign up now
+            </Link>
+          </p>
         </div>
 
         {/* Footer */}
         <p className="text-center text-xs text-gray-500 dark:text-gray-400">
-          By signing in, you agree to our{' '}
-          <a href="#" className="text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">
-            Terms of Service
-          </a>{' '}
-          and{' '}
-          <a href="#" className="text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">
-            Privacy Policy
-          </a>
+          By signing in, you agree to our Terms & Privacy Policy
         </p>
       </div>
 
       {showVerificationReminder && (
         <VerificationReminder
           email={userEmail}
-          onClose={() => {
-            setShowVerificationReminder(false);
-            navigate(from, { replace: true });
-          }}
+          onClose={() => navigate(from, { replace: true })}
         />
       )}
     </div>
