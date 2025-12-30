@@ -519,16 +519,18 @@ class ApiService {
   }
 
   async forgotPassword(email: string): Promise<any> {
-    try {
-      const response = await this.api.post('/auth/forgot-password', {
-        email,
-      });
-      return response.data;
-    } catch (error: any) {
-      console.error('Forgot password error:', error.response?.data);
-      throw error;
-    }
+  try {
+    console.log('Sending forgot password request for:', email);
+    const response = await this.api.post('/auth/forgot-password', {
+      email,
+    });
+    console.log('Forgot password response:', response.data);
+    return response.data;
+  } catch (error: any) {
+    console.error('Forgot password error:', error.response?.data);
+    throw error;
   }
+}
 
   async verifyResetToken(token: string): Promise<any> {
     try {

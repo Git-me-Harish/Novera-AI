@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate, useLocation  } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { AuthProvider } from './contexts/AuthContext';
 import { ConversationProvider } from './contexts/ConversationContext';
@@ -10,6 +10,9 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
 import ChatPage from './pages/ChatPage';
 import DocumentsPage from './pages/DocumentsPage';
 import DocumentEditorPage from './pages/DocumentEditorPage';
@@ -23,14 +26,14 @@ function AppContent() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const commandPalette = useCommandPalette();
   const location = useLocation();
+
   useEffect(() => {
-    const publicPaths = ['/login', '/register', '/forgot-password', '/reset-password'];
+    const publicPaths = ['/login', '/register', '/forgot-password', '/reset-password', '/verify-email'];
     const isPublicPage = publicPaths.some(path => location.pathname.startsWith(path));
     
     if (isPublicPage) {
       document.documentElement.classList.remove('dark');
     } else {
-      // Restore dark mode if it was enabled
       const savedDarkMode = localStorage.getItem('darkMode') === 'true';
       if (savedDarkMode) {
         document.documentElement.classList.add('dark');
@@ -38,7 +41,6 @@ function AppContent() {
     }
   }, [location.pathname]);
 
-  
   return (
     <>
       <ToastContainer />
@@ -50,6 +52,9 @@ function AppContent() {
         {/* Public Routes */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
 
         {/* Protected Routes */}
         <Route
