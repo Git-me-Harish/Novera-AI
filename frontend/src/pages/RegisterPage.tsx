@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   UserPlus,
@@ -11,9 +11,11 @@ import {
   X,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useCustomization } from '../contexts/CustomizationContext';
 
 export default function RegisterPage() {
   const { register } = useAuth();
+  const { darkMode } = useCustomization(); // <-- Use global dark mode
 
   const [formData, setFormData] = useState({
     email: '',
@@ -26,28 +28,6 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [registrationSuccess, setRegistrationSuccess] = useState(false);
-  const [themeReady, setThemeReady] = useState(false);
-
-  /* ----------------------------------------
-     APPLY DARK MODE BEFORE FIRST PAINT
-  ---------------------------------------- */
-  useEffect(() => {
-    const storedTheme = localStorage.getItem('theme');
-    const prefersDark =
-      storedTheme === 'dark' ||
-      (!storedTheme &&
-        window.matchMedia('(prefers-color-scheme: dark)').matches);
-
-    if (prefersDark) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-
-    setThemeReady(true);
-  }, []);
-
-  if (!themeReady) return null;
 
   /* ----------------------------------------
      PASSWORD VALIDATION
@@ -118,16 +98,15 @@ export default function RegisterPage() {
   ---------------------------------------- */
   if (registrationSuccess) {
     return (
-      <div className="min-h-screen flex items-center justify-center
-        bg-gradient-to-br from-primary-50 via-white to-secondary-50
-        dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 px-4"
+      <div className={`min-h-screen flex items-center justify-center
+        ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} px-4`}
       >
-        <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 text-center">
+        <div className={`max-w-md w-full ${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-xl shadow-lg p-8 text-center`}>
           <CheckCircle className="mx-auto h-14 w-14 text-green-500 mb-4" />
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
+          <h2 className={`text-2xl font-bold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>
             Registration Successful!
           </h2>
-          <p className="text-gray-600 dark:text-gray-300 mt-2">
+          <p className={`mt-2 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
             Verify your email to continue.
           </p>
 
@@ -148,48 +127,45 @@ export default function RegisterPage() {
      MAIN FORM
   ---------------------------------------- */
   return (
-    <div className="min-h-screen flex items-center justify-center
-      bg-gradient-to-br from-primary-50 via-white to-secondary-50
-      dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 px-4"
+    <div className={`min-h-screen flex items-center justify-center
+      ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} px-4`}
     >
       <div className="w-full max-w-md space-y-8">
-
         {/* Header */}
         <div className="text-center">
-          <div className="mx-auto mb-6 w-16 h-16 rounded-2xl
+          <div className={`mx-auto mb-6 w-16 h-16 rounded-2xl
             bg-gradient-to-br from-primary-500 to-secondary-500
-            flex items-center justify-center shadow-lg"
+            flex items-center justify-center shadow-lg`}
           >
             <span className="text-white text-2xl font-bold">M</span>
           </div>
 
-          <h2 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
+          <h2 className={`text-3xl font-bold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>
             Create your account
           </h2>
-          <p className="text-gray-600 dark:text-gray-300 mt-2">
+          <p className={`${darkMode ? 'text-gray-300' : 'text-gray-600'} mt-2`}>
             Start using Novera AI
           </p>
         </div>
 
         {/* Form */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8">
+        <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-xl shadow-lg p-8`}>
           <form onSubmit={handleSubmit} className="space-y-5">
 
             {error && (
-              <div className="flex gap-2 p-3 rounded-lg
-                bg-red-50 dark:bg-red-900/30
-                border border-red-200 dark:border-red-700"
+              <div className={`flex gap-2 p-3 rounded-lg
+                ${darkMode ? 'bg-red-900/30 border-red-700' : 'bg-red-50 border-red-200'}`}
               >
-                <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400" />
-                <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+                <AlertCircle className={`w-5 h-5 ${darkMode ? 'text-red-400' : 'text-red-600'}`} />
+                <p className={`text-sm ${darkMode ? 'text-red-300' : 'text-red-700'}`}>{error}</p>
               </div>
             )}
 
-            <Input icon={Mail} label="Email" name="email" value={formData.email} onChange={handleChange} />
-            <Input icon={User} label="Username" name="username" value={formData.username} onChange={handleChange} />
-            <Input label="Full name (optional)" name="fullName" value={formData.fullName} onChange={handleChange} />
-            <Input icon={Lock} label="Password" type="password" name="password" value={formData.password} onChange={handleChange} />
-            <Input icon={Lock} label="Confirm Password" type="password" name="confirmPassword" value={formData.confirmPassword} onChange={handleChange} />
+            <Input icon={Mail} label="Email" name="email" value={formData.email} onChange={handleChange} darkMode={darkMode} />
+            <Input icon={User} label="Username" name="username" value={formData.username} onChange={handleChange} darkMode={darkMode} />
+            <Input label="Full name (optional)" name="fullName" value={formData.fullName} onChange={handleChange} darkMode={darkMode} />
+            <Input icon={Lock} label="Password" type="password" name="password" value={formData.password} onChange={handleChange} darkMode={darkMode} />
+            <Input icon={Lock} label="Confirm Password" type="password" name="confirmPassword" value={formData.confirmPassword} onChange={handleChange} darkMode={darkMode} />
 
             {formData.password && (
               <div className="space-y-1">
@@ -213,7 +189,7 @@ export default function RegisterPage() {
             </button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-gray-600 dark:text-gray-300">
+          <p className={`mt-6 text-center text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
             Already have an account?{' '}
             <Link to="/login" className="text-primary-600 dark:text-primary-400 font-medium">
               Sign in
@@ -228,21 +204,19 @@ export default function RegisterPage() {
 /* ----------------------------------------
    REUSABLE INPUT
 ---------------------------------------- */
-function Input({ icon: Icon, label, ...props }: any) {
+function Input({ icon: Icon, label, darkMode, ...props }: any) {
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+      <label className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
         {label}
       </label>
       <div className="relative">
         {Icon && <Icon className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" />}
         <input
           {...props}
-          className="w-full py-2 pl-10 rounded-lg
-            bg-white dark:bg-gray-700
-            text-gray-900 dark:text-gray-100
-            border border-gray-300 dark:border-gray-600
-            focus:ring-2 focus:ring-primary-500"
+          className={`w-full py-2 pl-10 rounded-lg
+            ${darkMode ? 'bg-gray-700 text-gray-100 border-gray-600' : 'bg-white text-gray-900 border-gray-300'}
+            focus:ring-2 focus:ring-primary-500`}
         />
       </div>
     </div>
