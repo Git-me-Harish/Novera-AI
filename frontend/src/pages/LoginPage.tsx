@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { LogIn, Mail, Lock, AlertCircle, Loader2, Sun, Moon } from 'lucide-react';
+import { LogIn, Mail, Lock, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useCustomization } from '../contexts/CustomizationContext';
 import VerificationReminder from '../components/auth/VerificationReminder';
@@ -10,9 +10,8 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
-  const { darkMode, toggleDarkMode } = useCustomization();
+  const { darkMode } = useCustomization();
 
-  const [mounted, setMounted] = useState(false);
   const [formData, setFormData] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,16 +20,8 @@ export default function LoginPage() {
 
   const from = (location.state as any)?.from?.pathname || '/chat';
 
-  // Apply global dark mode immediately to prevent flash
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', darkMode);
-    setMounted(true);
-  }, [darkMode]);
-
-  if (!mounted) return null;
-
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -64,104 +55,41 @@ export default function LoginPage() {
 
   return (
     <div
-      className="min-h-screen flex items-center justify-center px-4 py-12
-        bg-gradient-to-br from-primary-50 via-white to-secondary-50
-        dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 transition-colors duration-300"
+      className={`min-h-screen flex items-center justify-center px-4 py-12
+        ${darkMode ? 'bg-gray-900 text-gray-100' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50 text-gray-900'}`}
     >
-      <div className="max-w-md w-full space-y-8">
-
+      <div className="w-full max-w-md space-y-8">
         {/* Header */}
         <div className="text-center">
-          <div className="flex justify-center mb-6">
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center
-              bg-gradient-to-br from-primary-500 to-secondary-500 shadow-lg">
-              <span className="text-white font-bold text-2xl">M</span>
-            </div>
+          <div
+            className="mx-auto mb-6 w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-500 to-secondary-500 flex items-center justify-center shadow-lg"
+          >
+            <span className="text-white text-2xl font-bold">M</span>
           </div>
 
-          <div className="flex justify-center items-center gap-2">
-            <h2 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
-              Welcome back
-            </h2>
-            {/* Theme toggle */}
-            <button
-              type="button"
-              onClick={toggleDarkMode}
-              className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition"
-            >
-              {darkMode ? <Sun className="w-5 h-5 text-yellow-400" /> : <Moon className="w-5 h-5 text-gray-800" />}
-            </button>
-          </div>
-
-          <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
-            Sign in to your Novera account
+          <h2 className={`text-3xl font-bold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>
+            Welcome back
+          </h2>
+          <p className={`${darkMode ? 'text-gray-300' : 'text-gray-600'} mt-2`}>
+            Sign in to your account
           </p>
         </div>
 
-        {/* Form */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 transition-colors duration-300">
+        {/* Form Card */}
+        <div className={`${darkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'} rounded-xl shadow-lg p-8 border`}>
           <form onSubmit={handleSubmit} className="space-y-6">
-
             {error && (
-              <div className="flex items-center gap-2 p-3 rounded-lg
-                bg-red-50 dark:bg-red-900/30
-                border border-red-200 dark:border-red-700 transition-colors duration-300">
-                <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400" />
-                <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+              <div className={`flex gap-2 p-3 rounded-lg
+                ${darkMode ? 'bg-red-900/30 border-red-700' : 'bg-red-50 border-red-200'}`}>
+                <AlertCircle className={`w-5 h-5 ${darkMode ? 'text-red-400' : 'text-red-600'}`} />
+                <p className={`text-sm ${darkMode ? 'text-red-300' : 'text-red-700'}`}>{error}</p>
               </div>
             )}
 
-            {/* Email */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Email address
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-2.5 h-5 w-5 text-gray-400" />
-                <input
-                  name="email"
-                  type="email"
-                  required
-                  value={formData.email}
-                  onChange={handleChange}
-                  disabled={loading}
-                  className="w-full pl-10 pr-3 py-2 rounded-lg
-                    bg-white dark:bg-gray-700
-                    text-gray-900 dark:text-gray-100
-                    border border-gray-300 dark:border-gray-600
-                    focus:ring-2 focus:ring-primary-500
-                    transition-colors duration-300"
-                  placeholder="you@example.com"
-                />
-              </div>
-            </div>
+            <Input icon={Mail} label="Email" name="email" value={formData.email} onChange={handleChange} darkMode={darkMode} />
+            <Input icon={Lock} label="Password" type="password" name="password" value={formData.password} onChange={handleChange} darkMode={darkMode} />
 
-            {/* Password */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Password
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-2.5 h-5 w-5 text-gray-400" />
-                <input
-                  name="password"
-                  type="password"
-                  required
-                  value={formData.password}
-                  onChange={handleChange}
-                  disabled={loading}
-                  className="w-full pl-10 pr-3 py-2 rounded-lg
-                    bg-white dark:bg-gray-700
-                    text-gray-900 dark:text-gray-100
-                    border border-gray-300 dark:border-gray-600
-                    focus:ring-2 focus:ring-primary-500
-                    transition-colors duration-300"
-                  placeholder="••••••••"
-                />
-              </div>
-            </div>
-
-            {/* Remember / Forgot */}
+            {/* Remember Me + Forgot Password */}
             <div className="flex justify-between items-center text-sm">
               <label className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
                 <input type="checkbox" className="rounded border-gray-300 dark:border-gray-600" />
@@ -173,34 +101,25 @@ export default function LoginPage() {
               </Link>
             </div>
 
-            {/* Submit */}
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-lg
+              className="w-full flex justify-center items-center gap-2 py-3 rounded-lg
                 bg-gradient-to-r from-primary-500 to-primary-600
-                text-white font-medium shadow
-                hover:from-primary-600 hover:to-primary-700
-                disabled:opacity-50
-                transition-colors duration-300"
+                text-white font-medium disabled:opacity-50"
             >
               {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <LogIn className="w-5 h-5" />}
               Sign in
             </button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-gray-600 dark:text-gray-300">
+          <p className={`mt-6 text-center text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
             Don’t have an account?{' '}
             <Link to="/register" className="text-primary-600 dark:text-primary-400 font-medium">
               Sign up now
             </Link>
           </p>
         </div>
-
-        {/* Footer */}
-        <p className="text-center text-xs text-gray-500 dark:text-gray-400">
-          By signing in, you agree to our Terms & Privacy Policy
-        </p>
       </div>
 
       {showVerificationReminder && (
@@ -209,6 +128,28 @@ export default function LoginPage() {
           onClose={() => navigate(from, { replace: true })}
         />
       )}
+    </div>
+  );
+}
+
+/* ----------------------------------------
+   REUSABLE INPUT
+---------------------------------------- */
+function Input({ icon: Icon, label, darkMode, ...props }: any) {
+  return (
+    <div>
+      <label className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+        {label}
+      </label>
+      <div className="relative">
+        {Icon && <Icon className={`absolute left-3 top-2.5 w-5 h-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />}
+        <input
+          {...props}
+          className={`w-full py-2 pl-10 rounded-lg border
+            ${darkMode ? 'bg-gray-700 text-gray-100 border-gray-600' : 'bg-white text-gray-900 border-gray-300'}
+            focus:ring-2 focus:ring-primary-500`}
+        />
+      </div>
     </div>
   );
 }
