@@ -1,8 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { LogIn, Mail, Lock, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { useCustomization } from '../contexts/CustomizationContext';
 import VerificationReminder from '../components/auth/VerificationReminder';
 import api from '../services/api';
 
@@ -10,9 +9,11 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
-  const { darkMode } = useCustomization();
 
-  const [formData, setFormData] = useState({ email: '', password: '' });
+  const [formData, setFormData] = useState({
+    email: '',
+    password: '',
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showVerificationReminder, setShowVerificationReminder] = useState(false);
@@ -20,9 +21,12 @@ export default function LoginPage() {
 
   const from = (location.state as any)?.from?.pathname || '/chat';
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-  };
+  useEffect(() => {
+    const state = location.state as any;
+    if (state?.message) {
+      console.log(state.message);
+    }
+  }, [location]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,8 +35,10 @@ export default function LoginPage() {
 
     try {
       await login(formData.email, formData.password);
+      
+      // Check if user is verified
       const currentUser = await api.getCurrentUser();
-
+      
       if (!currentUser.is_verified) {
         setUserEmail(currentUser.email);
         setShowVerificationReminder(true);
@@ -40,116 +46,191 @@ export default function LoginPage() {
         navigate(from, { replace: true });
       }
     } catch (err: any) {
-      let message = 'Login failed. Please check your credentials.';
+      console.error('Login error:', err);
+      
+      let errorMessage = 'Login failed. Please check your credentials.';
+      
       if (err.response?.data?.detail) {
-        message =
-          typeof err.response.data.detail === 'string'
-            ? err.response.data.detail
-            : err.response.data.detail.map((e: any) => e.msg).join(', ');
+        if (typeof err.response.data.detail === 'string') {
+          errorMessage = err.response.data.detail;
+        } else if (Array.isArray(err.response.data.detail)) {
+          errorMessage = err.response.data.detail
+            .map((e: any) => `${e.loc?.join('.')}: ${e.msg}`)
+            .join(', ');
+        }
+      } else if (err.message) {
+        errorMessage = err.message;
       }
-      setError(message);
+      
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value,
+    });
+  };
+
   return (
-    <div
-      className={`min-h-screen flex items-center justify-center px-4 py-12
-        ${darkMode ? 'bg-gray-900 text-gray-100' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50 text-gray-900'}`}
-    >
-      <div className="w-full max-w-md space-y-8">
+  <div className="light-mode-only min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-md w-full space-y-8">
         {/* Header */}
         <div className="text-center">
-          <div
-            className="mx-auto mb-6 w-16 h-16 rounded-2xl bg-gradient-to-br from-primary-500 to-secondary-500 flex items-center justify-center shadow-lg"
-          >
-            <span className="text-white text-2xl font-bold">M</span>
+          <div className="flex justify-center mb-6">
+            <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-2xl flex items-center justify-center shadow-lg">
+              <span className="text-white font-bold text-2xl">M</span>
+            </div>
           </div>
-
-          <h2 className={`text-3xl font-bold ${darkMode ? 'text-gray-100' : 'text-gray-900'}`}>
-            Welcome back
-          </h2>
-          <p className={`${darkMode ? 'text-gray-300' : 'text-gray-600'} mt-2`}>
-            Sign in to your account
+          <h2 className="text-3xl font-bold text-gray-900">Welcome back</h2>
+          <p className="mt-2 text-sm text-gray-600">
+            Sign in to your Novera account
           </p>
         </div>
 
-        {/* Form Card */}
-        <div className={`${darkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'} rounded-xl shadow-lg p-8 border`}>
+        {/* Login Form */}
+        <div className="bg-white rounded-xl shadow-lg p-8">
           <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Error Message */}
             {error && (
-              <div className={`flex gap-2 p-3 rounded-lg
-                ${darkMode ? 'bg-red-900/30 border-red-700' : 'bg-red-50 border-red-200'}`}>
-                <AlertCircle className={`w-5 h-5 ${darkMode ? 'text-red-400' : 'text-red-600'}`} />
-                <p className={`text-sm ${darkMode ? 'text-red-300' : 'text-red-700'}`}>{error}</p>
+              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                <p className="text-sm text-red-800">{error}</p>
               </div>
             )}
 
-            <Input icon={Mail} label="Email" name="email" value={formData.email} onChange={handleChange} darkMode={darkMode} />
-            <Input icon={Lock} label="Password" type="password" name="password" value={formData.password} onChange={handleChange} darkMode={darkMode} />
-
-            {/* Remember Me + Forgot Password */}
-            <div className="flex justify-between items-center text-sm">
-              <label className="flex items-center gap-2 text-gray-700 dark:text-gray-300">
-                <input type="checkbox" className="rounded border-gray-300 dark:border-gray-600" />
-                Remember me
+            {/* Email Input */}
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+                Email address
               </label>
-
-              <Link to="/forgot-password" className="text-primary-600 dark:text-primary-400">
-                Forgot password?
-              </Link>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Mail className="h-5 w-5 text-gray-400" />
+                </div>
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  value={formData.email}
+                  onChange={handleChange}
+                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  placeholder="you@example.com"
+                  disabled={loading}
+                />
+              </div>
             </div>
 
+            {/* Password Input */}
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+                Password
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Lock className="h-5 w-5 text-gray-400" />
+                </div>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={formData.password}
+                  onChange={handleChange}
+                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  placeholder="••••••••"
+                  disabled={loading}
+                />
+              </div>
+            </div>
+
+            {/* Remember Me & Forgot Password */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <input
+                  id="remember-me"
+                  name="remember-me"
+                  type="checkbox"
+                  className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                />
+                <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-700">
+                  Remember me
+                </label>
+              </div>
+
+              <div className="text-sm">
+                <Link
+                  to="/forgot-password"
+                  className="font-medium text-primary-600 hover:text-primary-500"
+                >
+                  Forgot password?
+                </Link>
+              </div>
+            </div>
+
+            {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex justify-center items-center gap-2 py-3 rounded-lg
-                bg-gradient-to-r from-primary-500 to-primary-600
-                text-white font-medium disabled:opacity-50"
+              className="w-full flex items-center justify-center px-4 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
             >
-              {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <LogIn className="w-5 h-5" />}
-              Sign in
+              {loading ? (
+                <>
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                  Signing in...
+                </>
+              ) : (
+                <>
+                  <LogIn className="w-5 h-5 mr-2" />
+                  Sign in
+                </>
+              )}
             </button>
           </form>
 
-          <p className={`mt-6 text-center text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-            Don’t have an account?{' '}
-            <Link to="/register" className="text-primary-600 dark:text-primary-400 font-medium">
-              Sign up now
-            </Link>
-          </p>
+          {/* Register Link */}
+          <div className="mt-6 text-center">
+            <p className="text-sm text-gray-600">
+              Don't have an account?{' '}
+              <Link
+                to="/register"
+                className="font-medium text-primary-600 hover:text-primary-500"
+              >
+                Sign up now
+              </Link>
+            </p>
+          </div>
         </div>
+
+        {/* Footer */}
+        <p className="text-center text-xs text-gray-500">
+          By signing in, you agree to our{' '}
+          <a href="#" className="text-primary-600 hover:text-primary-500">
+            Terms of Service
+          </a>{' '}
+          and{' '}
+          <a href="#" className="text-primary-600 hover:text-primary-500">
+            Privacy Policy
+          </a>
+        </p>
       </div>
 
+      {/* Verification Reminder */}
       {showVerificationReminder && (
         <VerificationReminder
           email={userEmail}
-          onClose={() => navigate(from, { replace: true })}
+          onClose={() => {
+            setShowVerificationReminder(false);
+            navigate(from, { replace: true });
+          }}
         />
       )}
-    </div>
-  );
-}
-
-/* ----------------------------------------
-   REUSABLE INPUT
----------------------------------------- */
-function Input({ icon: Icon, label, darkMode, ...props }: any) {
-  return (
-    <div>
-      <label className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-        {label}
-      </label>
-      <div className="relative">
-        {Icon && <Icon className={`absolute left-3 top-2.5 w-5 h-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />}
-        <input
-          {...props}
-          className={`w-full py-2 pl-10 rounded-lg border
-            ${darkMode ? 'bg-gray-700 text-gray-100 border-gray-600' : 'bg-white text-gray-900 border-gray-300'}
-            focus:ring-2 focus:ring-primary-500`}
-        />
-      </div>
     </div>
   );
 }
