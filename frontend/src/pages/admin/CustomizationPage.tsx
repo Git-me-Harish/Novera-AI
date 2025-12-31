@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { 
   Palette, Upload, Save, RotateCcw, Eye, X, ChevronDown, ChevronUp,
-  Sparkles, Type, Layout as LayoutIcon, Package, Settings, Moon, Sun,
+  Sparkles, Type, Layout as LayoutIcon, Package, Settings, Moon,
   BookOpen, AlertCircle, CheckCircle, Download, Upload as UploadIcon,
   Lightbulb, Zap
 } from 'lucide-react';
@@ -34,7 +34,7 @@ interface DarkModeColors {
 }
 
 export default function CustomizationPage() {
-  const { refreshCustomization, validateTheme, generateDarkMode, darkMode, toggleDarkMode } = useCustomization();
+  const { refreshCustomization, validateTheme, generateDarkMode} = useCustomization();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showPreview, setShowPreview] = useState(true);
@@ -525,14 +525,6 @@ export default function CustomizationPage() {
             </div>
 
             <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
-              <button
-                onClick={toggleDarkMode}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm sm:text-base font-medium min-touch-target"
-                title="Toggle preview dark mode"
-              >
-                {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-                {darkMode ? 'Light' : 'Dark'}
-              </button>
               <button
                 onClick={() => setShowPreview(!showPreview)}
                 className="flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-sm sm:text-base font-medium min-touch-target"
