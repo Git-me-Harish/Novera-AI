@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Mail, CheckCircle, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import { CheckCircle, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import { useCustomization } from '../contexts/CustomizationContext'; // Added import
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -9,6 +10,7 @@ export default function VerifyEmailPage() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token');
+  const { darkMode } = useCustomization(); // Added to get darkMode from context
 
   const [verifying, setVerifying] = useState(true);
   const [verified, setVerified] = useState(false);
@@ -86,10 +88,10 @@ export default function VerifyEmailPage() {
   // Verifying state
   if (verifying) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50">
+      <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'}`}>
         <div className="text-center">
           <Loader2 className="w-12 h-12 text-primary-600 animate-spin mx-auto mb-4" />
-          <p className="text-gray-600">Verifying your email...</p>
+          <p className={`${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>Verifying your email...</p>
         </div>
       </div>
     );
@@ -98,7 +100,7 @@ export default function VerifyEmailPage() {
   // Success state
   if (verified) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} py-12 px-4 sm:px-6 lg:px-8`}>
         <div className="max-w-md w-full">
           <div className="text-center mb-8">
             <div className="flex justify-center mb-6">
@@ -108,20 +110,20 @@ export default function VerifyEmailPage() {
             </div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-lg p-8">
+          <div className={`rounded-xl shadow-lg p-8 ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
             <div className="text-center">
               <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
                 <CheckCircle className="h-10 w-10 text-green-600" />
               </div>
 
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">Email Verified!</h2>
+              <h2 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>Email Verified!</h2>
 
-              <p className="text-gray-600 mb-6">
+              <p className={`mb-6 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
                 Your email has been successfully verified. You can now access all features of Novera AI.
               </p>
 
-              <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-                <p className="text-sm text-green-800">
+              <div className={`border rounded-lg p-4 mb-6 ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-green-50 border-green-200'}`}>
+                <p className={`text-sm ${darkMode ? 'text-green-300' : 'text-green-800'}`}>
                   Redirecting to login page in 3 seconds...
                 </p>
               </div>
@@ -141,7 +143,7 @@ export default function VerifyEmailPage() {
 
   // Error state
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} py-12 px-4 sm:px-6 lg:px-8`}>
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-6">
@@ -151,19 +153,19 @@ export default function VerifyEmailPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-lg p-8">
+        <div className={`rounded-xl shadow-lg p-8 ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
           <div className="text-center">
             <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-red-100 mb-4">
               <AlertCircle className="h-10 w-10 text-red-600" />
             </div>
 
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">Verification Failed</h2>
+            <h2 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>Verification Failed</h2>
 
-            <p className="text-gray-600 mb-6">{error}</p>
+            <p className={`mb-6 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>{error}</p>
 
             {resendSuccess && (
-              <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-                <p className="text-sm text-green-800">
+              <div className={`border rounded-lg p-4 mb-6 ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-green-50 border-green-200'}`}>
+                <p className={`text-sm ${darkMode ? 'text-green-300' : 'text-green-800'}`}>
                   Verification email sent! Please check your inbox.
                 </p>
               </div>
@@ -192,7 +194,7 @@ export default function VerifyEmailPage() {
 
               <Link
                 to="/login"
-                className="block w-full px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-center"
+                className={`block w-full px-4 py-2 border rounded-lg transition-colors text-center ${darkMode ? 'border-gray-600 text-gray-300 hover:bg-gray-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}`}
               >
                 Back to Login
               </Link>
