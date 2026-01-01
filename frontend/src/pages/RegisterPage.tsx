@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { UserPlus, Mail, Lock, User, AlertCircle, Loader2, CheckCircle, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useCustomization } from '../contexts/CustomizationContext'; // Added import
 
 export default function RegisterPage() {
   const { register } = useAuth();
+  const { darkMode } = useCustomization(); // Added to get darkMode from context
 
   const [formData, setFormData] = useState({
     email: '',
@@ -87,7 +89,7 @@ export default function RegisterPage() {
     if (!/[0-9]/.test(password)) {
       return { isValid: false, message: 'Password must contain a number' };
     }
-    if (!/[!@#$%^&*()_+\-=[\]{}|;:,.<>?]/.test(password)) {
+    if (!/[!@#$%^&*()_+\-=[\${}|;:,.<>?]/.test(password)) {
       return { isValid: false, message: 'Password must contain a special character' };
     }
     return { isValid: true, message: '' };
@@ -98,7 +100,7 @@ export default function RegisterPage() {
   // Success screen after registration
   if (registrationSuccess) {
     return (
-      <div className="light-mode-only min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
+      <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} py-12 px-4 sm:px-6 lg:px-8`}>
         <div className="max-w-md w-full">
           <div className="text-center mb-8">
             <div className="flex justify-center mb-6">
@@ -108,39 +110,39 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-lg p-8">
+          <div className={`rounded-xl shadow-lg p-8 ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
             <div className="text-center">
               <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
                 <CheckCircle className="h-10 w-10 text-green-600" />
               </div>
 
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">Registration Successful!</h2>
+              <h2 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>Registration Successful!</h2>
 
-              <p className="text-gray-600 mb-4">
+              <p className={`mb-4 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
                 Welcome to Novera AI, <strong>{formData.username}</strong>!
               </p>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6 text-left">
+              <div className={`border rounded-lg p-4 mb-6 text-left ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-blue-50 border-blue-200'}`}>
                 <div className="flex items-start gap-2 mb-3">
-                  <Mail className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <Mail className={`w-5 h-5 flex-shrink-0 mt-0.5 ${darkMode ? 'text-blue-400' : 'text-blue-600'}`} />
                   <div>
-                    <p className="text-sm font-semibold text-blue-900 mb-1">
+                    <p className={`text-sm font-semibold mb-1 ${darkMode ? 'text-blue-300' : 'text-blue-900'}`}>
                       Verify Your Email
                     </p>
-                    <p className="text-sm text-blue-800">
+                    <p className={`text-sm ${darkMode ? 'text-blue-200' : 'text-blue-800'}`}>
                       We've sent a verification link to:
                     </p>
-                    <p className="text-sm font-medium text-blue-900 break-all mt-1">
+                    <p className={`text-sm font-medium break-all mt-1 ${darkMode ? 'text-blue-300' : 'text-blue-900'}`}>
                       {formData.email}
                     </p>
                   </div>
                 </div>
                 
-                <div className="bg-white rounded p-3 border border-blue-100">
-                  <p className="text-xs text-blue-800 mb-2">
+                <div className={`rounded p-3 border ${darkMode ? 'bg-gray-600 border-gray-500' : 'bg-white border-blue-100'}`}>
+                  <p className={`text-xs mb-2 ${darkMode ? 'text-blue-200' : 'text-blue-800'}`}>
                     <strong>Next steps:</strong>
                   </p>
-                  <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
+                  <ol className={`text-xs space-y-1 list-decimal list-inside ${darkMode ? 'text-blue-200' : 'text-blue-700'}`}>
                     <li>Check your email inbox (and spam folder)</li>
                     <li>Click the verification link</li>
                     <li>Sign in to access all features</li>
@@ -155,7 +157,7 @@ export default function RegisterPage() {
                 Go to Sign In
               </Link>
 
-              <p className="mt-4 text-xs text-gray-500">
+              <p className={`mt-4 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                 Didn't receive the email? Check your spam folder or contact support.
               </p>
             </div>
@@ -166,7 +168,7 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="light-mode-only min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 via-white to-secondary-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} py-12 px-4 sm:px-6 lg:px-8`}>
       <div className="max-w-md w-full space-y-8">
         {/* Header */}
         <div className="text-center">
@@ -175,14 +177,14 @@ export default function RegisterPage() {
               <span className="text-white font-bold text-2xl">M</span>
             </div>
           </div>
-          <h2 className="text-3xl font-bold text-gray-900">Create your account</h2>
-          <p className="mt-2 text-sm text-gray-600">
+          <h2 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Create your account</h2>
+          <p className={`mt-2 text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
             Start using Novera AI Knowledge Assistant
           </p>
         </div>
 
         {/* Register Form */}
-        <div className="bg-white rounded-xl shadow-lg p-8">
+        <div className={`rounded-xl shadow-lg p-8 ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Error Message */}
             {error && (
@@ -194,12 +196,12 @@ export default function RegisterPage() {
 
             {/* Email Input */}
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="email" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                 Email address *
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Mail className="h-5 w-5 text-gray-400" />
+                  <Mail className={`h-5 w-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />
                 </div>
                 <input
                   id="email"
@@ -209,7 +211,7 @@ export default function RegisterPage() {
                   required
                   value={formData.email}
                   onChange={handleChange}
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
                   placeholder="you@example.com"
                   disabled={loading}
                 />
@@ -218,12 +220,12 @@ export default function RegisterPage() {
 
             {/* Username Input */}
             <div>
-              <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="username" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                 Username *
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <User className="h-5 w-5 text-gray-400" />
+                  <User className={`h-5 w-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />
                 </div>
                 <input
                   id="username"
@@ -234,7 +236,7 @@ export default function RegisterPage() {
                   minLength={3}
                   value={formData.username}
                   onChange={handleChange}
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
                   placeholder="johndoe"
                   disabled={loading}
                 />
@@ -243,7 +245,7 @@ export default function RegisterPage() {
 
             {/* Full Name Input */}
             <div>
-              <label htmlFor="fullName" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="fullName" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                 Full name (optional)
               </label>
               <input
@@ -253,7 +255,7 @@ export default function RegisterPage() {
                 autoComplete="name"
                 value={formData.fullName}
                 onChange={handleChange}
-                className="block w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                className={`block w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
                 placeholder="John Doe"
                 disabled={loading}
               />
@@ -261,12 +263,12 @@ export default function RegisterPage() {
 
             {/* Password Input */}
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="password" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                 Password *
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className="h-5 w-5 text-gray-400" />
+                  <Lock className={`h-5 w-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />
                 </div>
                 <input
                   id="password"
@@ -276,7 +278,7 @@ export default function RegisterPage() {
                   required
                   value={formData.password}
                   onChange={handleChange}
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
                   placeholder="••••••••"
                   disabled={loading}
                 />
@@ -302,7 +304,7 @@ export default function RegisterPage() {
                     text="One number"
                   />
                   <PasswordRequirement
-                    met={/[!@#$%^&*()_+\-=[\]{}|;:,.<>?]/.test(formData.password)}
+                    met={/[!@#$%^&*()_+\-=[\${}|;:,.<>?]/.test(formData.password)}
                     text="One special character"
                   />
                 </div>
@@ -311,12 +313,12 @@ export default function RegisterPage() {
 
             {/* Confirm Password Input */}
             <div>
-              <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="confirmPassword" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                 Confirm password *
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className="h-5 w-5 text-gray-400" />
+                  <Lock className={`h-5 w-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />
                 </div>
                 <input
                   id="confirmPassword"
@@ -326,7 +328,7 @@ export default function RegisterPage() {
                   required
                   value={formData.confirmPassword}
                   onChange={handleChange}
-                  className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
                   placeholder="••••••••"
                   disabled={loading}
                 />
@@ -358,7 +360,7 @@ export default function RegisterPage() {
 
           {/* Login Link */}
           <div className="mt-6 text-center">
-            <p className="text-sm text-gray-600">
+            <p className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
               Already have an account?{' '}
               <Link
                 to="/login"
@@ -371,7 +373,7 @@ export default function RegisterPage() {
         </div>
 
         {/* Footer */}
-        <p className="text-center text-xs text-gray-500">
+        <p className={`text-center text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
           By creating an account, you agree to our{' '}
           <a href="#" className="text-primary-600 hover:text-primary-500">
             Terms of Service
