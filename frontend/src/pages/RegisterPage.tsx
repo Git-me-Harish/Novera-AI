@@ -2,11 +2,11 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { UserPlus, Mail, Lock, User, AlertCircle, Loader2, CheckCircle, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { useCustomization } from '../contexts/CustomizationContext'; // Added import
+import { useCustomization } from '../contexts/CustomizationContext';
 
 export default function RegisterPage() {
   const { register } = useAuth();
-  const { darkMode } = useCustomization(); // Added to get darkMode from context
+  const { customization, darkMode } = useCustomization();
 
   const [formData, setFormData] = useState({
     email: '',
@@ -89,7 +89,7 @@ export default function RegisterPage() {
     if (!/[0-9]/.test(password)) {
       return { isValid: false, message: 'Password must contain a number' };
     }
-    if (!/[!@#$%^&*()_+\-=[\${}|;:,.<>?]/.test(password)) {
+    if (!/[!@#$%^&*()_+\-=[\]{}|;:,.<>?]/.test(password)) {
       return { isValid: false, message: 'Password must contain a special character' };
     }
     return { isValid: true, message: '' };
@@ -100,49 +100,89 @@ export default function RegisterPage() {
   // Success screen after registration
   if (registrationSuccess) {
     return (
-      <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} py-12 px-4 sm:px-6 lg:px-8`}>
+      <div className={`min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 transition-colors duration-300 ${
+        darkMode 
+          ? 'bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900' 
+          : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'
+      }`}>
         <div className="max-w-md w-full">
           <div className="text-center mb-8">
             <div className="flex justify-center mb-6">
               <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-2xl flex items-center justify-center shadow-lg">
-                <span className="text-white font-bold text-2xl">M</span>
+                <span className="text-white font-bold text-2xl">
+                  {customization?.branding?.app_name?.charAt(0) || 'N'}
+                </span>
               </div>
             </div>
           </div>
 
-          <div className={`rounded-xl shadow-lg p-8 ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
+          <div className={`rounded-xl shadow-lg p-8 transition-all duration-300 ${
+            darkMode 
+              ? 'bg-gray-800 border border-gray-700' 
+              : 'bg-white'
+          }`}>
             <div className="text-center">
-              <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
-                <CheckCircle className="h-10 w-10 text-green-600" />
+              <div className={`mx-auto flex items-center justify-center h-16 w-16 rounded-full mb-4 ${
+                darkMode ? 'bg-green-900/30' : 'bg-green-100'
+              }`}>
+                <CheckCircle className={`h-10 w-10 ${
+                  darkMode ? 'text-green-400' : 'text-green-600'
+                }`} />
               </div>
 
-              <h2 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>Registration Successful!</h2>
+              <h2 className={`text-2xl font-bold mb-2 transition-colors ${
+                darkMode ? 'text-white' : 'text-gray-900'
+              }`}>
+                Registration Successful!
+              </h2>
 
-              <p className={`mb-4 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                Welcome to Novera AI, <strong>{formData.username}</strong>!
+              <p className={`mb-4 transition-colors ${
+                darkMode ? 'text-gray-300' : 'text-gray-600'
+              }`}>
+                Welcome to {customization?.branding?.app_name || 'Novera AI'}, <strong>{formData.username}</strong>!
               </p>
 
-              <div className={`border rounded-lg p-4 mb-6 text-left ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-blue-50 border-blue-200'}`}>
+              <div className={`border rounded-lg p-4 mb-6 text-left transition-all ${
+                darkMode 
+                  ? 'bg-blue-900/20 border-blue-800' 
+                  : 'bg-blue-50 border-blue-200'
+              }`}>
                 <div className="flex items-start gap-2 mb-3">
-                  <Mail className={`w-5 h-5 flex-shrink-0 mt-0.5 ${darkMode ? 'text-blue-400' : 'text-blue-600'}`} />
+                  <Mail className={`w-5 h-5 flex-shrink-0 mt-0.5 ${
+                    darkMode ? 'text-blue-400' : 'text-blue-600'
+                  }`} />
                   <div>
-                    <p className={`text-sm font-semibold mb-1 ${darkMode ? 'text-blue-300' : 'text-blue-900'}`}>
+                    <p className={`text-sm font-semibold mb-1 ${
+                      darkMode ? 'text-blue-300' : 'text-blue-900'
+                    }`}>
                       Verify Your Email
                     </p>
-                    <p className={`text-sm ${darkMode ? 'text-blue-200' : 'text-blue-800'}`}>
+                    <p className={`text-sm ${
+                      darkMode ? 'text-blue-300' : 'text-blue-800'
+                    }`}>
                       We've sent a verification link to:
                     </p>
-                    <p className={`text-sm font-medium break-all mt-1 ${darkMode ? 'text-blue-300' : 'text-blue-900'}`}>
+                    <p className={`text-sm font-medium break-all mt-1 ${
+                      darkMode ? 'text-blue-200' : 'text-blue-900'
+                    }`}>
                       {formData.email}
                     </p>
                   </div>
                 </div>
                 
-                <div className={`rounded p-3 border ${darkMode ? 'bg-gray-600 border-gray-500' : 'bg-white border-blue-100'}`}>
-                  <p className={`text-xs mb-2 ${darkMode ? 'text-blue-200' : 'text-blue-800'}`}>
+                <div className={`rounded p-3 border transition-colors ${
+                  darkMode 
+                    ? 'bg-gray-800 border-blue-900' 
+                    : 'bg-white border-blue-100'
+                }`}>
+                  <p className={`text-xs mb-2 ${
+                    darkMode ? 'text-blue-300' : 'text-blue-800'
+                  }`}>
                     <strong>Next steps:</strong>
                   </p>
-                  <ol className={`text-xs space-y-1 list-decimal list-inside ${darkMode ? 'text-blue-200' : 'text-blue-700'}`}>
+                  <ol className={`text-xs space-y-1 list-decimal list-inside ${
+                    darkMode ? 'text-blue-300' : 'text-blue-700'
+                  }`}>
                     <li>Check your email inbox (and spam folder)</li>
                     <li>Click the verification link</li>
                     <li>Sign in to access all features</li>
@@ -157,7 +197,9 @@ export default function RegisterPage() {
                 Go to Sign In
               </Link>
 
-              <p className={`mt-4 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+              <p className={`mt-4 text-xs transition-colors ${
+                darkMode ? 'text-gray-500' : 'text-gray-500'
+              }`}>
                 Didn't receive the email? Check your spam folder or contact support.
               </p>
             </div>
@@ -168,40 +210,71 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} py-12 px-4 sm:px-6 lg:px-8`}>
+    <div className={`min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 transition-colors duration-300 ${
+      darkMode 
+        ? 'bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900' 
+        : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'
+    }`}>
       <div className="max-w-md w-full space-y-8">
         {/* Header */}
         <div className="text-center">
           <div className="flex justify-center mb-6">
             <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-2xl flex items-center justify-center shadow-lg">
-              <span className="text-white font-bold text-2xl">M</span>
+              <span className="text-white font-bold text-2xl">
+                {customization?.branding?.app_name?.charAt(0) || 'N'}
+              </span>
             </div>
           </div>
-          <h2 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Create your account</h2>
-          <p className={`mt-2 text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-            Start using Novera AI Knowledge Assistant
+          <h2 className={`text-3xl font-bold transition-colors ${
+            darkMode ? 'text-white' : 'text-gray-900'
+          }`}>
+            Create your account
+          </h2>
+          <p className={`mt-2 text-sm transition-colors ${
+            darkMode ? 'text-gray-400' : 'text-gray-600'
+          }`}>
+            Start using {customization?.branding?.app_name || 'Novera AI'} Knowledge Assistant
           </p>
         </div>
 
         {/* Register Form */}
-        <div className={`rounded-xl shadow-lg p-8 ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
+        <div className={`rounded-xl shadow-lg p-8 transition-all duration-300 ${
+          darkMode 
+            ? 'bg-gray-800 border border-gray-700' 
+            : 'bg-white'
+        }`}>
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Error Message */}
             {error && (
-              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
-                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-                <p className="text-sm text-red-800">{error}</p>
+              <div className={`flex items-center gap-2 p-3 rounded-lg transition-colors ${
+                darkMode 
+                  ? 'bg-red-900/30 border border-red-800' 
+                  : 'bg-red-50 border border-red-200'
+              }`}>
+                <AlertCircle className={`w-5 h-5 flex-shrink-0 ${
+                  darkMode ? 'text-red-400' : 'text-red-600'
+                }`} />
+                <p className={`text-sm ${darkMode ? 'text-red-300' : 'text-red-800'}`}>
+                  {error}
+                </p>
               </div>
             )}
 
             {/* Email Input */}
             <div>
-              <label htmlFor="email" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              <label 
+                htmlFor="email" 
+                className={`block text-sm font-medium mb-1 transition-colors ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}
+              >
                 Email address *
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Mail className={`h-5 w-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />
+                  <Mail className={`h-5 w-5 transition-colors ${
+                    darkMode ? 'text-gray-500' : 'text-gray-400'
+                  }`} />
                 </div>
                 <input
                   id="email"
@@ -211,7 +284,11 @@ export default function RegisterPage() {
                   required
                   value={formData.email}
                   onChange={handleChange}
-                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
+                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all ${
+                    darkMode 
+                      ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:bg-gray-600' 
+                      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                  }`}
                   placeholder="you@example.com"
                   disabled={loading}
                 />
@@ -220,12 +297,19 @@ export default function RegisterPage() {
 
             {/* Username Input */}
             <div>
-              <label htmlFor="username" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              <label 
+                htmlFor="username" 
+                className={`block text-sm font-medium mb-1 transition-colors ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}
+              >
                 Username *
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <User className={`h-5 w-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />
+                  <User className={`h-5 w-5 transition-colors ${
+                    darkMode ? 'text-gray-500' : 'text-gray-400'
+                  }`} />
                 </div>
                 <input
                   id="username"
@@ -236,7 +320,11 @@ export default function RegisterPage() {
                   minLength={3}
                   value={formData.username}
                   onChange={handleChange}
-                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
+                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all ${
+                    darkMode 
+                      ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:bg-gray-600' 
+                      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                  }`}
                   placeholder="johndoe"
                   disabled={loading}
                 />
@@ -245,7 +333,12 @@ export default function RegisterPage() {
 
             {/* Full Name Input */}
             <div>
-              <label htmlFor="fullName" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              <label 
+                htmlFor="fullName" 
+                className={`block text-sm font-medium mb-1 transition-colors ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}
+              >
                 Full name (optional)
               </label>
               <input
@@ -255,7 +348,11 @@ export default function RegisterPage() {
                 autoComplete="name"
                 value={formData.fullName}
                 onChange={handleChange}
-                className={`block w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
+                className={`block w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all ${
+                  darkMode 
+                    ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:bg-gray-600' 
+                    : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                }`}
                 placeholder="John Doe"
                 disabled={loading}
               />
@@ -263,12 +360,19 @@ export default function RegisterPage() {
 
             {/* Password Input */}
             <div>
-              <label htmlFor="password" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              <label 
+                htmlFor="password" 
+                className={`block text-sm font-medium mb-1 transition-colors ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}
+              >
                 Password *
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className={`h-5 w-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />
+                  <Lock className={`h-5 w-5 transition-colors ${
+                    darkMode ? 'text-gray-500' : 'text-gray-400'
+                  }`} />
                 </div>
                 <input
                   id="password"
@@ -278,7 +382,11 @@ export default function RegisterPage() {
                   required
                   value={formData.password}
                   onChange={handleChange}
-                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
+                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all ${
+                    darkMode 
+                      ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:bg-gray-600' 
+                      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                  }`}
                   placeholder="••••••••"
                   disabled={loading}
                 />
@@ -290,22 +398,27 @@ export default function RegisterPage() {
                   <PasswordRequirement
                     met={formData.password.length >= 8}
                     text="At least 8 characters"
+                    darkMode={darkMode}
                   />
                   <PasswordRequirement
                     met={/[A-Z]/.test(formData.password)}
                     text="One uppercase letter"
+                    darkMode={darkMode}
                   />
                   <PasswordRequirement
                     met={/[a-z]/.test(formData.password)}
                     text="One lowercase letter"
+                    darkMode={darkMode}
                   />
                   <PasswordRequirement
                     met={/[0-9]/.test(formData.password)}
                     text="One number"
+                    darkMode={darkMode}
                   />
                   <PasswordRequirement
-                    met={/[!@#$%^&*()_+\-=[\${}|;:,.<>?]/.test(formData.password)}
+                    met={/[!@#$%^&*()_+\-=[\]{}|;:,.<>?]/.test(formData.password)}
                     text="One special character"
+                    darkMode={darkMode}
                   />
                 </div>
               )}
@@ -313,12 +426,19 @@ export default function RegisterPage() {
 
             {/* Confirm Password Input */}
             <div>
-              <label htmlFor="confirmPassword" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              <label 
+                htmlFor="confirmPassword" 
+                className={`block text-sm font-medium mb-1 transition-colors ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}
+              >
                 Confirm password *
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className={`h-5 w-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />
+                  <Lock className={`h-5 w-5 transition-colors ${
+                    darkMode ? 'text-gray-500' : 'text-gray-400'
+                  }`} />
                 </div>
                 <input
                   id="confirmPassword"
@@ -328,13 +448,19 @@ export default function RegisterPage() {
                   required
                   value={formData.confirmPassword}
                   onChange={handleChange}
-                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
+                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all ${
+                    darkMode 
+                      ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:bg-gray-600' 
+                      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                  }`}
                   placeholder="••••••••"
                   disabled={loading}
                 />
               </div>
               {formData.confirmPassword && formData.password !== formData.confirmPassword && (
-                <p className="mt-1 text-sm text-red-600">Passwords do not match</p>
+                <p className={`mt-1 text-sm ${darkMode ? 'text-red-400' : 'text-red-600'}`}>
+                  Passwords do not match
+                </p>
               )}
             </div>
 
@@ -360,11 +486,13 @@ export default function RegisterPage() {
 
           {/* Login Link */}
           <div className="mt-6 text-center">
-            <p className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+            <p className={`text-sm transition-colors ${
+              darkMode ? 'text-gray-400' : 'text-gray-600'
+            }`}>
               Already have an account?{' '}
               <Link
                 to="/login"
-                className="font-medium text-primary-600 hover:text-primary-500"
+                className="font-medium text-primary-600 hover:text-primary-500 transition-colors"
               >
                 Sign in
               </Link>
@@ -373,13 +501,15 @@ export default function RegisterPage() {
         </div>
 
         {/* Footer */}
-        <p className={`text-center text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+        <p className={`text-center text-xs transition-colors ${
+          darkMode ? 'text-gray-500' : 'text-gray-500'
+        }`}>
           By creating an account, you agree to our{' '}
-          <a href="#" className="text-primary-600 hover:text-primary-500">
+          <a href="#" className="text-primary-600 hover:text-primary-500 transition-colors">
             Terms of Service
           </a>{' '}
           and{' '}
-          <a href="#" className="text-primary-600 hover:text-primary-500">
+          <a href="#" className="text-primary-600 hover:text-primary-500 transition-colors">
             Privacy Policy
           </a>
         </p>
@@ -388,15 +518,22 @@ export default function RegisterPage() {
   );
 }
 
-function PasswordRequirement({ met, text }: { met: boolean; text: string }) {
+// Dark-mode-aware Password Requirement Component
+function PasswordRequirement({ met, text, darkMode }: { met: boolean; text: string; darkMode: boolean }) {
   return (
     <div className="flex items-center gap-2 text-xs">
       {met ? (
-        <CheckCircle className="w-4 h-4 text-green-500" />
+        <CheckCircle className={`w-4 h-4 ${darkMode ? 'text-green-400' : 'text-green-500'}`} />
       ) : (
-        <X className="w-4 h-4 text-gray-300" />
+        <X className={`w-4 h-4 ${darkMode ? 'text-gray-600' : 'text-gray-300'}`} />
       )}
-      <span className={met ? 'text-green-600' : 'text-gray-500'}>{text}</span>
+      <span className={`transition-colors ${
+        met 
+          ? (darkMode ? 'text-green-400' : 'text-green-600') 
+          : (darkMode ? 'text-gray-500' : 'text-gray-500')
+      }`}>
+        {text}
+      </span>
     </div>
   );
 }
