@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { LogIn, Mail, Lock, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { useCustomization } from '../contexts/CustomizationContext'; // Added import
+import { useCustomization } from '../contexts/CustomizationContext';
 import VerificationReminder from '../components/auth/VerificationReminder';
 import api from '../services/api';
 
@@ -10,7 +10,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
-  const { darkMode } = useCustomization(); // Added to get darkMode from context
+  const { customization, darkMode } = useCustomization();
 
   const [formData, setFormData] = useState({
     email: '',
@@ -38,7 +38,6 @@ export default function LoginPage() {
     try {
       await login(formData.email, formData.password);
       
-      // Check if user is verified
       const currentUser = await api.getCurrentUser();
       
       if (!currentUser.is_verified) {
@@ -78,40 +77,71 @@ export default function LoginPage() {
   };
 
   return (
-    <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} py-12 px-4 sm:px-6 lg:px-8`}>
+    <div className={`min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 transition-colors duration-300 ${
+      darkMode 
+        ? 'bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900' 
+        : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'
+    }`}>
       <div className="max-w-md w-full space-y-8">
         {/* Header */}
         <div className="text-center">
           <div className="flex justify-center mb-6">
             <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-2xl flex items-center justify-center shadow-lg">
-              <span className="text-white font-bold text-2xl">M</span>
+              <span className="text-white font-bold text-2xl">
+                {customization?.branding?.app_name?.charAt(0) || 'N'}
+              </span>
             </div>
           </div>
-          <h2 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Welcome back</h2>
-          <p className={`mt-2 text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-            Sign in to your Novera account
+          <h2 className={`text-3xl font-bold transition-colors ${
+            darkMode ? 'text-white' : 'text-gray-900'
+          }`}>
+            Welcome back
+          </h2>
+          <p className={`mt-2 text-sm transition-colors ${
+            darkMode ? 'text-gray-400' : 'text-gray-600'
+          }`}>
+            Sign in to your {customization?.branding?.app_name || 'Novera'} account
           </p>
         </div>
 
         {/* Login Form */}
-        <div className={`rounded-xl shadow-lg p-8 ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
+        <div className={`rounded-xl shadow-lg p-8 transition-all duration-300 ${
+          darkMode 
+            ? 'bg-gray-800 border border-gray-700' 
+            : 'bg-white'
+        }`}>
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Error Message */}
             {error && (
-              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
-                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-                <p className="text-sm text-red-800">{error}</p>
+              <div className={`flex items-center gap-2 p-3 rounded-lg transition-colors ${
+                darkMode 
+                  ? 'bg-red-900/30 border border-red-800' 
+                  : 'bg-red-50 border border-red-200'
+              }`}>
+                <AlertCircle className={`w-5 h-5 flex-shrink-0 ${
+                  darkMode ? 'text-red-400' : 'text-red-600'
+                }`} />
+                <p className={`text-sm ${darkMode ? 'text-red-300' : 'text-red-800'}`}>
+                  {error}
+                </p>
               </div>
             )}
 
             {/* Email Input */}
             <div>
-              <label htmlFor="email" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              <label 
+                htmlFor="email" 
+                className={`block text-sm font-medium mb-1 transition-colors ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}
+              >
                 Email address
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Mail className={`h-5 w-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />
+                  <Mail className={`h-5 w-5 transition-colors ${
+                    darkMode ? 'text-gray-500' : 'text-gray-400'
+                  }`} />
                 </div>
                 <input
                   id="email"
@@ -121,7 +151,11 @@ export default function LoginPage() {
                   required
                   value={formData.email}
                   onChange={handleChange}
-                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
+                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all ${
+                    darkMode 
+                      ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:bg-gray-600' 
+                      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                  }`}
                   placeholder="you@example.com"
                   disabled={loading}
                 />
@@ -130,12 +164,19 @@ export default function LoginPage() {
 
             {/* Password Input */}
             <div>
-              <label htmlFor="password" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+              <label 
+                htmlFor="password" 
+                className={`block text-sm font-medium mb-1 transition-colors ${
+                  darkMode ? 'text-gray-300' : 'text-gray-700'
+                }`}
+              >
                 Password
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Lock className={`h-5 w-5 ${darkMode ? 'text-gray-400' : 'text-gray-400'}`} />
+                  <Lock className={`h-5 w-5 transition-colors ${
+                    darkMode ? 'text-gray-500' : 'text-gray-400'
+                  }`} />
                 </div>
                 <input
                   id="password"
@@ -145,7 +186,11 @@ export default function LoginPage() {
                   required
                   value={formData.password}
                   onChange={handleChange}
-                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
+                  className={`block w-full pl-10 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent transition-all ${
+                    darkMode 
+                      ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:bg-gray-600' 
+                      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                  }`}
                   placeholder="••••••••"
                   disabled={loading}
                 />
@@ -159,9 +204,16 @@ export default function LoginPage() {
                   id="remember-me"
                   name="remember-me"
                   type="checkbox"
-                  className={`h-4 w-4 focus:ring-primary-500 border-gray-300 rounded ${darkMode ? 'text-primary-600' : ''}`}
+                  className={`h-4 w-4 text-primary-600 focus:ring-primary-500 rounded transition-colors ${
+                    darkMode ? 'bg-gray-700 border-gray-600' : 'border-gray-300'
+                  }`}
                 />
-                <label htmlFor="remember-me" className={`ml-2 block text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                <label 
+                  htmlFor="remember-me" 
+                  className={`ml-2 block text-sm transition-colors ${
+                    darkMode ? 'text-gray-300' : 'text-gray-700'
+                  }`}
+                >
                   Remember me
                 </label>
               </div>
@@ -169,7 +221,7 @@ export default function LoginPage() {
               <div className="text-sm">
                 <Link
                   to="/forgot-password"
-                  className="font-medium text-primary-600 hover:text-primary-500"
+                  className="font-medium text-primary-600 hover:text-primary-500 transition-colors"
                 >
                   Forgot password?
                 </Link>
@@ -198,11 +250,13 @@ export default function LoginPage() {
 
           {/* Register Link */}
           <div className="mt-6 text-center">
-            <p className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+            <p className={`text-sm transition-colors ${
+              darkMode ? 'text-gray-400' : 'text-gray-600'
+            }`}>
               Don't have an account?{' '}
               <Link
                 to="/register"
-                className="font-medium text-primary-600 hover:text-primary-500"
+                className="font-medium text-primary-600 hover:text-primary-500 transition-colors"
               >
                 Sign up now
               </Link>
@@ -211,13 +265,15 @@ export default function LoginPage() {
         </div>
 
         {/* Footer */}
-        <p className={`text-center text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+        <p className={`text-center text-xs transition-colors ${
+          darkMode ? 'text-gray-500' : 'text-gray-500'
+        }`}>
           By signing in, you agree to our{' '}
-          <a href="#" className="text-primary-600 hover:text-primary-500">
+          <a href="#" className="text-primary-600 hover:text-primary-500 transition-colors">
             Terms of Service
           </a>{' '}
           and{' '}
-          <a href="#" className="text-primary-600 hover:text-primary-500">
+          <a href="#" className="text-primary-600 hover:text-primary-500 transition-colors">
             Privacy Policy
           </a>
         </p>
