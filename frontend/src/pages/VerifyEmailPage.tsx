@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { CheckCircle, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
-import { useCustomization } from '../contexts/CustomizationContext'; // Added import
+import { Mail, CheckCircle, AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import { useCustomization } from '../contexts/CustomizationContext';
 import api from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -10,7 +10,7 @@ export default function VerifyEmailPage() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token');
-  const { darkMode } = useCustomization(); // Added to get darkMode from context
+  const { customization, darkMode } = useCustomization();
 
   const [verifying, setVerifying] = useState(true);
   const [verified, setVerified] = useState(false);
@@ -85,45 +85,77 @@ export default function VerifyEmailPage() {
     }
   };
 
-  // Verifying state
+  // Verifying State
   if (verifying) {
     return (
-      <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'}`}>
+      <div className={`min-h-screen flex items-center justify-center transition-colors duration-300 ${
+        darkMode 
+          ? 'bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900' 
+          : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'
+      }`}>
         <div className="text-center">
           <Loader2 className="w-12 h-12 text-primary-600 animate-spin mx-auto mb-4" />
-          <p className={`${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>Verifying your email...</p>
+          <p className={`transition-colors ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+            Verifying your email...
+          </p>
         </div>
       </div>
     );
   }
 
-  // Success state
+  // Success State
   if (verified) {
     return (
-      <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} py-12 px-4 sm:px-6 lg:px-8`}>
+      <div className={`min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 transition-colors duration-300 ${
+        darkMode 
+          ? 'bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900' 
+          : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'
+      }`}>
         <div className="max-w-md w-full">
           <div className="text-center mb-8">
             <div className="flex justify-center mb-6">
               <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-2xl flex items-center justify-center shadow-lg">
-                <span className="text-white font-bold text-2xl">N</span>
+                <span className="text-white font-bold text-2xl">
+                  {customization?.branding?.app_name?.charAt(0) || 'N'}
+                </span>
               </div>
             </div>
           </div>
 
-          <div className={`rounded-xl shadow-lg p-8 ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
+          <div className={`rounded-xl shadow-lg p-8 transition-all duration-300 ${
+            darkMode 
+              ? 'bg-gray-800 border border-gray-700' 
+              : 'bg-white'
+          }`}>
             <div className="text-center">
-              <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 mb-4">
-                <CheckCircle className="h-10 w-10 text-green-600" />
+              <div className={`mx-auto flex items-center justify-center h-16 w-16 rounded-full mb-4 ${
+                darkMode ? 'bg-green-900/30' : 'bg-green-100'
+              }`}>
+                <CheckCircle className={`h-10 w-10 ${
+                  darkMode ? 'text-green-400' : 'text-green-600'
+                }`} />
               </div>
 
-              <h2 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>Email Verified!</h2>
+              <h2 className={`text-2xl font-bold mb-2 transition-colors ${
+                darkMode ? 'text-white' : 'text-gray-900'
+              }`}>
+                Email Verified!
+              </h2>
 
-              <p className={`mb-6 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                Your email has been successfully verified. You can now access all features of Novera AI.
+              <p className={`mb-6 transition-colors ${
+                darkMode ? 'text-gray-300' : 'text-gray-600'
+              }`}>
+                Your email has been successfully verified. You can now access all features of {customization?.branding?.app_name || 'Novera AI'}.
               </p>
 
-              <div className={`border rounded-lg p-4 mb-6 ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-green-50 border-green-200'}`}>
-                <p className={`text-sm ${darkMode ? 'text-green-300' : 'text-green-800'}`}>
+              <div className={`border rounded-lg p-4 mb-6 transition-all ${
+                darkMode 
+                  ? 'bg-green-900/20 border-green-800' 
+                  : 'bg-green-50 border-green-200'
+              }`}>
+                <p className={`text-sm ${
+                  darkMode ? 'text-green-300' : 'text-green-800'
+                }`}>
                   Redirecting to login page in 3 seconds...
                 </p>
               </div>
@@ -141,37 +173,73 @@ export default function VerifyEmailPage() {
     );
   }
 
-  // Error state
+  // Error State
   return (
-    <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'} py-12 px-4 sm:px-6 lg:px-8`}>
+    <div className={`min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 transition-colors duration-300 ${
+      darkMode 
+        ? 'bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900' 
+        : 'bg-gradient-to-br from-primary-50 via-white to-secondary-50'
+    }`}>
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-6">
             <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-secondary-500 rounded-2xl flex items-center justify-center shadow-lg">
-              <span className="text-white font-bold text-2xl">N</span>
+              <span className="text-white font-bold text-2xl">
+                {customization?.branding?.app_name?.charAt(0) || 'N'}
+              </span>
             </div>
           </div>
         </div>
 
-        <div className={`rounded-xl shadow-lg p-8 ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
+        <div className={`rounded-xl shadow-lg p-8 transition-all duration-300 ${
+          darkMode 
+            ? 'bg-gray-800 border border-gray-700' 
+            : 'bg-white'
+        }`}>
           <div className="text-center">
-            <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-red-100 mb-4">
-              <AlertCircle className="h-10 w-10 text-red-600" />
+            <div className={`mx-auto flex items-center justify-center h-16 w-16 rounded-full mb-4 ${
+              darkMode ? 'bg-red-900/30' : 'bg-red-100'
+            }`}>
+              <AlertCircle className={`h-10 w-10 ${
+                darkMode ? 'text-red-400' : 'text-red-600'
+              }`} />
             </div>
 
-            <h2 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>Verification Failed</h2>
+            <h2 className={`text-2xl font-bold mb-2 transition-colors ${
+              darkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              Verification Failed
+            </h2>
 
-            <p className={`mb-6 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>{error}</p>
+            <p className={`mb-6 transition-colors ${
+              darkMode ? 'text-gray-300' : 'text-gray-600'
+            }`}>
+              {error}
+            </p>
 
+            {/* Resend Success Message */}
             {resendSuccess && (
-              <div className={`border rounded-lg p-4 mb-6 ${darkMode ? 'bg-gray-700 border-gray-600' : 'bg-green-50 border-green-200'}`}>
-                <p className={`text-sm ${darkMode ? 'text-green-300' : 'text-green-800'}`}>
-                  Verification email sent! Please check your inbox.
-                </p>
+              <div className={`border rounded-lg p-4 mb-6 transition-all ${
+                darkMode 
+                  ? 'bg-green-900/20 border-green-800' 
+                  : 'bg-green-50 border-green-200'
+              }`}>
+                <div className="flex items-center gap-2 justify-center">
+                  <CheckCircle className={`w-5 h-5 ${
+                    darkMode ? 'text-green-400' : 'text-green-600'
+                  }`} />
+                  <p className={`text-sm ${
+                    darkMode ? 'text-green-300' : 'text-green-800'
+                  }`}>
+                    Verification email sent! Please check your inbox.
+                  </p>
+                </div>
               </div>
             )}
 
+            {/* Action Buttons */}
             <div className="space-y-3">
+              {/* Resend Verification Button (only if user is logged in and not verified) */}
               {user && !user.is_verified && (
                 <button
                   onClick={handleResendVerification}
@@ -192,14 +260,34 @@ export default function VerifyEmailPage() {
                 </button>
               )}
 
+              {/* Back to Login Button */}
               <Link
                 to="/login"
-                className={`block w-full px-4 py-2 border rounded-lg transition-colors text-center ${darkMode ? 'border-gray-600 text-gray-300 hover:bg-gray-700' : 'border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+                className={`block w-full px-4 py-2 border rounded-lg transition-all text-center ${
+                  darkMode 
+                    ? 'border-gray-600 text-gray-300 hover:bg-gray-700' 
+                    : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
               >
                 Back to Login
               </Link>
             </div>
           </div>
+        </div>
+
+        {/* Help Text */}
+        <div className="mt-6 text-center">
+          <p className={`text-sm transition-colors ${
+            darkMode ? 'text-gray-500' : 'text-gray-500'
+          }`}>
+            Need help?{' '}
+            <a 
+              href="mailto:support@novera.ai" 
+              className="text-primary-600 hover:text-primary-500 transition-colors font-medium"
+            >
+              Contact Support
+            </a>
+          </p>
         </div>
       </div>
     </div>
