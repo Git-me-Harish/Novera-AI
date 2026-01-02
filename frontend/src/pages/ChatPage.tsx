@@ -482,11 +482,11 @@ export default function ChatPage() {
                     <button
                       key={idx}
                       onClick={() => handleSuggestionClick(suggestion)}
-                      className="group px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-300 rounded-lg transition-all shadow-sm hover:shadow min-touch-target"
+                      className="group px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-left text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-300 rounded-lg transition-all shadow-sm hover:shadow min-touch-target"
                     >
-                      <span className="flex items-center gap-1">
-                        <span className="line-clamp-1">{suggestion}</span>
-                        <Send className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                      <span className="flex items-start gap-1.5">
+                        <span className="flex-1 break-words leading-relaxed">{suggestion}</span>
+                        <Send className="w-3 h-3 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
                       </span>
                     </button>
                   ))}
