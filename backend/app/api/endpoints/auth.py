@@ -12,6 +12,8 @@ from app.db.session import get_db
 from app.services.auth.auth_service import auth_service
 from app.api.dependencies.auth import get_current_user, get_current_active_user
 from app.models.user import User
+from fastapi import BackgroundTasks
+
 
 router = APIRouter()
 
