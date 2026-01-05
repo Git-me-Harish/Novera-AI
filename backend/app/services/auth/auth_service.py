@@ -10,6 +10,7 @@ from loguru import logger
 import secrets
 from app.models.user import User, RefreshToken, PasswordResetToken, EmailVerificationToken
 from app.services.email.email_service import email_service
+from fastapi import BackgroundTasks
 
 from app.core.security import (
     verify_password,
