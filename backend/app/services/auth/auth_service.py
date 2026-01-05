@@ -33,49 +33,49 @@ class AuthService:
     # Registration
     # ---------------------------
     async def register_user(
-    self,
-    email: str,
-    username: str,
-    password: str,
-    full_name: Optional[str],
-    ip_address: Optional[str],
-    db: AsyncSession,
-) -> Tuple[bool, Optional[User], Optional[str]]:
-    if not validate_email(email):
-        return False, None, "Invalid email format"
-
-    is_strong, error = validate_password_strength(password)
-    if not is_strong:
-        return False, None, error
-
-    if await db.scalar(select(User).where(User.email == email.lower())):
-        return False, None, "Email already registered"
-
-    if await db.scalar(select(User).where(User.username == username)):
-        return False, None, "Username already taken"
-
-    try:
-        user = User(
-            email=email.lower(),
-            username=username,
-            hashed_password=get_password_hash(password),
-            full_name=full_name,
-            role="user",
-            is_active=True,
-            is_verified=False,
-            preferences={"theme": "light", "language": "en", "notifications": True},
-        )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-
-        logger.info(f"User registered: {user.email}")
-        return True, user, None
-
-    except Exception:
-        await db.rollback()
-        logger.exception("Registration failed")
-        return False, None, "Registration failed"
+        self,
+        email: str,
+        username: str,
+        password: str,
+        full_name: Optional[str],
+        ip_address: Optional[str],
+        db: AsyncSession,
+    ) -> Tuple[bool, Optional[User], Optional[str]]:
+        if not validate_email(email):
+            return False, None, "Invalid email format"
+    
+        is_strong, error = validate_password_strength(password)
+        if not is_strong:
+            return False, None, error
+    
+        if await db.scalar(select(User).where(User.email == email.lower())):
+            return False, None, "Email already registered"
+    
+        if await db.scalar(select(User).where(User.username == username)):
+            return False, None, "Username already taken"
+    
+        try:
+            user = User(
+                email=email.lower(),
+                username=username,
+                hashed_password=get_password_hash(password),
+                full_name=full_name,
+                role="user",
+                is_active=True,
+                is_verified=False,
+                preferences={"theme": "light", "language": "en", "notifications": True},
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+    
+            logger.info(f"User registered: {user.email}")
+            return True, user, None
+    
+        except Exception:
+            await db.rollback()
+            logger.exception("Registration failed")
+            return False, None, "Registration failed"
 
 
     
