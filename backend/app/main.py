@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse, FileResponse
 from loguru import logger
 import sys
 from pathlib import Path
-import os
 
 from app.core.config import settings
 from app.db.session import init_db, close_db
@@ -65,9 +64,9 @@ async def lifespan(app: FastAPI):
         Path(settings.upload_dir + "/branding").mkdir(parents=True, exist_ok=True)
         logger.info("✅ Upload directories ready")
 
-    except Exception as e:
+    except Exception:
         logger.exception("❌ Startup failed")
-        raise e
+        raise
 
     yield
 
@@ -109,10 +108,9 @@ if upload_path.exists():
     app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
 
 # -------------------------------------------------
-# Static: frontend build
+# Static: frontend build (RENDER SAFE)
 # -------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent
-FRONTEND_DIR = BASE_DIR.parent / "static"
+FRONTEND_DIR = Path("/app/backend/static")
 
 if FRONTEND_DIR.exists():
     app.mount(
@@ -121,6 +119,8 @@ if FRONTEND_DIR.exists():
         name="static",
     )
     logger.info(f"✅ Frontend static mounted: {FRONTEND_DIR}")
+else:
+    logger.warning("⚠️ Frontend static directory not found")
 
 # -------------------------------------------------
 # API Routes (ALL under /api)
@@ -135,17 +135,17 @@ app.include_router(admin.router, prefix=settings.api_v1_prefix, tags=["Admin"])
 app.include_router(document_editor.router, prefix=settings.api_v1_prefix, tags=["Editor"])
 
 # -------------------------------------------------
-# SPA Catch-All (IMPORTANT)
+# SPA Catch-All (FIXED: GET + HEAD)
 # -------------------------------------------------
-@app.get("/{full_path:path}")
+@app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
 async def serve_frontend(full_path: str):
     """
-    Serve frontend SPA (React/Vite).
+    Serve frontend SPA (React / Vite).
     Any non-API route returns index.html
     """
     index_file = FRONTEND_DIR / "index.html"
 
-    if FRONTEND_DIR.exists() and index_file.exists():
+    if index_file.exists():
         return FileResponse(index_file)
 
     return JSONResponse(
