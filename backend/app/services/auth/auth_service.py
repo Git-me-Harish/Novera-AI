@@ -11,6 +11,8 @@ import secrets
 from app.models.user import User, RefreshToken, PasswordResetToken, EmailVerificationToken
 from app.services.email.email_service import email_service
 from fastapi import BackgroundTasks
+from fastapi.concurrency import run_in_threadpool
+
 
 from app.core.security import (
     verify_password,
@@ -31,70 +33,50 @@ class AuthService:
     # Registration
     # ---------------------------
     async def register_user(
-        self,
-        email: str,
-        username: str,
-        password: str,
-        full_name: Optional[str],
-        ip_address: Optional[str],
-        db: AsyncSession,
-        background_tasks: Optional[BackgroundTasks] = None
-    ) -> Tuple[bool, Optional[User], Optional[str]]:
-        """
-        Register a new user and optionally send verification email in background.
-        """
-        # Validate email
-        if not validate_email(email):
-            return False, None, "Invalid email format"
+    self,
+    email: str,
+    username: str,
+    password: str,
+    full_name: Optional[str],
+    ip_address: Optional[str],
+    db: AsyncSession,
+) -> Tuple[bool, Optional[User], Optional[str]]:
+    if not validate_email(email):
+        return False, None, "Invalid email format"
 
-        # Validate password
-        is_strong, error = validate_password_strength(password)
-        if not is_strong:
-            return False, None, error
+    is_strong, error = validate_password_strength(password)
+    if not is_strong:
+        return False, None, error
 
-        # Check duplicates
-        result = await db.execute(select(User).where(User.email == email.lower()))
-        if result.scalar_one_or_none():
-            return False, None, "Email already registered"
+    if await db.scalar(select(User).where(User.email == email.lower())):
+        return False, None, "Email already registered"
 
-        result = await db.execute(select(User).where(User.username == username))
-        if result.scalar_one_or_none():
-            return False, None, "Username already taken"
+    if await db.scalar(select(User).where(User.username == username)):
+        return False, None, "Username already taken"
 
-        # Create user
-        try:
-            user = User(
-                email=email.lower(),
-                username=username,
-                hashed_password=get_password_hash(password),
-                full_name=full_name,
-                role="user",
-                is_active=True,
-                is_verified=False,
-                preferences={"theme": "light", "language": "en", "notifications": True}
-            )
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
+    try:
+        user = User(
+            email=email.lower(),
+            username=username,
+            hashed_password=get_password_hash(password),
+            full_name=full_name,
+            role="user",
+            is_active=True,
+            is_verified=False,
+            preferences={"theme": "light", "language": "en", "notifications": True},
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
 
-            logger.info(f"New user registered: {user.email}")
+        logger.info(f"User registered: {user.email}")
+        return True, user, None
 
-            # Schedule verification email in background
-            if background_tasks:
-                background_tasks.add_task(
-                    self.send_verification_email,
-                    user.id,
-                    user.email,
-                    user.username,
-                    ip_address
-                )
+    except Exception:
+        await db.rollback()
+        logger.exception("Registration failed")
+        return False, None, "Registration failed"
 
-            return True, user, None
-
-        except Exception as e:
-            await db.rollback()
-            logger.exception("User registration failed")
-            return False, None, "Registration failed. Please try again."
 
     
     async def authenticate_user(
@@ -553,43 +535,40 @@ class AuthService:
         email: str,
         username: str,
         ip_address: Optional[str],
-        db: Optional[AsyncSession] = None
+        db: AsyncSession
     ) -> Tuple[bool, Optional[str]]:
-        """
-        Send verification email (can be called in background). DB session optional.
-        """
+    
         try:
-            verification_token = secrets.token_urlsafe(32)
-            expires_at = datetime.utcnow() + timedelta(hours=24)
-
-            # If DB provided, store token
-            if db:
-                token_entry = EmailVerificationToken(
-                    user_id=user_id,
-                    token=verification_token,
-                    expires_at=expires_at,
-                    ip_address=ip_address
-                )
-                db.add(token_entry)
-                await db.commit()
-
-            # Send email (blocking, but in background)
-            sent = email_service.send_verification_email(
+            token = secrets.token_urlsafe(32)
+    
+            token_entry = EmailVerificationToken(
+                user_id=user_id,
+                token=token,
+                expires_at=datetime.utcnow() + timedelta(hours=24),
+                ip_address=ip_address,
+            )
+    
+            db.add(token_entry)
+            await db.commit()
+    
+            # 🚀 Run blocking email in threadpool
+            sent = await run_in_threadpool(
+                email_service.send_verification_email,
                 to_email=email,
-                verification_token=verification_token,
+                verification_token=token,
                 username=username
             )
-
+    
             if not sent:
-                logger.error(f"Failed to send verification email to {email}")
-                return False, "Failed to send verification email"
-
-            logger.info(f"Verification email scheduled for {email}")
+                return False, "Email sending failed"
+    
+            logger.info(f"Verification email sent to {email}")
             return True, None
-
-        except Exception as e:
-            logger.exception("Send verification email failed")
-            return False, "Failed to send verification email"
+    
+        except Exception:
+            await db.rollback()
+            logger.exception("Verification email failed")
+            return False, "Verification email failed"
 
     async def verify_email(
         self,
