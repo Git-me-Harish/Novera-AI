@@ -26,52 +26,40 @@ from app.core.config import settings
 class AuthService:
     """Service for handling authentication operations."""
 
+    # ---------------------------
+    # Registration
+    # ---------------------------
     async def register_user(
         self,
         email: str,
         username: str,
         password: str,
         full_name: Optional[str],
-        ip_address: Optional[str],  # Add this parameter
-        db: AsyncSession
+        ip_address: Optional[str],
+        db: AsyncSession,
+        background_tasks: Optional[BackgroundTasks] = None
     ) -> Tuple[bool, Optional[User], Optional[str]]:
         """
-        Register a new user.
-        
-        Args:
-            email: User email
-            username: Username
-            password: Plain password
-            full_name: Full name (optional)
-            ip_address: IP address of requester
-            db: Database session
-            
-        Returns:
-            Tuple of (success, user, error_message)
+        Register a new user and optionally send verification email in background.
         """
         # Validate email
         if not validate_email(email):
             return False, None, "Invalid email format"
-        
-        # Validate password strength
+
+        # Validate password
         is_strong, error = validate_password_strength(password)
         if not is_strong:
             return False, None, error
-        
-        # Check if email already exists
-        result = await db.execute(
-            select(User).where(User.email == email)
-        )
+
+        # Check duplicates
+        result = await db.execute(select(User).where(User.email == email.lower()))
         if result.scalar_one_or_none():
             return False, None, "Email already registered"
-        
-        # Check if username already exists
-        result = await db.execute(
-            select(User).where(User.username == username)
-        )
+
+        result = await db.execute(select(User).where(User.username == username))
         if result.scalar_one_or_none():
             return False, None, "Username already taken"
-        
+
         # Create user
         try:
             user = User(
@@ -82,33 +70,31 @@ class AuthService:
                 role="user",
                 is_active=True,
                 is_verified=False,
-                preferences={
-                    "theme": "light",
-                    "language": "en",
-                    "notifications": True
-                }
+                preferences={"theme": "light", "language": "en", "notifications": True}
             )
-            
             db.add(user)
             await db.commit()
             await db.refresh(user)
-            
-            await self.send_verification_email(
-                user_id=user.id,
-                email=user.email,
-                username=user.username,
-                ip_address=ip_address,
-                db=db
-            )
-            
+
             logger.info(f"New user registered: {user.email}")
-            
+
+            # Schedule verification email in background
+            if background_tasks:
+                background_tasks.add_task(
+                    self.send_verification_email,
+                    user.id,
+                    user.email,
+                    user.username,
+                    ip_address
+                )
+
             return True, user, None
-            
+
         except Exception as e:
             await db.rollback()
-            logger.error(f"User registration failed: {str(e)}")
+            logger.exception("User registration failed")
             return False, None, "Registration failed. Please try again."
+
     
     async def authenticate_user(
         self,
@@ -414,26 +400,18 @@ class AuthService:
         self,
         email: str,
         ip_address: Optional[str],
-        db: AsyncSession
+        db: AsyncSession,
+        background_tasks: Optional[BackgroundTasks] = None
     ) -> Tuple[bool, Optional[str]]:
         """
-        Request password reset - generates token and sends email.
-
-        Args:
-            email: User's email address
-            ip_address: IP address of requester
-            db: Database session
-
-        Returns:
-            Tuple of (success, error_message)
+        Request password reset token and optionally send email in background.
         """
-        result = await db.execute(
-            select(User).where(User.email == email.lower())
-        )
+        result = await db.execute(select(User).where(User.email == email.lower()))
         user = result.scalar_one_or_none()
 
         if not user:
             logger.warning(f"Password reset requested for non-existent email: {email}")
+            # Always return True to prevent email enumeration
             return True, None
 
         if not user.is_active:
@@ -441,10 +419,7 @@ class AuthService:
 
         try:
             reset_token = secrets.token_urlsafe(32)
-            
-            expires_at = datetime.utcnow() + timedelta(
-                minutes=settings.password_reset_token_expire_minutes
-            )
+            expires_at = datetime.utcnow() + timedelta(minutes=settings.password_reset_token_expire_minutes)
 
             token_entry = PasswordResetToken(
                 user_id=user.id,
@@ -452,27 +427,27 @@ class AuthService:
                 expires_at=expires_at,
                 ip_address=ip_address
             )
-
             db.add(token_entry)
             await db.commit()
 
-            email_sent = email_service.send_password_reset_email(
-                to_email=user.email,
-                reset_token=reset_token,
-                username=user.username
-            )
+            logger.info(f"Password reset token generated for user {user.email}")
 
-            if not email_sent:
-                logger.error(f"Failed to send password reset email to {user.email}")
-                return False, "Failed to send reset email. Please try again."
+            # Schedule sending password reset email in background
+            if background_tasks:
+                background_tasks.add_task(
+                    email_service.send_password_reset_email,
+                    to_email=user.email,
+                    reset_token=reset_token,
+                    username=user.username
+                )
 
-            logger.info(f"Password reset email sent to {user.email}")
             return True, None
 
         except Exception as e:
             await db.rollback()
-            logger.error(f"Password reset request failed: {str(e)}")
+            logger.exception("Password reset request failed")
             return False, "Failed to process password reset request"
+
 
     async def verify_reset_token(
         self,
@@ -577,56 +552,42 @@ class AuthService:
         email: str,
         username: str,
         ip_address: Optional[str],
-        db: AsyncSession
+        db: Optional[AsyncSession] = None
     ) -> Tuple[bool, Optional[str]]:
         """
-        Send email verification link to user.
-
-        Args:
-            user_id: User ID
-            email: User's email address
-            username: User's username
-            ip_address: IP address of requester
-            db: Database session
-
-        Returns:
-            Tuple of (success, error_message)
+        Send verification email (can be called in background). DB session optional.
         """
         try:
-            # Generate verification token
             verification_token = secrets.token_urlsafe(32)
-            
-            # Token expires in 24 hours
             expires_at = datetime.utcnow() + timedelta(hours=24)
 
-            # Store token in database
-            token_entry = EmailVerificationToken(
-                user_id=user_id,
-                token=verification_token,
-                expires_at=expires_at,
-                ip_address=ip_address
-            )
+            # If DB provided, store token
+            if db:
+                token_entry = EmailVerificationToken(
+                    user_id=user_id,
+                    token=verification_token,
+                    expires_at=expires_at,
+                    ip_address=ip_address
+                )
+                db.add(token_entry)
+                await db.commit()
 
-            db.add(token_entry)
-            await db.commit()
-
-            # Send verification email
-            email_sent = email_service.send_verification_email(
+            # Send email (blocking, but in background)
+            sent = email_service.send_verification_email(
                 to_email=email,
                 verification_token=verification_token,
                 username=username
             )
 
-            if not email_sent:
+            if not sent:
                 logger.error(f"Failed to send verification email to {email}")
-                return False, "Failed to send verification email. Please try again."
+                return False, "Failed to send verification email"
 
-            logger.info(f"Verification email sent to {email}")
+            logger.info(f"Verification email scheduled for {email}")
             return True, None
 
         except Exception as e:
-            await db.rollback()
-            logger.error(f"Send verification email failed: {str(e)}")
+            logger.exception("Send verification email failed")
             return False, "Failed to send verification email"
 
     async def verify_email(
