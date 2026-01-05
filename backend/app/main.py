@@ -4,14 +4,15 @@ Configures routes, middleware, and application lifecycle events.
 """
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+import sys
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse
 from loguru import logger
-import sys
-from pathlib import Path
 
 from app.core.config import settings
 from app.db.session import init_db, close_db
@@ -61,7 +62,7 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Database initialized")
 
         Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-        Path(settings.upload_dir + "/branding").mkdir(parents=True, exist_ok=True)
+        Path(settings.upload_dir, "branding").mkdir(parents=True, exist_ok=True)
         logger.info("✅ Upload directories ready")
 
     except Exception:
@@ -105,22 +106,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # -------------------------------------------------
 upload_path = Path(settings.upload_dir)
 if upload_path.exists():
-    app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
-
-# -------------------------------------------------
-# Static: frontend build (RENDER SAFE)
-# -------------------------------------------------
-FRONTEND_DIR = Path("/app/backend/static")
-
-if FRONTEND_DIR.exists():
-    app.mount(
-        "/static",
-        StaticFiles(directory=str(FRONTEND_DIR)),
-        name="static",
-    )
-    logger.info(f"✅ Frontend static mounted: {FRONTEND_DIR}")
-else:
-    logger.warning("⚠️ Frontend static directory not found")
+    app.mount("/uploads", StaticFiles(directory=upload_path), name="uploads")
 
 # -------------------------------------------------
 # API Routes (ALL under /api)
@@ -135,23 +121,19 @@ app.include_router(admin.router, prefix=settings.api_v1_prefix, tags=["Admin"])
 app.include_router(document_editor.router, prefix=settings.api_v1_prefix, tags=["Editor"])
 
 # -------------------------------------------------
-# SPA Catch-All (FIXED: GET + HEAD)
+# Frontend SPA (✅ CORRECT WAY)
 # -------------------------------------------------
-@app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
-async def serve_frontend(full_path: str):
-    """
-    Serve frontend SPA (React / Vite).
-    Any non-API route returns index.html
-    """
-    index_file = FRONTEND_DIR / "index.html"
+FRONTEND_DIR = Path("/app/backend/static")
 
-    if index_file.exists():
-        return FileResponse(index_file)
-
-    return JSONResponse(
-        status_code=404,
-        content={"error": "Frontend not built"},
+if FRONTEND_DIR.exists():
+    app.mount(
+        "/",
+        StaticFiles(directory=FRONTEND_DIR, html=True),
+        name="frontend",
     )
+    logger.info(f"✅ Frontend mounted at / from {FRONTEND_DIR}")
+else:
+    logger.warning("⚠️ Frontend build not found")
 
 # -------------------------------------------------
 # Exception handling
