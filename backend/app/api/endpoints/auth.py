@@ -88,30 +88,25 @@ class UserResponse(BaseModel):
 async def register(
     request: RegisterRequest,
     http_request: Request,
+    background_tasks: BackgroundTasks,   # <-- add this
     db: AsyncSession = Depends(get_db)
 ):
-    """Register a new user account."""
     ip_address = http_request.client.host if http_request.client else None
 
-    try:
-        success, user, error = await auth_service.register_user(
-            email=request.email,
-            username=request.username,
-            password=request.password,
-            full_name=request.full_name,
-            ip_address=ip_address,
-            db=db
-        )
-        if not success:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+    success, user, error = await auth_service.register_user(
+        email=request.email,
+        username=request.username,
+        password=request.password,
+        full_name=request.full_name,
+        ip_address=ip_address,
+        db=db,
+        background_tasks=background_tasks  # <-- pass BackgroundTasks
+    )
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
 
-        tokens = await auth_service.create_tokens(user, db)
-        # Ensure the response matches TokenResponse
-        return TokenResponse(**tokens)
-
-    except Exception as e:
-        logger.exception("Error during registration")
-        raise HTTPException(status_code=500, detail="Internal server error")
+    tokens = await auth_service.create_tokens(user, db)
+    return TokenResponse(**tokens)
 
 # ---------------------------
 
@@ -245,20 +240,20 @@ async def change_password(
 async def forgot_password(
     request: ForgotPasswordRequest,
     http_request: Request,
+    background_tasks: BackgroundTasks,  # <-- add this
     db: AsyncSession = Depends(get_db)
 ):
-    """Request password reset."""
-    try:
-        ip_address = http_request.client.host if http_request.client else None
-        success, error = await auth_service.request_password_reset(
-            email=request.email, ip_address=ip_address, db=db
-        )
-        if not success and error:
-            raise HTTPException(status_code=400, detail=error)
-        return {"message": "If the email exists, a password reset link has been sent", "email": request.email}
-    except Exception as e:
-        logger.exception("Error during forgot password")
-        raise HTTPException(status_code=500, detail="Internal server error")
+    ip_address = http_request.client.host if http_request.client else None
+    success, error = await auth_service.request_password_reset(
+        email=request.email,
+        ip_address=ip_address,
+        db=db,
+        background_tasks=background_tasks  # <-- pass BackgroundTasks
+    )
+    if not success and error:
+        raise HTTPException(status_code=400, detail=error)
+    return {"message": "If the email exists, a password reset link has been sent", "email": request.email}
+
 
 # ---------------------------
 
