@@ -86,11 +86,10 @@ class UserResponse(BaseModel):
 # Routes
 # ---------------------------
 
-@router.post("/auth/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/auth/register", response_model=TokenResponse, status_code=201)
 async def register(
     request: RegisterRequest,
     http_request: Request,
-    background_tasks: BackgroundTasks,   # <-- add this
     db: AsyncSession = Depends(get_db)
 ):
     ip_address = http_request.client.host if http_request.client else None
@@ -102,10 +101,10 @@ async def register(
         full_name=request.full_name,
         ip_address=ip_address,
         db=db,
-        background_tasks=background_tasks  # <-- pass BackgroundTasks
     )
+
     if not success:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+        raise HTTPException(status_code=400, detail=error)
 
     tokens = await auth_service.create_tokens(user, db)
     return TokenResponse(**tokens)
@@ -141,6 +140,27 @@ async def login(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 # ---------------------------
+
+@router.post("/auth/send-verification")
+async def send_verification(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    ip_address = request.client.host if request.client else None
+
+    background_tasks.add_task(
+        auth_service.send_verification_email,
+        user_id=current_user.id,
+        email=current_user.email,
+        username=current_user.username,
+        ip_address=ip_address,
+        db=db
+    )
+
+    return {"message": "Verification email queued"}
+
 
 @router.post("/auth/refresh", response_model=TokenResponse)
 async def refresh_token(
