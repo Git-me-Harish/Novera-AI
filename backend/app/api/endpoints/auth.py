@@ -333,23 +333,26 @@ async def verify_email(
 @router.post("/auth/resend-verification")
 async def resend_verification(
     http_request: Request,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Resend verification email."""
     if current_user.is_verified:
         raise HTTPException(status_code=400, detail="Email already verified")
-    try:
-        ip_address = http_request.client.host if http_request.client else None
-        success, error = await auth_service.resend_verification_email(
-            user_id=current_user.id, ip_address=ip_address, db=db
-        )
-        if not success:
-            raise HTTPException(status_code=400, detail=error)
-        return {"message": "Verification email sent", "email": current_user.email}
-    except Exception as e:
-        logger.exception("Error resending verification email")
-        raise HTTPException(status_code=500, detail="Internal server error")
+
+    ip_address = http_request.client.host if http_request.client else None
+
+    success, error = await auth_service.resend_verification_email(
+        user_id=current_user.id,
+        ip_address=ip_address,
+        db=db,
+        background_tasks=background_tasks
+    )
+
+    if not success:
+        raise HTTPException(status_code=400, detail=error)
+
+    return {"message": "Verification email sent"}
 
 # ---------------------------
 # Test endpoint
