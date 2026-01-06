@@ -90,6 +90,7 @@ class UserResponse(BaseModel):
 async def register(
     request: RegisterRequest,
     http_request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     ip_address = http_request.client.host if http_request.client else None
@@ -106,8 +107,19 @@ async def register(
     if not success:
         raise HTTPException(status_code=400, detail=error)
 
+    # 🔥 SEND VERIFICATION EMAIL
+    await auth_service.send_verification_email(
+        user_id=user.id,
+        email=user.email,
+        username=user.username,
+        ip_address=ip_address,
+        db=db,
+        background_tasks=background_tasks
+    )
+
     tokens = await auth_service.create_tokens(user, db)
     return TokenResponse(**tokens)
+
 
 # ---------------------------
 
@@ -144,6 +156,7 @@ async def login(
 @router.post("/auth/send-verification")
 async def send_verification(
     request: Request,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -154,7 +167,8 @@ async def send_verification(
         email=current_user.email,
         username=current_user.username,
         ip_address=ip_address,
-        db=db
+        db=db,
+        background_tasks=background_tasks
     )
 
     if not success:
