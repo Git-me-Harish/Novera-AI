@@ -144,14 +144,12 @@ async def login(
 @router.post("/auth/send-verification")
 async def send_verification(
     request: Request,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     ip_address = request.client.host if request.client else None
 
-    background_tasks.add_task(
-        auth_service.send_verification_email,
+    success, error = await auth_service.send_verification_email(
         user_id=current_user.id,
         email=current_user.email,
         username=current_user.username,
@@ -159,8 +157,10 @@ async def send_verification(
         db=db
     )
 
-    return {"message": "Verification email queued"}
+    if not success:
+        raise HTTPException(status_code=400, detail=error)
 
+    return {"message": "Verification email sent"}
 
 @router.post("/auth/refresh", response_model=TokenResponse)
 async def refresh_token(
