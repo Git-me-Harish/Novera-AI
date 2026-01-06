@@ -535,7 +535,8 @@ class AuthService:
         email: str,
         username: str,
         ip_address: Optional[str],
-        db: AsyncSession
+        db: AsyncSession,
+        background_tasks: BackgroundTasks
     ) -> Tuple[bool, Optional[str]]:
     
         try:
@@ -551,18 +552,15 @@ class AuthService:
             db.add(token_entry)
             await db.commit()
     
-            # 🚀 Run blocking email in threadpool
-            sent = await run_in_threadpool(
+            # ✅ DO NOT await email
+            background_tasks.add_task(
                 email_service.send_verification_email,
                 to_email=email,
                 verification_token=token,
                 username=username
             )
     
-            if not sent:
-                return False, "Email sending failed"
-    
-            logger.info(f"Verification email sent to {email}")
+            logger.info(f"Verification email queued for {email}")
             return True, None
     
         except Exception:
@@ -636,8 +634,10 @@ class AuthService:
         self,
         user_id: UUID,
         ip_address: Optional[str],
-        db: AsyncSession
+        db: AsyncSession,
+        background_tasks: BackgroundTasks
     ) -> Tuple[bool, Optional[str]]:
+
         """
         Resend verification email to user.
 
@@ -681,8 +681,10 @@ class AuthService:
             email=user.email,
             username=user.username,
             ip_address=ip_address,
-            db=db
+            db=db,
+            background_tasks=background_tasks
         )
+
 
 # Global instance
 auth_service = AuthService()
