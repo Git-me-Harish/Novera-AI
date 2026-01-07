@@ -29,43 +29,31 @@ class EmailService:
         html_content: str,
         text_content: Optional[str] = None
     ) -> bool:
-        """
-        Send an email.
-
-        Args:
-            to_email: Recipient email address
-            subject: Email subject
-            html_content: HTML content of the email
-            text_content: Plain text content (optional)
-
-        Returns:
-            True if email sent successfully
-        """
         try:
             msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = f"{self.from_name} <{self.from_email}>"
             msg['To'] = to_email
-
+    
             if text_content:
-                part1 = MIMEText(text_content, 'plain')
-                msg.attach(part1)
-
-            part2 = MIMEText(html_content, 'html')
-            msg.attach(part2)
-
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+                msg.attach(MIMEText(text_content, 'plain'))
+    
+            msg.attach(MIMEText(html_content, 'html'))
+    
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=20) as server:
+                server.ehlo()
                 if self.use_tls:
                     server.starttls()
-                
+                    server.ehlo()
+    
                 server.login(self.smtp_user, self.smtp_password)
                 server.send_message(msg)
-
+    
             logger.info(f"Email sent successfully to {to_email}")
             return True
-
+    
         except Exception as e:
-            logger.error(f"Failed to send email to {to_email}: {str(e)}")
+            logger.exception(f"Failed to send email to {to_email}")
             return False
 
     def send_password_reset_email(
