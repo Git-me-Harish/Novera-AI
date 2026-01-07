@@ -33,9 +33,11 @@ class AuthService:
         username: str,
         password: str,
         full_name: Optional[str],
-        ip_address: Optional[str],  # Add this parameter
-        db: AsyncSession
+        ip_address: Optional[str],
+        db: AsyncSession,
+        background_tasks: BackgroundTasks   # ✅ add
     ) -> Tuple[bool, Optional[User], Optional[str]]:
+
         """
         Register a new user.
         
@@ -99,8 +101,10 @@ class AuthService:
                 email=user.email,
                 username=user.username,
                 ip_address=ip_address,
-                db=db
+                db=db,
+                background_tasks=background_tasks  # ✅ FIX
             )
+
             
             logger.info(f"New user registered: {user.email}")
             
@@ -676,8 +680,10 @@ class AuthService:
         self,
         user_id: UUID,
         ip_address: Optional[str],
-        db: AsyncSession
-    ) -> Tuple[bool, Optional[str]]:
+        db: AsyncSession,
+        background_tasks: BackgroundTasks   
+    )
+
         """
         Resend verification email to user.
 
@@ -721,8 +727,10 @@ class AuthService:
             email=user.email,
             username=user.username,
             ip_address=ip_address,
-            db=db
+            db=db,
+            background_tasks=background_tasks
         )
+
 
 # Global instance
 auth_service = AuthService()
