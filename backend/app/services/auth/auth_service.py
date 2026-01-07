@@ -682,7 +682,7 @@ class AuthService:
         ip_address: Optional[str],
         db: AsyncSession,
         background_tasks: BackgroundTasks   
-    )
+    ):
 
         """
         Resend verification email to user.
