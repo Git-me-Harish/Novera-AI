@@ -10,6 +10,7 @@ from loguru import logger
 import secrets
 from app.models.user import User, RefreshToken, PasswordResetToken, EmailVerificationToken
 from app.services.email.email_service import email_service
+from fastapi import BackgroundTasks
 
 from app.core.security import (
     verify_password,
@@ -577,53 +578,33 @@ class AuthService:
         email: str,
         username: str,
         ip_address: Optional[str],
-        db: AsyncSession
-    ) -> Tuple[bool, Optional[str]]:
-        """
-        Send email verification link to user.
-
-        Args:
-            user_id: User ID
-            email: User's email address
-            username: User's username
-            ip_address: IP address of requester
-            db: Database session
-
-        Returns:
-            Tuple of (success, error_message)
-        """
+        db: AsyncSession,
+        background_tasks: BackgroundTasks
+    ):
         try:
-            # Generate verification token
             verification_token = secrets.token_urlsafe(32)
-            
-            # Token expires in 24 hours
             expires_at = datetime.utcnow() + timedelta(hours=24)
-
-            # Store token in database
+    
             token_entry = EmailVerificationToken(
                 user_id=user_id,
                 token=verification_token,
                 expires_at=expires_at,
                 ip_address=ip_address
             )
-
+    
             db.add(token_entry)
             await db.commit()
-
-            # Send verification email
-            email_sent = email_service.send_verification_email(
+    
+            # 🚀 Send email in background
+            background_tasks.add_task(
+                email_service.send_verification_email,
                 to_email=email,
                 verification_token=verification_token,
                 username=username
             )
-
-            if not email_sent:
-                logger.error(f"Failed to send verification email to {email}")
-                return False, "Failed to send verification email. Please try again."
-
-            logger.info(f"Verification email sent to {email}")
+    
             return True, None
-
+    
         except Exception as e:
             await db.rollback()
             logger.error(f"Send verification email failed: {str(e)}")
