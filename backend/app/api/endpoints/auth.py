@@ -100,44 +100,29 @@ class VerifyEmailRequest(BaseModel):
     """Verify email request."""
     token: str
 
-@router.post("/auth/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/auth/register", response_model=TokenResponse, status_code=201)
 async def register(
     request: RegisterRequest,
     http_request: Request,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Register a new user account.
-    
-    Requirements:
-    - Unique email and username
-    - Password must be at least 8 characters
-    - Password must contain uppercase, lowercase, digit, and special character
-    
-    Returns access and refresh tokens upon successful registration.
-    Sends verification email to user.
-    """
-    # Get IP address
     ip_address = http_request.client.host if http_request.client else None
-    
+
     success, user, error = await auth_service.register_user(
         email=request.email,
         username=request.username,
         password=request.password,
         full_name=request.full_name,
         ip_address=ip_address,
-        db=db
+        db=db,
+        background_tasks=background_tasks  # ✅ pass it
     )
-    
+
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error
-        )
-    
-    # Create tokens for newly registered user
+        raise HTTPException(status_code=400, detail=error)
+
     tokens = await auth_service.create_tokens(user, db)
-    
     return tokens
 
 @router.post("/auth/login", response_model=TokenResponse)
