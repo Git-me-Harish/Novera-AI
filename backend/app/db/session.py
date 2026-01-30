@@ -9,6 +9,7 @@ from sqlalchemy import event, text
 from loguru import logger
 
 from app.core.config import settings
+from app.db.base import Base
 
 _engine = None
 _async_sessionmaker = None
