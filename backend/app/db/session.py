@@ -10,16 +10,15 @@ from loguru import logger
 
 from app.core.config import settings
 
-# ✅ SAFE TO IMPORT (Alembic needs this)
+# ✅ Alembic-safe
 Base = declarative_base()
 
 _engine = None
+_async_sessionmaker = None
 
 
 def get_async_engine():
-    """Create async engine lazily (app runtime only)."""
     global _engine
-
     if _engine is None:
         _engine = create_async_engine(
             settings.database_url,
@@ -40,11 +39,15 @@ def get_async_engine():
     return _engine
 
 
-AsyncSessionLocal = async_sessionmaker(
-    bind=get_async_engine(),
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+def get_sessionmaker():
+    global _async_sessionmaker
+    if _async_sessionmaker is None:
+        _async_sessionmaker = async_sessionmaker(
+            bind=get_async_engine(),
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+    return _async_sessionmaker
 
 
 async def init_db() -> None:
@@ -56,7 +59,8 @@ async def init_db() -> None:
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
+    SessionLocal = get_sessionmaker()
+    async with SessionLocal() as session:
         try:
             yield session
             await session.commit()
@@ -73,4 +77,4 @@ async def close_db() -> None:
         logger.info("✅ Database connections closed")
 
 
-__all__ = ["Base", "AsyncSessionLocal", "get_db", "init_db", "close_db"]
+__all__ = ["Base", "get_db", "init_db", "close_db"]
