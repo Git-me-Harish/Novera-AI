@@ -10,9 +10,6 @@ from loguru import logger
 
 from app.core.config import settings
 
-# ✅ Alembic-safe
-Base = declarative_base()
-
 _engine = None
 _async_sessionmaker = None
 
