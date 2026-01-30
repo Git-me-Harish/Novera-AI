@@ -1,18 +1,25 @@
 from typing import AsyncGenerator
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    create_async_engine,
+    async_sessionmaker,
+)
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import event, text
 from loguru import logger
 
 from app.core.config import settings
 
+# ✅ SAFE TO IMPORT (Alembic needs this)
 Base = declarative_base()
 
 _engine = None
 
 
 def get_async_engine():
+    """Create async engine lazily (app runtime only)."""
     global _engine
+
     if _engine is None:
         _engine = create_async_engine(
             settings.database_url,
@@ -37,8 +44,6 @@ AsyncSessionLocal = async_sessionmaker(
     bind=get_async_engine(),
     class_=AsyncSession,
     expire_on_commit=False,
-    autocommit=False,
-    autoflush=False,
 )
 
 
