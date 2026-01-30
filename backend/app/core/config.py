@@ -35,15 +35,23 @@ class Settings(BaseSettings):
     database_pool_size: int = 20
     database_max_overflow: int = 10
     
-    postgres_user: str
-    postgres_password: str
-    postgres_db: str
+    postgres_user: Optional[str] = None
+    postgres_password: Optional[str] = None
+    postgres_db: Optional[str] = None
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     
     @property
     def sync_database_url(self) -> str:
         """Synchronous database URL for SQLAlchemy operations."""
+        if self.database_url:
+            return self.database_url.replace(
+                "postgresql+asyncpg", "postgresql+psycopg2"
+            )
+    
+        if not all([self.postgres_user, self.postgres_password, self.postgres_db]):
+            raise RuntimeError("Database configuration is incomplete")
+    
         return (
             f"postgresql://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -54,18 +62,18 @@ class Settings(BaseSettings):
     redis_cache_ttl: int = 3600
     
     # Google Gemini Configuration
-    gemini_api_key: str
+    gemini_api_key: Optional[str] = None
     gemini_embedding_model: str = "models/text-embedding-004"  
     gemini_embedding_dimensions: int = 1536 
     gemini_chat_model: str = "gemini-2.5-flash" 
     gemini_max_tokens: int = 8192
     
     # Cohere Configuration
-    cohere_api_key: str
+    cohere_api_key: Optional[str] = None
     cohere_rerank_model: str = "rerank-english-v3.0"
     
     # JWT Authentication
-    secret_key: str
+    secret_key: Optional[str] = None
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
@@ -185,17 +193,17 @@ class Settings(BaseSettings):
     @field_validator("gemini_api_key", "cohere_api_key", "secret_key")
     @classmethod
     def validate_secrets(cls, v, info):
-        """Ensure critical secrets are not using placeholder values."""
+        if v is None:
+            return v  # allow missing during Alembic / migrations
+    
         field_name = info.field_name
-        
-        if field_name == "secret_key":
-            if not v or len(v) < 20:
-                raise ValueError(f"{field_name} must be at least 20 characters long")
-        
-        if field_name in ["gemini_api_key", "cohere_api_key"]:
-            if not v or len(v) < 10:
-                raise ValueError(f"{field_name} cannot be empty")
-        
+    
+        if field_name == "secret_key" and len(v) < 20:
+            raise ValueError("secret_key must be at least 20 characters")
+    
+        if field_name in ["gemini_api_key", "cohere_api_key"] and len(v) < 10:
+            raise ValueError(f"{field_name} cannot be empty")
+    
         return v
 
 @lru_cache()
