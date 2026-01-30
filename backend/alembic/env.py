@@ -11,7 +11,7 @@ if BASE_DIR not in sys.path:
     sys.path.append(BASE_DIR)
 
 from app.core.config import settings
-from app.db.session import Base
+from app.db.base import Base
 from app import models
 
 config = context.config
