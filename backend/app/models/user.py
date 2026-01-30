@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import Column, String, Boolean, DateTime, Index, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 
-from app.db.session import Base
+from app.db.base import Base
 
 
 class User(Base):
