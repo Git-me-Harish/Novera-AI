@@ -60,13 +60,8 @@ class EmbeddingService:
             return  # Already initialized
         
         if not TORCH_AVAILABLE:
-            error_msg = (
-                "PyTorch/SentenceTransformers not available. "
-                "Cannot initialize local fallback model. "
-                "Ensure torch, torchvision, torchaudio, and sentence-transformers are installed."
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            logger.error("Local embeddings disabled: torch not installed.")
+            raise RuntimeError("Local embeddings are disabled in production.")
         
         try:
             # Log PyTorch environment
@@ -118,9 +113,9 @@ class EmbeddingService:
                 raise
                 
         except Exception as e:
-            logger.error(f"Failed to load local model: {str(e)}")
-            logger.exception("Full traceback:")
-            raise
+            logger.error(f"Gemini embedding failed: {str(e)}")
+            raise RuntimeError("Gemini embedding failed. Local fallback disabled.") from e
+
         
     async def generate_embedding(self, text: str) -> List[float]:
         """
