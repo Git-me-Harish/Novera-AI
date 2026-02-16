@@ -11,6 +11,15 @@ import numpy as np
 
 from app.core.config import settings
 
+try:
+    import torch
+    from sentence_transformers import SentenceTransformer
+    TORCH_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"PyTorch/SentenceTransformers not available: {e}")
+    TORCH_AVAILABLE = False
+
+from app.core.config import settings
 
 class EmbeddingService:
     """
@@ -41,21 +50,78 @@ class EmbeddingService:
         logger.info(f"Embedding service initialized: Gemini {self.model_name} ({self.dimensions}D)")
     
     def _init_local_model(self):
-        """Initialize local sentence-transformers model as fallback."""
-        if self.local_model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                logger.warning("Initializing local embedding model...")
-                self.local_model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
-                logger.info("Local embedding model loaded successfully")
-            except Exception as e:
-                logger.error(f"Failed to load local model: {str(e)}")
+        """
+        Initialize local sentence-transformers model as fallback.
+        
+        Uses all-mpnet-base-v2 (768D) which provides excellent quality
+        and matches common Gemini embedding dimensions.
+        """
+        if self.local_model is not None:
+            return  # Already initialized
+        
+        if not TORCH_AVAILABLE:
+            error_msg = (
+                "PyTorch/SentenceTransformers not available. "
+                "Cannot initialize local fallback model. "
+                "Ensure torch, torchvision, torchaudio, and sentence-transformers are installed."
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
+        try:
+            # Log PyTorch environment
+            logger.info(f"PyTorch version: {torch.__version__}")
+            logger.info(f"CUDA available: {torch.cuda.is_available()}")
+            
+            # Verify _pytree availability (diagnostic)
+            if hasattr(torch.utils, '_pytree'):
+                if hasattr(torch.utils._pytree, 'register_pytree_node'):
+                    logger.debug("✅ torch.utils._pytree.register_pytree_node available")
+                else:
+                    logger.warning("⚠️ torch.utils._pytree exists but missing register_pytree_node")
+            else:
+                logger.error("❌ torch.utils._pytree module not found")
+            
+            # Select device
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            logger.info(f"Loading local embedding model on device: {device}")
+            
+            # Initialize model with explicit device
+            # Using 'all-mpnet-base-v2' (768D) for better quality
+            # Alternative: 'all-MiniLM-L6-v2' (384D) for faster processing
+            model_name = 'all-mpnet-base-v2'
+            
+            logger.warning(f"Initializing local embedding model: {model_name}")
+            self.local_model = SentenceTransformer(model_name, device=device)
+            
+            # Validate model works
+            test_embedding = self.local_model.encode("test", convert_to_numpy=True)
+            logger.info(
+                f"✅ Local embedding model loaded successfully "
+                f"(device={device}, dims={len(test_embedding)})"
+            )
+            
+        except AttributeError as e:
+            # Specific handling for _pytree error
+            if "_pytree" in str(e) or "register_pytree_node" in str(e):
+                error_msg = (
+                    f"PyTorch installation incomplete: {str(e)}. "
+                    "This typically indicates missing torchvision or torchaudio packages. "
+                    f"Current torch version: {torch.__version__}. "
+                    "Please ensure requirements.txt includes: "
+                    "torch==2.1.2, torchvision==0.16.2, torchaudio==2.1.2"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg) from e
+            else:
+                logger.error(f"Failed to load local model (AttributeError): {str(e)}")
                 raise
-    
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
-    )
+                
+        except Exception as e:
+            logger.error(f"Failed to load local model: {str(e)}")
+            logger.exception("Full traceback:")
+            raise
+        
     async def generate_embedding(self, text: str) -> List[float]:
         """
         Generate embedding for a single text.
@@ -90,7 +156,8 @@ class EmbeddingService:
             lambda: genai.embed_content(
                 model=self.model_name,
                 content=text,
-                task_type="retrieval_document"
+                task_type="retrieval_document",
+                request_options={"api_version": "v1"}
             )
         )
         
