@@ -152,7 +152,6 @@ class EmbeddingService:
                 model=self.model_name,
                 content=text,
                 task_type="retrieval_document",
-                request_options={"api_version": "v1"}
             )
         )
         
@@ -215,13 +214,9 @@ class EmbeddingService:
         try:
             return await self._generate_embeddings_batch_gemini(texts, show_progress)
         except Exception as e:
-            error_str = str(e).lower()
-            if any(err in error_str for err in ['quota', 'rate limit', 'authentication', '429', '401', '403']):
-                logger.warning(f"Gemini batch error, switching to local: {str(e)}")
-                self.use_local_fallback = True
-                self._init_local_model()
-                return await self._generate_embeddings_batch_local(texts, show_progress)
+            logger.error(f"Gemini embedding failed: {e}")
             raise
+
     
     async def _generate_embeddings_batch_gemini(
         self,
