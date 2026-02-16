@@ -49,14 +49,21 @@ class LLMService:
 Core Guidelines:
 1. Answer questions using ONLY information from provided context when documents are available
 2. Be conversational, friendly, and professional
-3. Understand the situation properly and answer accordingly
-4. For financial figures: Include exact numbers (citations handled separately)
+3. Understand the situation properly and answer accordingly with empathy
+4. For financial figures: Include exact numbers with proper citations
 5. If information is not in context: Clearly state what's missing
-6. CRITICAL: Never mention document filenames, page numbers, or file references in responses
-7. CRITICAL: No inline citations like [Document: X, Page: Y] in your answer text
+6. CRITICAL: Use numbered citations [1], [2], [3] to reference sources
+7. Place citations IMMEDIATELY after each fact: "The policy states X [1]."
+
+Citation Rules:
+- Use [1], [2], [3] format (NOT [Document: X, Page: Y])
+- Each unique source gets a unique number
+- Multiple sources: "This is confirmed [1,2,3]"
+- Place citation right after the relevant statement
+- Sources are numbered in the order provided below
 
 Response Formatting:
-- Use natural, conversational language as if explaining from your knowledge
+- Use natural, conversational language
 - Structure clearly: paragraphs, bullet points (- or *), bold (**text**)
 - For tabular data, use Markdown tables:
   | Header 1 | Header 2 |
@@ -64,10 +71,13 @@ Response Formatting:
   | Value 1  | Value 2  |
 
 Examples:
-❌ BAD: "According to Branch_Manager_Manual.docx, the eligibility..."
-✅ GOOD: "The eligibility criteria include..."
+❌ BAD: "According to Branch_Manager_Manual.docx, the eligibility is 2 years."
+✅ GOOD: "The eligibility criteria is 2 years of service [1]."
 
-Remember: Sources display separately in UI. Focus on clear, natural explanations."""
+❌ BAD: "The document mentions a 30-day notice period."
+✅ GOOD: "The notice period is 30 days [2], which applies to all permanent employees [2]."
+
+Remember: Each fact from documents MUST have a citation number."""
         
         # Initialize token encoder for accurate counting
         try:
@@ -382,7 +392,7 @@ Use natural language, be warm and helpful."""
         sources: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """
-        Extract citation references from the answer text.
+        Extract numbered citation references [1], [2], [3] from the answer text.
         
         Args:
             answer: Generated answer text
@@ -393,48 +403,52 @@ Use natural language, be warm and helpful."""
         """
         import re
         
+        if not sources:
+            return []
+        
+        # Pattern to match [1], [2,3], [1,2,3] format
+        citation_pattern = r'\[(\d+(?:,\s*\d+)*)\]'
+        
+        matches = re.findall(citation_pattern, answer)
+        
+        if not matches:
+            logger.warning(f"No citations found in answer despite {len(sources)} sources available")
+            return []
+        
+        # Extract all unique citation numbers
+        cited_numbers = set()
+        for match in matches:
+            # Split comma-separated numbers: "1,2,3" -> [1, 2, 3]
+            numbers = [int(n.strip()) for n in match.split(',')]
+            cited_numbers.update(numbers)
+        
+        logger.info(f"Found citations for source numbers: {sorted(cited_numbers)}")
+        
+        # Map citation numbers to actual sources
         citations = []
-        
-        # Pattern to match [Document: X, Page: Y] format
-        citation_pattern = r'\[Document:\s*([^,]+),\s*Page:\s*(\d+|N/A)\]'
-        
-        matches = re.findall(citation_pattern, answer, re.IGNORECASE)
-        
-        for doc_name, page in matches:
-            doc_name = doc_name.strip()
+        for cite_num in sorted(cited_numbers):
+            # Sources are 1-indexed in the prompt
+            source_idx = cite_num - 1
             
-            # Find matching source
-            matching_source = None
-            for source in sources:
-                source_doc = source.get('document', '')
-                if doc_name.lower() in source_doc.lower() or source_doc.lower() in doc_name.lower():
-                    matching_source = source
-                    break
-            
-            citation = {
-                'document': doc_name,
-                'page': int(page) if page.isdigit() else None,
-                'text_reference': f"[Document: {doc_name}, Page: {page}]"
-            }
-            
-            if matching_source:
-                citation['chunk_id'] = matching_source.get('chunk_id')
-                citation['section'] = matching_source.get('section')
-            
-            citations.append(citation)
+            if 0 <= source_idx < len(sources):
+                source = sources[source_idx]
+                
+                citation = {
+                    'document': source.get('document', 'Unknown'),
+                    'page': source.get('page'),
+                    'chunk_id': source.get('chunk_id'),
+                    'section': source.get('section'),
+                    'citation_number': cite_num,
+                    'text_reference': f"[{cite_num}]"
+                }
+                
+                citations.append(citation)
+            else:
+                logger.warning(f"Citation [{cite_num}] refers to non-existent source (only {len(sources)} sources)")
         
-        # Deduplicate citations
-        seen = set()
-        unique_citations = []
-        for citation in citations:
-            key = (citation['document'], citation['page'])
-            if key not in seen:
-                seen.add(key)
-                unique_citations.append(citation)
+        logger.info(f"Extracted {len(citations)} valid citations from answer")
         
-        logger.debug(f"Extracted {len(unique_citations)} unique citations from answer")
-    
-        return unique_citations
+        return citations
 
     def _build_contextual_prompt(
         self,
@@ -445,7 +459,7 @@ Use natural language, be warm and helpful."""
         conversation_context: Optional[Dict[str, Any]] = None
     ) -> str:
         """
-        Build context-aware prompt for document-based queries.
+        Build context-aware prompt for document-based queries with numbered sources.
         
         Args:
             query: Original user query
@@ -455,14 +469,22 @@ Use natural language, be warm and helpful."""
             conversation_context: Conversation state
             
         Returns:
-            Formatted prompt
+            Formatted prompt with numbered sources
         """
-        # Format sources
-        sources_text = "\n".join([
-            f"- {src['document']}, Page {src.get('page', 'N/A')}" + 
-            (f", Section: {src['section']}" if src.get('section') else "")
-            for src in sources
-        ])
+        # Format sources with numbers
+        sources_text = []
+        for idx, src in enumerate(sources, start=1):
+            source_line = f"[{idx}] {src['document']}"
+            
+            if src.get('page'):
+                source_line += f", Page {src['page']}"
+            
+            if src.get('section'):
+                source_line += f", Section: {src['section']}"
+            
+            sources_text.append(source_line)
+        
+        sources_formatted = "\n".join(sources_text)
         
         prompt_parts = []
         
@@ -480,31 +502,33 @@ Use natural language, be warm and helpful."""
             prompt_parts.append(f"**Question**: {query}")
         
         prompt_parts.append(f"""
-**Available Context from Documents**:
-{context}
+    **Available Context from Documents**:
+    {context}
 
-**Source Documents**:
-{sources_text}
+    **Source References** (use these numbers in your citations):
+    {sources_formatted}
 
-**Instructions**:
-1. Answer based ONLY on the context above
-2. If this is a follow-up question, connect it to previous context
-3. **DO NOT use inline citations** like [Document: X, Page: Y] - mention sources naturally in your explanation
-4. If context is insufficient, clearly state what's missing
-5. For financial data, include exact figures and mention the source document naturally
-6. **If the context contains tables, present them in Markdown table format**
-7. Be conversational and natural in your response
+    **Critical Instructions**:
+    1. Answer based ONLY on the context above
+    2. **MUST cite sources using [1], [2], [3] format**
+    3. Place citations immediately after facts: "The policy is X [1]."
+    4. If multiple sources support a fact: "This applies to all branches [1,2]."
+    5. If this is a follow-up question, connect it to previous context
+    6. If context is insufficient, clearly state what's missing
+    7. For financial data, include exact figures with citations
+    8. **If the context contains tables, present them in Markdown table format**
+    9. Be conversational and empathetic in your response
 
-**Formatting**:
-- Use **bold** for important points
-- Use bullet points for lists
-- Use clear paragraphs
-- **Use Markdown tables for tabular data**:
-  | Column 1 | Column 2 |
-  |----------|----------|
-  | Value 1  | Value 2  |
+    **Formatting**:
+    - Use **bold** for important points
+    - Use bullet points for lists
+    - Use clear paragraphs
+    - **Use Markdown tables for tabular data**:
+    | Column 1 | Column 2 |
+    |----------|----------|
+    | Value 1  | Value 2  |
 
-**Answer** (remember: NO inline citations, mention sources naturally):""")
+    **Answer** (remember: MUST include [1], [2], [3] citations):""")
         
         return "\n\n".join(prompt_parts)
     
@@ -677,7 +701,7 @@ Summary:"""
                     prompt,
                     generation_config={
                         "temperature": 0.7, 
-                        "max_output_tokens": 200, 
+                        "max_output_tokens": 300, 
                         "top_p": 0.9,
                     }
                 )
