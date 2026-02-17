@@ -12,8 +12,6 @@ import numpy as np
 from app.core.config import settings
 
 try:
-    import torch
-    from sentence_transformers import SentenceTransformer
     TORCH_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"PyTorch/SentenceTransformers not available: {e}")
@@ -36,10 +34,6 @@ class EmbeddingService:
         # Required attributes (YOU REMOVED THESE)
         self.dimensions = settings.gemini_embedding_dimensions
         self.batch_size = 100
-    
-        # Local fallback setup
-        self.local_model = None
-        self.use_local_fallback = False
     
         logger.info(
             f"Embedding service initialized: Gemini {self.model_name} ({self.dimensions}D)"
@@ -393,10 +387,9 @@ class EmbeddingService:
             )
             return self._adjust_dimensions(result['embedding'])
         except Exception as e:
-            logger.warning(f"Query embedding failed, using local: {str(e)}")
-            self.use_local_fallback = True
-            self._init_local_model()
-            return await self._generate_embedding_local(enhanced_query)
+            logger.error(f"Gemini query embedding failed: {str(e)}")
+            raise
+
 
 
 # Global instance
