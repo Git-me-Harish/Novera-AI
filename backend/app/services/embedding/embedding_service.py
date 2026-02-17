@@ -30,10 +30,22 @@ class EmbeddingService:
     def __init__(self):
         genai.configure(api_key=settings.gemini_api_key)
     
+        # Gemini model
         self.model_name = f"models/{settings.gemini_embedding_model}"
-        
-        logger.info(f"Embedding service initialized: Gemini {self.model_name} ({self.dimensions}D)")
     
+        # Required attributes (YOU REMOVED THESE)
+        self.dimensions = settings.gemini_embedding_dimensions
+        self.batch_size = 100
+    
+        # Local fallback setup
+        self.local_model = None
+        self.use_local_fallback = False
+    
+        logger.info(
+            f"Embedding service initialized: Gemini {self.model_name} ({self.dimensions}D)"
+        )
+    
+        
     def _init_local_model(self):
         """
         Initialize local sentence-transformers model as fallback.
