@@ -30,22 +30,7 @@ class EmbeddingService:
     def __init__(self):
         genai.configure(api_key=settings.gemini_api_key)
     
-        raw_model_name = settings.gemini_embedding_model
-        if raw_model_name.startswith('models/'):
-            self.model_name = raw_model_name.replace('models/', '', 1)
-        else:
-            self.model_name = raw_model_name
-        
-        self.dimensions = settings.gemini_embedding_dimensions
-        self.batch_size = 100
-        
-        self.local_model = None
-        self.use_local_fallback = False
-        
-        if not self.model_name.startswith('models/'):
-            logger.warning(f"Embedding model '{self.model_name}' should start with 'models/'")
-            self.model_name = f"models/{self.model_name}"
-            logger.info(f"Auto-corrected to: {self.model_name}")
+        self.model_name = f"models/{settings.gemini_embedding_model}"
         
         logger.info(f"Embedding service initialized: Gemini {self.model_name} ({self.dimensions}D)")
     
@@ -84,7 +69,7 @@ class EmbeddingService:
             # Initialize model with explicit device
             # Using 'all-mpnet-base-v2' (768D) for better quality
             # Alternative: 'all-MiniLM-L6-v2' (384D) for faster processing
-            model_name = 'all-mpnet-base-v2'
+            model_name = 'all-MiniLM-L6-v2'
             
             logger.warning(f"Initializing local embedding model: {model_name}")
             self.local_model = SentenceTransformer(model_name, device=device)
