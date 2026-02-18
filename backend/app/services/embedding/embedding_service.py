@@ -1,3 +1,5 @@
+backend\app\services\embedding\embedding_service.py:
+
 """
 Embedding generation service using Google Gemini.
 Includes batching, retry logic, and local fallback.
@@ -12,6 +14,8 @@ import numpy as np
 from app.core.config import settings
 
 try:
+    import torch
+    from sentence_transformers import SentenceTransformer
     TORCH_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"PyTorch/SentenceTransformers not available: {e}")
@@ -28,18 +32,25 @@ class EmbeddingService:
     def __init__(self):
         genai.configure(api_key=settings.gemini_api_key)
     
-        # Gemini model
-        self.model_name = f"models/{settings.gemini_embedding_model}"
-    
-        # Required attributes (YOU REMOVED THESE)
+        raw_model_name = settings.gemini_embedding_model
+        if raw_model_name.startswith('models/'):
+            self.model_name = raw_model_name.replace('models/', '', 1)
+        else:
+            self.model_name = raw_model_name
+        
         self.dimensions = settings.gemini_embedding_dimensions
         self.batch_size = 100
-    
-        logger.info(
-            f"Embedding service initialized: Gemini {self.model_name} ({self.dimensions}D)"
-        )
-    
         
+        self.local_model = None
+        self.use_local_fallback = False
+        
+        if not self.model_name.startswith('models/'):
+            logger.warning(f"Embedding model '{self.model_name}' should start with 'models/'")
+            self.model_name = f"models/{self.model_name}"
+            logger.info(f"Auto-corrected to: {self.model_name}")
+        
+        logger.info(f"Embedding service initialized: Gemini {self.model_name} ({self.dimensions}D)")
+    
     def _init_local_model(self):
         """
         Initialize local sentence-transformers model as fallback.
@@ -51,8 +62,13 @@ class EmbeddingService:
             return  # Already initialized
         
         if not TORCH_AVAILABLE:
-            logger.error("Local embeddings disabled: torch not installed.")
-            raise RuntimeError("Local embeddings are disabled in production.")
+            error_msg = (
+                "PyTorch/SentenceTransformers not available. "
+                "Cannot initialize local fallback model. "
+                "Ensure torch, torchvision, torchaudio, and sentence-transformers are installed."
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         
         try:
             # Log PyTorch environment
@@ -75,7 +91,7 @@ class EmbeddingService:
             # Initialize model with explicit device
             # Using 'all-mpnet-base-v2' (768D) for better quality
             # Alternative: 'all-MiniLM-L6-v2' (384D) for faster processing
-            model_name = 'all-MiniLM-L6-v2'
+            model_name = 'all-mpnet-base-v2'
             
             logger.warning(f"Initializing local embedding model: {model_name}")
             self.local_model = SentenceTransformer(model_name, device=device)
@@ -104,9 +120,9 @@ class EmbeddingService:
                 raise
                 
         except Exception as e:
-            logger.error(f"Gemini embedding failed: {str(e)}")
-            raise RuntimeError("Gemini embedding failed. Local fallback disabled.") from e
-
+            logger.error(f"Failed to load local model: {str(e)}")
+            logger.exception("Full traceback:")
+            raise
         
     async def generate_embedding(self, text: str) -> List[float]:
         """
@@ -143,6 +159,7 @@ class EmbeddingService:
                 model=self.model_name,
                 content=text,
                 task_type="retrieval_document",
+                request_options={"api_version": "v1"}
             )
         )
         
@@ -205,9 +222,13 @@ class EmbeddingService:
         try:
             return await self._generate_embeddings_batch_gemini(texts, show_progress)
         except Exception as e:
-            logger.error(f"Gemini embedding failed: {e}")
+            error_str = str(e).lower()
+            if any(err in error_str for err in ['quota', 'rate limit', 'authentication', '429', '401', '403']):
+                logger.warning(f"Gemini batch error, switching to local: {str(e)}")
+                self.use_local_fallback = True
+                self._init_local_model()
+                return await self._generate_embeddings_batch_local(texts, show_progress)
             raise
-
     
     async def _generate_embeddings_batch_gemini(
         self,
@@ -387,9 +408,10 @@ class EmbeddingService:
             )
             return self._adjust_dimensions(result['embedding'])
         except Exception as e:
-            logger.error(f"Gemini query embedding failed: {str(e)}")
-            raise
-
+            logger.warning(f"Query embedding failed, using local: {str(e)}")
+            self.use_local_fallback = True
+            self._init_local_model()
+            return await self._generate_embedding_local(enhanced_query)
 
 
 # Global instance
