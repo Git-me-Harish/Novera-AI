@@ -1,5 +1,3 @@
-backend\app\services\embedding\embedding_service.py:
-
 """
 Embedding generation service using Google Gemini.
 Includes batching, retry logic, and local fallback.
