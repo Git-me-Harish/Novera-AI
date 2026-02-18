@@ -171,10 +171,36 @@ class RetrievalPipeline:
                 search_results = merged_results
                 logger.info(f"  Merged results: {len(search_results)} total chunks")
 
-        # Step 6: Rerank results (CRITICAL - DO NOT SKIP)
+        # Step 6: Rerank results
         reranked_results = []
-        
-        if self.rerank_enabled and len(search_results) > 1:
+
+        # Decide if reranking is needed
+        should_rerank = (
+            self.rerank_enabled and 
+            len(search_results) > 1 and
+            len(search_results) >= 3  # Only rerank if we have enough results
+        )
+
+        # Skip reranking for very high confidence results
+        if should_rerank and len(search_results) >= 3:
+            # Check if top 3 results are already very confident
+            top_scores = []
+            for chunk in search_results[:3]:
+                score = (
+                    chunk.get('similarity_score', 0) or 
+                    chunk.get('fused_score', 0) or 
+                    0
+                )
+                top_scores.append(score)
+            
+            # If all top 3 have score > 0.75, skip reranking
+            if all(score > 0.75 for score in top_scores):
+                logger.info("Step 4: Skipping reranking (high confidence results - all top 3 above 0.75)")
+                reranked_results = search_results[:top_k or settings.rerank_top_k]
+                should_rerank = False
+
+        # Perform reranking if needed
+        if should_rerank:
             logger.info("Step 4: Reranking results...")
             try:
                 reranked_results = await reranking_service.rerank(
@@ -189,8 +215,9 @@ class RetrievalPipeline:
                 logger.error(f"Reranking failed: {str(e)}, using original order")
                 reranked_results = search_results[:top_k or settings.rerank_top_k]
         else:
-            logger.info("Step 4: Skipping reranking (disabled or insufficient results)")
-            reranked_results = search_results[:top_k or settings.rerank_top_k]
+            if not reranked_results:  # If not already set by smart skip
+                logger.info("Step 4: Skipping reranking (disabled or insufficient results)")
+                reranked_results = search_results[:top_k or settings.rerank_top_k]
 
         logger.info(f"  After reranking: {len(reranked_results)} chunks")
         
@@ -443,7 +470,7 @@ class RetrievalPipeline:
         Useful for document-specific questions.
         """
         from uuid import UUID
-        
+            
         logger.info(f"Retrieving from document {document_id}")
         
         # Process query
