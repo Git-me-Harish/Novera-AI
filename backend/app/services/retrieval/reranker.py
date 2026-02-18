@@ -34,7 +34,7 @@ class RerankingService:
         top_n: int = None
     ) -> List[Dict[str, Any]]:
         """
-        Rerank chunks based on relevance to query.
+        Rerank chunks based on relevance to query using async API call.
         
         Args:
             query: User's search query
@@ -56,13 +56,17 @@ class RerankingService:
         documents = [chunk['content'] for chunk in chunks]
         
         try:
-            # Call Cohere Rerank API
-            response = self.client.rerank(
-                model=self.model,
-                query=query,
-                documents=documents,
-                top_n=min(n, len(documents))
-                # ✅ Removed return_documents parameter (not supported in Cohere SDK v5+)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.rerank(
+                    model=self.model,
+                    query=query,
+                    documents=documents,
+                    top_n=min(n, len(documents))
+                )
             )
             
             # Map rerank results back to chunks
@@ -90,7 +94,6 @@ class RerankingService:
             fallback_chunks = []
             for i, chunk in enumerate(chunks[:n]):
                 chunk_copy = chunk.copy()
-                # Use existing similarity/fused score as fallback rerank score
                 chunk_copy['rerank_score'] = chunk.get('similarity_score', 0) or chunk.get('fused_score', 0)
                 chunk_copy['rerank_position'] = i
                 fallback_chunks.append(chunk_copy)
