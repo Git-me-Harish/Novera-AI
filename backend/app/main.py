@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from loguru import logger
 import sys
+from fastapi.responses import FileResponse
 from pathlib import Path
 from app.api.endpoints import organization
 from app.core.config import settings
@@ -184,31 +185,29 @@ app.include_router(
 )
 
 
-@app.get("/")
-async def root():
-    """Root endpoint - API information."""
-    return {
-        "name": settings.app_name,
-        "version": settings.app_version,
-        "status": "operational",
-        "docs": "/api/docs" if settings.debug else "disabled in production",
-        "cors_enabled": True,
-        "allowed_origins": settings.cors_origins_list if settings.debug else "configured"
-    }
+
+# Mount the React frontend build
+frontend_path = Path(__file__).parent / "static"
+if frontend_path.exists():
+    app.mount("/static", StaticFiles(directory=str(frontend_path)), name="static")
+    logger.info(f"✅ Frontend static files mounted at /static -> {frontend_path}")
 
 
-# Add OPTIONS handler for preflight requests
-@app.options("/{path:path}")
-async def options_handler(path: str):
-    """Handle preflight OPTIONS requests."""
-    return JSONResponse(
-        content={"message": "OK"},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-        }
-    )
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    """
+    Serve React SPA for all non-API paths to enable client-side routing.
+    Excludes API routes that start with your API prefix.
+    """
+    if full_path.startswith(settings.api_v1_prefix.strip("/")):
+        return JSONResponse({"error": "Not Found"}, status_code=404)
+
+    index_file = frontend_path / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    else:
+        return JSONResponse({"error": "Frontend not built"}, status_code=500)
+
 
 
 # Global exception handler - FIXED
