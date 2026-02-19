@@ -1,12 +1,14 @@
+version: '3.9'
+
 services:
   # PostgreSQL with pgvector
   postgres:
     image: pgvector/pgvector:pg16
     container_name: mentanova_postgres
     environment:
-      POSTGRES_USER: mentanova_user
-      POSTGRES_PASSWORD: mentanova_secure_pass_2024
-      POSTGRES_DB: mentanova_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_INITDB_ARGS: "-E UTF8"
     ports:
       - "5432:5432"
@@ -14,10 +16,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/scripts/init_extensions.sql:/docker-entrypoint-initdb.d/init_extensions.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mentanova_user -d mentanova_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
     networks:
       - mentanova_network
     restart: unless-stopped
@@ -26,68 +28,42 @@ services:
   redis:
     image: redis:7-alpine
     container_name: mentanova_redis
-    command: redis-server --appendonly yes --requirepass mentanova_redis_pass
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
-      timeout: 3s
-      retries: 5
+      timeout: 5s
+      retries: 10
     networks:
       - mentanova_network
     restart: unless-stopped
 
-  # FastAPI Backend (development mode)
+  # FastAPI Backend (production mode)
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-      target: development
+      target: production
     container_name: mentanova_backend
-    command: >
-      sh -c "
-      echo 'Waiting for database to be ready...' &&
-      sleep 5 &&
-      echo 'Skipping migrations (already applied manually)' &&
-      echo 'Starting FastAPI server...' &&
-      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
-    dns:
-      - 8.8.8.8
-      - 8.8.4.4
     env_file:
-      - ./backend/.env
+      - ./backend/.env.prod
     environment:
-      # Database Configuration
-      - DATABASE_URL=postgresql+asyncpg://mentanova_user:mentanova_secure_pass_2024@postgres:5432/mentanova_db
-      - POSTGRES_HOST=postgres
-      - POSTGRES_USER=mentanova_user
-      - POSTGRES_PASSWORD=mentanova_secure_pass_2024
-      - POSTGRES_DB=mentanova_db
-      - POSTGRES_PORT=5432
-      
-      # Redis Configuration
-      - REDIS_URL=redis://:mentanova_redis_pass@redis:6379/0
-      
-      # AI Models
-      - GEMINI_CHAT_MODEL=gemini-2.5-flash
-      - GEMINI_EMBEDDING_MODEL=text-embedding-004
-      
-      # CORS Configuration - FIXED FOR DOCKER
-      - CORS_ORIGINS=http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173,http://localhost:80,http://localhost
-      - CORS_ALLOW_CREDENTIALS=true
-      
-      # Application Settings
-      - DEBUG=true
-      - ENVIRONMENT=development
-      - LOG_LEVEL=INFO
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      GEMINI_CHAT_MODEL: gemini-2.5-flash
+      GEMINI_EMBEDDING_MODEL: text-embedding-004
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      CORS_ALLOW_CREDENTIALS: true
+      DEBUG: false
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app
-      - ./data:/app/data
       - ./logs:/app/logs
     depends_on:
       postgres:
@@ -98,29 +74,25 @@ services:
       - mentanova_network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 20s
 
-  # React Frontend (development mode)
+  # React Frontend (production build)
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      target: development
+      target: production
     container_name: mentanova_frontend
-    command: npm run dev -- --host 0.0.0.0
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     environment:
-      - VITE_API_URL=http://localhost:8000
-      - VITE_APP_NAME=Mentanova AI
-      - VITE_APP_VERSION=1.0.0
+      VITE_API_URL: http://backend:8000
+      VITE_APP_NAME: Mentanova AI
+      VITE_APP_VERSION: 1.0.0
+    ports:
+      - "80:80"
     depends_on:
       backend:
         condition: service_healthy
@@ -128,19 +100,19 @@ services:
       - mentanova_network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5173"]
+      test: ["CMD-SHELL", "curl -f http://localhost || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5
+      start_period: 20s
 
-  # pgAdmin (optional - for database management)
+  # pgAdmin (optional, production)
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: mentanova_pgadmin
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@mentanova.com
-      PGADMIN_DEFAULT_PASSWORD: admin_password
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
       PGADMIN_CONFIG_SERVER_MODE: 'False'
     ports:
       - "5050:80"
