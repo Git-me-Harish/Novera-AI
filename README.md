@@ -1,4 +1,4 @@
-# NOVERA AI — Knowledge Assistant
+# NOVERA AI — Knowledge Assistant for your system
 
 > **Production RAG system for Finance & HRMS documentation, powered by Google Gemini Flash 2.5**
 
