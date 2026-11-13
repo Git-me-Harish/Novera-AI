@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { UserPlus, Mail, Lock, User, AlertCircle, Loader2, CheckCircle, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useCustomization } from '../contexts/CustomizationContext'; // Added import
+import api, { type RegistrationMode } from '../services/api';
 
 export default function RegisterPage() {
   const { register } = useAuth();
@@ -14,7 +15,14 @@ export default function RegisterPage() {
     password: '',
     confirmPassword: '',
     fullName: '',
+    organizationName: '',
   });
+  // Sign-up never joins an existing organization; the server decides whether
+  // it is open (creating a new workspace) or invitation-only.
+  const [mode, setMode] = useState<RegistrationMode | null>(null);
+  useEffect(() => {
+    api.getRegistrationMode().then(setMode).catch(() => setMode('invite_only'));
+  }, []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [registrationSuccess, setRegistrationSuccess] = useState(false);
@@ -43,7 +51,8 @@ export default function RegisterPage() {
         formData.email,
         formData.username,
         formData.password,
-        formData.fullName || undefined
+        formData.fullName || undefined,
+        formData.organizationName || undefined
       );
       setRegistrationSuccess(true);
     } catch (err: any) {
@@ -96,6 +105,34 @@ export default function RegisterPage() {
   };
 
   const passwordStrength = formData.password ? validatePassword(formData.password) : null;
+
+  if (mode === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-gray-400" aria-label="Loading" />
+      </div>
+    );
+  }
+
+  if (mode !== 'self_serve') {
+    return (
+      <div className={`min-h-screen flex items-center justify-center px-4 ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
+        <div className={`max-w-md w-full rounded-lg border p-8 ${darkMode ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-200'}`}>
+          <h1 className="text-xl font-bold mb-3">
+            {mode === 'invite_only' ? 'Accounts are created by invitation' : 'Sign-up is closed'}
+          </h1>
+          <p className={darkMode ? 'text-gray-300' : 'text-gray-600'}>
+            {mode === 'invite_only'
+              ? 'Ask an administrator of your organization to invite you. The invitation email contains a link to set up your account.'
+              : 'New accounts are created by your administrator.'}
+          </p>
+          <Link to="/login" className="inline-block mt-6 font-medium text-primary-600 hover:text-primary-700">
+            Back to sign in
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   // Success screen after registration
   if (registrationSuccess) {
@@ -259,6 +296,28 @@ export default function RegisterPage() {
                 placeholder="John Doe"
                 disabled={loading}
               />
+            </div>
+
+            {/* Organization (self-serve: creates a new workspace you administer) */}
+            <div>
+              <label htmlFor="organizationName" className={`block text-sm font-medium mb-1 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                Organization name (optional)
+              </label>
+              <input
+                id="organizationName"
+                name="organizationName"
+                type="text"
+                autoComplete="organization"
+                maxLength={200}
+                value={formData.organizationName}
+                onChange={handleChange}
+                className={`block w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent ${darkMode ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-300'}`}
+                placeholder="Acme Inc."
+                disabled={loading}
+              />
+              <p className={`mt-1 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                A new workspace is created for you; you can invite your team afterwards.
+              </p>
             </div>
 
             {/* Password Input */}
