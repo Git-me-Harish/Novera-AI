@@ -5,8 +5,9 @@ Revises: 4d6894fa45b4
 Create Date: 2024-01-15 10:00:00.000000
 
 """
-from alembic import op
+from alembic import op, context
 import sqlalchemy as sa
+import os
 from sqlalchemy.sql import table, column
 from datetime import datetime
 from uuid import uuid4
@@ -27,7 +28,18 @@ _LEGACY_EMAIL = "admin@mentanova.com"   # left over from old branding
 
 def upgrade():
     """Create default admin user if not exists."""
+    if context.is_offline_mode():
+        # Data-dependent user creation cannot be rendered safely as static SQL.
+        # It still runs normally during online deployment.
+        return
     from app.core.security import get_password_hash
+
+    admin_email = os.getenv("DEFAULT_ADMIN_EMAIL", _ADMIN_EMAIL).strip()
+    admin_password = os.getenv("DEFAULT_ADMIN_PASSWORD", "").strip()
+    if not admin_password:
+        raise RuntimeError(
+            "DEFAULT_ADMIN_PASSWORD must be set before creating the initial admin account"
+        )
 
     users_table = table(
         'users',
@@ -53,17 +65,17 @@ def upgrade():
             "SELECT COUNT(*) FROM users "
             "WHERE email IN (:new_email, :legacy_email)"
         ),
-        {"new_email": _ADMIN_EMAIL, "legacy_email": _LEGACY_EMAIL},
+        {"new_email": admin_email, "legacy_email": _LEGACY_EMAIL},
     ).scalar()
 
     if result == 0:
         admin_id = uuid4()
-        hashed_password = get_password_hash("Admin@123")
+        hashed_password = get_password_hash(admin_password)
 
         op.execute(
             users_table.insert().values(
                 id=admin_id,
-                email=_ADMIN_EMAIL,
+                email=admin_email,
                 username='admin',
                 hashed_password=hashed_password,
                 full_name='System Administrator',
@@ -78,19 +90,21 @@ def upgrade():
         )
 
         print("\n" + "=" * 60)
-        print("✅ DEFAULT ADMIN USER CREATED")
+        print("DEFAULT ADMIN USER CREATED")
         print("=" * 60)
-        print(f"Email:    {_ADMIN_EMAIL}")
-        print("Password: Admin@123")
+        print(f"Email:    {admin_email}")
         print("=" * 60)
-        print("⚠️  IMPORTANT: Change this password after first login!")
+        print("IMPORTANT: rotate the initial admin password after first login")
         print("=" * 60 + "\n")
     else:
-        print("\n⚠️  Admin user already exists — skipping creation.\n")
+        print("\nAdmin user already exists - skipping creation.\n")
 
 
 def downgrade():
     """Remove default admin user (both email variants)."""
+    if context.is_offline_mode():
+        return
+    admin_email = os.getenv("DEFAULT_ADMIN_EMAIL", _ADMIN_EMAIL).strip()
     connection = op.get_bind()
     connection.execute(
         sa.text(
@@ -98,6 +112,6 @@ def downgrade():
             "WHERE email IN (:new_email, :legacy_email) "
             "AND metadata->>'is_default_admin' = 'true'"
         ),
-        {"new_email": _ADMIN_EMAIL, "legacy_email": _LEGACY_EMAIL},
+        {"new_email": admin_email, "legacy_email": _LEGACY_EMAIL},
     )
-    print("✅ Default admin user removed")
+    print("Default admin user removed")

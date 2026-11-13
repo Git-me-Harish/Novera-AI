@@ -175,7 +175,7 @@ export default function ChunkEditor({
             <div className="flex items-center justify-between">
               <label className="block text-sm font-medium text-gray-700 flex items-center gap-2">
                 Chunk Title
-                {chunk.title && <Sparkles className="w-4 h-4 text-purple-500" title="AI-generated" />}
+                {chunk.title && <span title="AI-generated"><Sparkles className="w-4 h-4 text-purple-500" /></span>}
               </label>
               {isAdmin && (
                 <div className="flex items-center gap-2">

@@ -19,12 +19,17 @@ from typing import List, Dict, Any, Optional
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 from sqlalchemy import select, func, text
 from sqlalchemy import bindparam, String
 from loguru import logger
 
 from app.models.document import Chunk, Document
 from app.core.config import settings
+from app.services.embedding.embedding_service import embedding_service
+
+
+_NEIGHBOR_DEFERRED = (defer(Chunk.embedding), defer(Chunk.original_content))
 
 
 class VectorSearchService:
@@ -79,6 +84,7 @@ class VectorSearchService:
         self,
         query_embedding: List[float],
         db: AsyncSession,
+        organization_id: UUID,
         top_k: Optional[int] = None,
         doc_type: Optional[str] = None,
         department: Optional[str] = None,
@@ -148,13 +154,24 @@ class VectorSearchService:
                 FROM chunks c
                 JOIN documents d ON c.document_id = d.id
                 WHERE d.status = 'completed'
+                AND d.organization_id = :organization_id
+                AND c.embedding IS NOT NULL
+                AND c.embedding_provider = :embedding_provider
+                AND c.embedding_model = :embedding_model
+                AND c.embedding_dimensions = :embedding_dimensions
             """
 
             # Build WHERE clauses dynamically — using positional params for
             # all non-vector values (asyncpg-safe: :name for text/uuid is fine,
             # only the ::vector cast was the problem)
             conditions = []
-            params = {}
+            params = {
+                "organization_id": str(organization_id),
+                # Only compare against vectors from the same model space.
+                "embedding_provider": embedding_service.provider,
+                "embedding_model": embedding_service.model_name,
+                "embedding_dimensions": embedding_service.dimensions,
+            }
 
             if doc_type:
                 conditions.append("d.doc_type = :doc_type")
@@ -247,12 +264,14 @@ class VectorSearchService:
         query_embedding: List[float],
         document_id: UUID,
         db: AsyncSession,
+        organization_id: UUID,
         top_k: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Search within a specific document only."""
         return await self.search_similar_chunks(
             query_embedding=query_embedding,
             db=db,
+            organization_id=organization_id,
             top_k=top_k,
             document_ids=[document_id],
         )
@@ -261,6 +280,7 @@ class VectorSearchService:
         self,
         chunk_id: UUID,
         db: AsyncSession,
+        organization_id: UUID,
         n_before: int = 1,
         n_after: int = 1,
     ) -> List[Dict[str, Any]]:
@@ -278,10 +298,14 @@ class VectorSearchService:
         """
         try:
             # Get target chunk — plain ORM query, no vector ops, no issue
+            # Expansion never uses vectors; loading each 1536-dim embedding
+            # (and the edit backup) made every neighbor lookup much heavier.
             result = await db.execute(
                 select(Chunk, Document)
+                .options(*_NEIGHBOR_DEFERRED)
                 .join(Document, Chunk.document_id == Document.id)
                 .where(Chunk.id == chunk_id)
+                .where(Document.organization_id == organization_id)
             )
             row = result.first()
 
@@ -295,8 +319,12 @@ class VectorSearchService:
             # Get neighbors
             neighbor_query = (
                 select(Chunk)
+                .options(*_NEIGHBOR_DEFERRED)
                 .where(
                     Chunk.document_id == target_chunk.document_id,
+                    Chunk.document_id.in_(
+                        select(Document.id).where(Document.organization_id == organization_id)
+                    ),
                     Chunk.chunk_index >= target_index - n_before,
                     Chunk.chunk_index <= target_index + n_after,
                 )

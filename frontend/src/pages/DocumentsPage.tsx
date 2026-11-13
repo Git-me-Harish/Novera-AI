@@ -4,7 +4,7 @@ import api, { Document } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import UploadModal from '../components/documents/UploadModal';
 import DocumentCard from '../components/documents/DocumentCard';
-import { DocumentCardSkeleton, StatsCardSkeleton } from '../components/common/Skeletons';
+import { DocumentCardSkeleton } from '../components/common/Skeletons';
 import { toast } from '../utils/toast';
 
 export default function DocumentsPage() {
@@ -32,16 +32,16 @@ export default function DocumentsPage() {
       const params: any = { limit: 100 };
       if (filter !== 'all') params.status = filter;
 
-      const response = await api.getDocuments(params);
-      setDocuments(response.documents);
+      const { documents: response } = await api.getDocuments(params);
+      setDocuments(response);
 
-      if (isFirstLoad.current && !isAdmin && response.documents.length > 0) {
-        toast.info(`Viewing ${response.documents.length} documents (read-only access)`);
+      if (isFirstLoad.current && !isAdmin && response.length > 0) {
+        toast.info(`Viewing ${response.length} documents (read-only access)`);
       }
       isFirstLoad.current = false;
 
       // Check if any documents are still processing
-      const hasProcessing = response.documents.some(
+      const hasProcessing = response.some(
         (d: Document) => d.status === 'processing' || d.status === 'pending'
       );
 

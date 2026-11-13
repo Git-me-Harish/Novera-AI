@@ -130,8 +130,8 @@ class FileHandler:
             else:
                 # Generate unique filename with timestamp
                 import uuid
-                from datetime import datetime
-                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                from datetime import datetime, timezone
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 unique_id = str(uuid.uuid4())[:8]
                 final_filename = f"{timestamp}_{unique_id}{file_ext}"
             

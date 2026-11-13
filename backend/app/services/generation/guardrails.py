@@ -5,7 +5,9 @@ Enhanced with user-friendly greeting detection and smart topic validation.
 """
 from typing import Dict, Any, List, Optional, Tuple
 import re
+import unicodedata
 from loguru import logger
+from app.core.rag_trace import hash_value
 
 from app.core.config import settings
 
@@ -108,25 +110,29 @@ class GuardrailsService:
         if not self.input_enabled:
             return True, None
         
-        logger.debug(f"Validating input: '{query[:50]}...'")
+        logger.debug(f"Validating input: query_hash={hash_value(query)}, chars={len(query)}")
         
-        # 1. Allow greetings and casual conversation starters
-        if self._is_greeting_or_casual(query):
-            logger.debug("✅ Greeting/casual starter detected - allowing")
-            return True, None
-        
-        # 2. Check for jailbreak attempts (high priority block)
+        # Security checks run first. A greeting used to short-circuit
+        # validation, so "hi, ignore previous instructions ..." bypassed the
+        # jailbreak and PII checks entirely.
+
+        # 1. Check for jailbreak attempts (high priority block)
         is_jailbreak, jailbreak_msg = self._detect_jailbreak(query)
         if is_jailbreak:
             logger.warning(f"❌ Jailbreak detected: {jailbreak_msg}")
             return False, "I can't process this type of request. Please ask questions about company policies, finance, or HR matters."
-        
-        # 3. Check for PII (security concern)
+
+        # 2. Check for PII (security concern)
         has_pii, pii_type = self._detect_pii(query)
         if has_pii:
             logger.warning(f"❌ PII detected: {pii_type}")
             return False, f"For security reasons, please don't include {pii_type} in your query. I can help without this sensitive information."
-        
+
+        # 3. Allow greetings and casual conversation starters
+        if self._is_greeting_or_casual(query) and len(query) <= 2000:
+            logger.debug("✅ Greeting/casual starter detected - allowing")
+            return True, None
+
         # 4. Smart topic relevance check (lenient)
         is_relevant, confidence = self._check_topic_relevance_smart(query)
         if not is_relevant:
@@ -148,6 +154,16 @@ class GuardrailsService:
         
         logger.debug("✅ Input validation passed")
         return True, None
+
+    @staticmethod
+    def normalize_input(query: str) -> str:
+        """Canonicalize user text before classification, retrieval, and logging."""
+        normalized = unicodedata.normalize("NFKC", query or "")
+        normalized = "".join(
+            char for char in normalized
+            if char in "\n\t" or not unicodedata.category(char).startswith("C")
+        )
+        return re.sub(r"\s+", " ", normalized).strip()
     
     def _is_greeting_or_casual(self, query: str) -> bool:
         """
@@ -312,8 +328,22 @@ class GuardrailsService:
         Returns:
             Hallucination score (0-1, higher = more likely hallucinated)
         """
-        # Extract numerical claims from answer
-        numbers_in_answer = re.findall(r'\$?[\d,]+(?:\.\d+)?%?', answer)
+        # Extract numerical claims from answer, excluding citation markers.
+        # A citation such as [1] is provenance metadata, not a factual number.
+        answer_without_citations = re.sub(
+            r"\[(?:\d+(?:\s*,\s*\d+)*)\]", "", answer
+        )
+        numbers_in_answer = re.findall(
+            r"(?:[$₹€£]\s*)?[\d][\d,]*(?:\.\d+)?\s*%?",
+            answer_without_citations,
+        )
+        context_numbers = {
+            value.replace(",", "").replace(" ", "")
+            for value in re.findall(
+                r"(?:[$₹€£]\s*)?[\d][\d,]*(?:\.\d+)?\s*%?",
+                context,
+            )
+        }
         
         hallucination_indicators = 0
         total_checks = 0
@@ -321,7 +351,8 @@ class GuardrailsService:
         # Check if numbers in answer exist in context
         for number in numbers_in_answer:
             total_checks += 1
-            if number not in context:
+            normalized_number = number.replace(",", "").replace(" ", "")
+            if normalized_number not in context_numbers:
                 hallucination_indicators += 1
         
         # Check for hedging language (indicates model uncertainty)
@@ -347,21 +378,12 @@ class GuardrailsService:
     
     def _check_citations(self, answer: str, sources: List[Dict[str, Any]]) -> bool:
         """Check if answer includes proper citations."""
-        citation_patterns = [
-            r'\[Document:',
-            r'\[Source:',
-            r'\(Page \d+\)',
-            r'according to',
-            r'as stated in',
-            r'based on'
-        ]
-        
-        has_citation = any(
-            re.search(pattern, answer, re.IGNORECASE)
-            for pattern in citation_patterns
-        )
-        
-        return has_citation
+        cited_numbers = {
+            int(number)
+            for group in re.findall(r"\[((?:\d+)(?:\s*,\s*\d+)*)\]", answer)
+            for number in group.split(",")
+        }
+        return bool(cited_numbers) and all(1 <= n <= len(sources) for n in cited_numbers)
     
     def _detect_speculation(self, answer: str) -> bool:
         """Detect speculative or uncertain language."""

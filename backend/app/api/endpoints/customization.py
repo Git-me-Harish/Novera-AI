@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field, validator
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
 import os
 import shutil
@@ -187,7 +187,7 @@ async def save_uploaded_file(file: UploadFile, organization_name: str, file_type
     validate_image_file(file)
     
     file_ext = Path(file.filename).suffix.lower()
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"{organization_name}_{file_type}_{timestamp}{file_ext}"
     file_path = UPLOAD_DIR / filename
     
@@ -470,7 +470,7 @@ async def update_customization(
             if field == 'dark_mode_enabled':
                 logger.info(f"✅ Dark mode enabled set to: {value}")
     
-    customization.updated_at = datetime.utcnow()
+    customization.updated_at = datetime.now(timezone.utc)
     
     await db.commit()
     await db.refresh(customization)
@@ -518,7 +518,7 @@ async def upload_logo(
     elif logo_type == "favicon":
         customization.favicon_url = file_url
     
-    customization.updated_at = datetime.utcnow()
+    customization.updated_at = datetime.now(timezone.utc)
     
     await db.commit()
     await db.refresh(customization)
@@ -574,7 +574,7 @@ async def delete_logo(
             except Exception as e:
                 logger.error(f"Failed to delete file: {str(e)}")
     
-    customization.updated_at = datetime.utcnow()
+    customization.updated_at = datetime.now(timezone.utc)
     await db.commit()
     
     # Get org name for logging
@@ -698,7 +698,7 @@ async def reset_customization(
     customization.theme_name = None
     customization.theme_description = None
     
-    customization.updated_at = datetime.utcnow()
+    customization.updated_at = datetime.now(timezone.utc)
     
     await db.commit()
     await db.refresh(customization)
@@ -784,7 +784,7 @@ async def apply_theme_preset(
     
     customization.theme_name = preset['name']
     customization.theme_description = preset['description']
-    customization.updated_at = datetime.utcnow()
+    customization.updated_at = datetime.now(timezone.utc)
     
     await db.commit()
     await db.refresh(customization)

@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import re
 from datetime import datetime
 from loguru import logger
+from app.core.rag_trace import hash_value
 
 class QueryProcessor:
     """
@@ -225,7 +226,7 @@ class QueryProcessor:
         
         enhanced_query = ' '.join(enhanced_parts)
         
-        logger.debug(f"Enhanced query: '{query}' → '{enhanced_query}'")
+        logger.debug(f"Enhanced query: query_hash={hash_value(query)}, output_chars={len(enhanced_query)}")
         
         return enhanced_query
     
@@ -236,19 +237,16 @@ class QueryProcessor:
         Returns:
             True if semantic-only is recommended
         """
-        # Use semantic only for:
-        # - Very short queries (1-2 words)
-        # - Conceptual questions
-        # - No specific entities
+        # Keep normal natural-language questions hybrid. The previous
+        # ``general`` shortcut discarded exact lexical terms such as names,
+        # roles, policy labels, and domain jargon; that caused recall failures
+        # even when the sparse index contained the answer. Semantic-only is
+        # reserved for genuinely short queries where there are too few terms
+        # for a useful lexical intersection.
         
         word_count = processed_query['query_length']
-        has_entities = bool(processed_query['entities'])
-        intent = processed_query['intent']
         
-        return (
-            word_count <= 2 or
-            (intent in ['analytical', 'general'] and not has_entities)
-        )
+        return word_count <= 2
     
     def should_use_keyword_only(self, processed_query: Dict[str, Any]) -> bool:
         """
@@ -262,11 +260,12 @@ class QueryProcessor:
         # - Exact phrase matches (quotes)
         # - Many specific entities
         
-        has_many_entities = sum(len(v) for v in processed_query['entities'].values()) >= 2
+        # Only an explicitly quoted phrase opts out of semantic search. The old
+        # check fired on any apostrophe ("What's", "employee's") and on dates
+        # such as "Q4 2024" (quarter + year = two entities), silently
+        # dropping dense retrieval for ordinary questions.
         original = processed_query['original_query']
-        has_quotes = '"' in original or "'" in original
-        
-        return has_many_entities or has_quotes
+        return bool(re.search(r'"[^"]{2,}"', original))
 
     def reformulate_with_context(
         self,
@@ -303,7 +302,7 @@ class QueryProcessor:
             conversation_context
         )
         
-        logger.info(f"Reformulated: '{query}' -> '{resolved_query}'")
+        logger.info(f"Reformulated: query_hash={hash_value(query)}, output_chars={len(resolved_query)}")
         
         return resolved_query
     
@@ -333,11 +332,13 @@ class QueryProcessor:
                 if re.search(pattern, query):
                     return True
         
-        # Check for vague references
-        vague_words = ['it', 'that', 'this', 'those', 'them', 'same', 'previous']
-        if any(word in words for word in vague_words):
+        # Vague references only signal a follow-up in short queries. In a full
+        # question "that"/"this" are usually relative pronouns ("the policy
+        # that applies to ..."), and rewriting them corrupted the query.
+        vague_words = ['it', 'this', 'those', 'them', 'same', 'previous']
+        if len(words) <= 8 and any(word.strip('?.,!') in vague_words for word in words):
             return True
-        
+
         return False
     
     def _resolve_coreferences(

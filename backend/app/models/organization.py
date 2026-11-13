@@ -1,10 +1,15 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 from sqlalchemy import Column, String, Boolean, DateTime, Integer, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
+
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class Organization(Base):
@@ -24,8 +29,8 @@ class Organization(Base):
     
     settings = Column(JSONB, nullable=False, default=dict)
     
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
     created_by = Column(UUID(as_uuid=True), nullable=True)
     
     users = relationship("User", back_populates="organization", cascade="all, delete-orphan")

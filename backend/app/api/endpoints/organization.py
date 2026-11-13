@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
 
 from app.db.session import get_db
@@ -367,7 +367,7 @@ async def update_organization(
         if value is not None:
             setattr(org, field, value)
     
-    org.updated_at = datetime.utcnow()
+    org.updated_at = datetime.now(timezone.utc)
     
     await db.commit()
     await db.refresh(org)
@@ -511,7 +511,7 @@ async def assign_organization_admin(
         )
     
     user.role = "org_admin"
-    user.updated_at = datetime.utcnow()
+    user.updated_at = datetime.now(timezone.utc)
     
     await db.commit()
     await db.refresh(user)
@@ -555,7 +555,7 @@ async def revoke_organization_admin(
         )
     
     user.role = "user"
-    user.updated_at = datetime.utcnow()
+    user.updated_at = datetime.now(timezone.utc)
     
     await db.commit()
     await db.refresh(user)

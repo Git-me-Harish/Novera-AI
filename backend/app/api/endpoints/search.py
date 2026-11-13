@@ -3,12 +3,14 @@ Search API endpoints for testing retrieval system.
 Provides endpoints to test different search strategies.
 """
 from typing import Optional, List
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 from loguru import logger
 
 from app.db.session import get_db
+from app.api.dependencies.auth import get_current_active_user
+from app.models.user import User
 from app.services.retrieval.pipeline import retrieval_pipeline
 
 
@@ -63,7 +65,8 @@ async def search(
     top_k: int = Query(5, ge=1, le=20, description="Number of results"),
     doc_type: Optional[str] = Query(None, description="Filter by document type"),
     department: Optional[str] = Query(None, description="Filter by department"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Search for relevant chunks across all documents.
@@ -79,12 +82,16 @@ async def search(
     POST /search?query=What is the PF contribution rate?&top_k=5
     ```
     """
-    logger.info(f"Search request: query='{query}', top_k={top_k}")
+    if not current_user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is not assigned to an organization")
+
+    logger.info(f"Search request: top_k={top_k}, org={current_user.organization_id}")
     
     # Retrieve using full pipeline
     result = await retrieval_pipeline.retrieve(
         query=query,
         db=db,
+        organization_id=current_user.organization_id,
         top_k=top_k,
         doc_type=doc_type,
         department=department,
@@ -127,7 +134,8 @@ async def search_with_context(
     top_k: int = Query(5, ge=1, le=20),
     doc_type: Optional[str] = Query(None),
     department: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Search and return assembled context ready for LLM.
@@ -140,12 +148,16 @@ async def search_with_context(
     - Test context assembly
     - Verify source citations
     """
-    logger.info(f"Context search: query='{query}'")
+    if not current_user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is not assigned to an organization")
+
+    logger.info(f"Context search: org={current_user.organization_id}")
     
     # Retrieve with context expansion
     result = await retrieval_pipeline.retrieve(
         query=query,
         db=db,
+        organization_id=current_user.organization_id,
         top_k=top_k,
         doc_type=doc_type,
         department=department,
@@ -178,7 +190,8 @@ async def search_within_document(
     document_id: str,
     query: str = Query(..., description="Search query"),
     top_k: int = Query(5, ge=1, le=20),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Search within a specific document only.
@@ -188,12 +201,16 @@ async def search_within_document(
     - Clarifying information from a known document
     - Focused retrieval
     """
-    logger.info(f"Document search: doc_id={document_id}, query='{query}'")
+    if not current_user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is not assigned to an organization")
+
+    logger.info(f"Document search: doc_id={document_id}, org={current_user.organization_id}")
     
     result = await retrieval_pipeline.retrieve_from_document(
         query=query,
         document_id=document_id,
         db=db,
+        organization_id=current_user.organization_id,
         top_k=top_k
     )
     
@@ -223,8 +240,8 @@ async def search_within_document(
     )
 
 
-@router.get("/search/test")
-async def test_search_endpoint():
+@router.get("/search/test", dependencies=[Depends(get_current_active_user)])
+async def test_search_endpoint(current_user: User = Depends(get_current_active_user)):
     """
     Test endpoint to verify search API is working.
     """

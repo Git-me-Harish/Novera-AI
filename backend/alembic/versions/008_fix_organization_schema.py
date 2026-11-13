@@ -1,9 +1,3 @@
-"""Fix organization schema - add missing columns for production.
-
-Revision ID: 008_fix_org_schema
-Revises: b9e94cec8243
-Create Date: 2025-02-23
-"""
 from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa

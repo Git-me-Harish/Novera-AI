@@ -11,7 +11,8 @@ interface MessageBubbleProps {
 }
 
 // Renders [1], [2,3], [1,2,3] as small superscript badges inline
-function renderWithCitationBadges(text: string): React.ReactNode {
+// Not yet wired into the bubble; exported so the redesign can adopt it.
+export function renderWithCitationBadges(text: string): React.ReactNode {
   const CITATION_RE = /(\[\d+(?:,\s*\d+)*\])/g;
   const parts = text.split(CITATION_RE);
   if (parts.length === 1) return text;

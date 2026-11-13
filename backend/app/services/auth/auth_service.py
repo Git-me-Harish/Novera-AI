@@ -1,7 +1,7 @@
 """
 Authentication service for user registration, login, and token management.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -178,7 +178,7 @@ class AuthService:
             return False, None, "Account is deactivated"
         
         # Update last login
-        user.last_login = datetime.utcnow()
+        user.last_login = datetime.now(timezone.utc)
         await db.commit()
         
         logger.info(f"User authenticated: {user.email}")
@@ -224,7 +224,7 @@ class AuthService:
         refresh_token = RefreshToken(
             user_id=user.id,
             token=refresh_token_str,
-            expires_at=datetime.utcnow() + timedelta(days=settings.refresh_token_expire_days),
+            expires_at=datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days),
             user_agent=user_agent,
             ip_address=ip_address
         )
@@ -279,7 +279,7 @@ class AuthService:
             return False, None, "Refresh token not found or revoked"
         
         # Check if token is expired
-        if db_token.expires_at < datetime.utcnow():
+        if db_token.expires_at < datetime.now(timezone.utc):
             return False, None, "Refresh token expired"
         
         # Get user
@@ -379,7 +379,7 @@ class AuthService:
             if metadata is not None:
                 user.user_metadata.update(metadata)
             
-            user.updated_at = datetime.utcnow()
+            user.updated_at = datetime.now(timezone.utc)
             
             await db.commit()
             await db.refresh(user)
@@ -432,7 +432,7 @@ class AuthService:
         
         try:
             user.hashed_password = get_password_hash(new_password)
-            user.updated_at = datetime.utcnow()
+            user.updated_at = datetime.now(timezone.utc)
             
             await db.commit()
             
@@ -477,7 +477,7 @@ class AuthService:
         try:
             reset_token = secrets.token_urlsafe(32)
             
-            expires_at = datetime.utcnow() + timedelta(
+            expires_at = datetime.now(timezone.utc) + timedelta(
                 minutes=settings.password_reset_token_expire_minutes
             )
 
@@ -535,7 +535,7 @@ class AuthService:
         if not reset_token:
             return False, None, "Invalid or expired reset token"
 
-        if reset_token.expires_at < datetime.utcnow():
+        if reset_token.expires_at < datetime.now(timezone.utc):
             return False, None, "Reset token has expired"
 
         result = await db.execute(
@@ -584,7 +584,7 @@ class AuthService:
                 return False, "User not found"
 
             user.hashed_password = get_password_hash(new_password)
-            user.updated_at = datetime.utcnow()
+            user.updated_at = datetime.now(timezone.utc)
 
             result = await db.execute(
                 select(PasswordResetToken).where(
@@ -632,7 +632,7 @@ class AuthService:
             verification_token = secrets.token_urlsafe(32)
             
             # Token expires in 24 hours
-            expires_at = datetime.utcnow() + timedelta(hours=24)
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
 
             # Store token in database
             token_entry = EmailVerificationToken(
@@ -692,7 +692,7 @@ class AuthService:
             return False, "Invalid or expired verification token"
 
         # Check if token is expired
-        if verification_token.expires_at < datetime.utcnow():
+        if verification_token.expires_at < datetime.now(timezone.utc):
             return False, "Verification link has expired. Please request a new one."
 
         try:
@@ -711,7 +711,7 @@ class AuthService:
 
             # Mark user as verified
             user.is_verified = True
-            user.updated_at = datetime.utcnow()
+            user.updated_at = datetime.now(timezone.utc)
 
             # Mark token as used
             verification_token.used = True
@@ -761,7 +761,7 @@ class AuthService:
             .where(
                 EmailVerificationToken.user_id == user_id,
                 EmailVerificationToken.used == False,
-                EmailVerificationToken.created_at > datetime.utcnow() - timedelta(minutes=5)
+                EmailVerificationToken.created_at > datetime.now(timezone.utc) - timedelta(minutes=5)
             )
         )
         recent_token = result.scalar_one_or_none()

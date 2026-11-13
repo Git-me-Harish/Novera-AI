@@ -34,7 +34,8 @@ from app.core.redis_manager import redis_manager
 from app.db.session import init_db, close_db
 from app.api.endpoints import (
     health, documents, auth, chat, search,
-    admin, document_editor, customization, organization,
+    admin, document_editor, customization, organization, ai_settings,
+    conversations,
 )
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
@@ -101,10 +102,15 @@ async def lifespan(app: FastAPI):
 
         # 4. Pre-warm embedding service
         try:
+            from app.services.ai import registry
             from app.services.embedding.embedding_service import embedding_service
+
+            chat = registry.platform_chat_spec()
+            rerank = registry.platform_rerank_spec()
             logger.info(
-                f"✅ Embedding service ready "
-                f"(local_fallback={embedding_service.use_local_fallback})"
+                f"✅ AI models: chat={chat.label if chat else 'unconfigured (tenant-only)'} "
+                f"embedding={embedding_service.provider}:{embedding_service.model_name}"
+                f"({embedding_service.dimensions}d) rerank={rerank.label if rerank else 'none'}"
             )
         except Exception as e:
             logger.warning(f"Embedding service pre-warm failed: {e}")
@@ -120,6 +126,9 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 Shutting down...")
     try:
         await redis_manager.close()
+        from app.services.ai import http as ai_http
+
+        await ai_http.aclose()
         await close_db()
         logger.info("👋 Shutdown complete")
     except Exception as e:
@@ -165,7 +174,7 @@ app.add_middleware(
     allow_credentials=settings.cors_allow_credentials,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
     allow_headers=["*"],
-    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "X-Trace-ID"],
     max_age=3600,
 )
 app.add_middleware(GZipMiddleware, minimum_size=2000)
@@ -182,11 +191,13 @@ for _router, _tag in [
     (auth.router,            "Authentication"),
     (documents.router,       "Documents"),
     (search.router,          "Search"),
+    (conversations.router,   "Conversations"),
     (chat.router,            "Chat"),
     (customization.router,   "Customization"),
     (organization.router,    "Super Admin - Organizations"),
     (admin.router,           "Admin"),
     (document_editor.router, "Document Editor"),
+    (ai_settings.router,     "AI Settings"),
 ]:
     app.include_router(_router, prefix=_pfx, tags=[_tag])
 
@@ -196,7 +207,12 @@ logger.info(f"✅ {len(app.routes)} routes registered")
 # ── Static mounts (after API routers) ────────────────────────────────────────
 upload_path = Path(settings.upload_dir)
 upload_path.mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
+# Never expose the document upload root as anonymous static content. Uploaded
+# HR/Finance files are served only through authenticated, tenant-scoped routes.
+# Branding assets are intentionally public and live in their own subdirectory.
+branding_path = upload_path / "branding"
+branding_path.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads/branding", StaticFiles(directory=str(branding_path)), name="branding_uploads")
 
 if frontend_path.exists() and (frontend_path / "assets").exists():
     app.mount(

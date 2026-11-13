@@ -19,7 +19,8 @@ class DocumentViewerService:
     async def get_document_info(
         self,
         document_id: UUID,
-        db: AsyncSession
+        db: AsyncSession,
+        organization_id=None,
     ) -> Optional[Dict[str, Any]]:
         """
         Get document information including file path and metadata.
@@ -31,9 +32,13 @@ class DocumentViewerService:
         Returns:
             Document info dictionary
         """
-        result = await db.execute(
-            select(Document).where(Document.id == document_id)
+        if organization_id is None:
+            return None
+        query = select(Document).where(
+            Document.id == document_id,
+            Document.organization_id == organization_id,
         )
+        result = await db.execute(query)
         document = result.scalar_one_or_none()
         
         if not document:
@@ -99,7 +104,8 @@ class DocumentViewerService:
         self,
         document_id: UUID,
         db: AsyncSession,
-        max_chars: int = 5000
+        max_chars: int = 5000,
+        organization_id=None,
     ) -> Optional[Dict[str, Any]]:
         """
         Get text preview for text-based documents.
@@ -112,7 +118,7 @@ class DocumentViewerService:
         Returns:
             Preview data
         """
-        doc_info = await self.get_document_info(document_id, db)
+        doc_info = await self.get_document_info(document_id, db, organization_id)
         if not doc_info or not doc_info['file_exists']:
             return None
         
@@ -142,7 +148,8 @@ class DocumentViewerService:
     async def get_download_url(
         self,
         document_id: UUID,
-        db: AsyncSession
+        db: AsyncSession,
+        organization_id=None,
     ) -> Optional[str]:
         """
         Get download URL for a document.
@@ -154,7 +161,7 @@ class DocumentViewerService:
         Returns:
             Download URL path
         """
-        doc_info = await self.get_document_info(document_id, db)
+        doc_info = await self.get_document_info(document_id, db, organization_id)
         if not doc_info:
             return None
         

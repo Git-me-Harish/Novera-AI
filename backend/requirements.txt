@@ -27,10 +27,8 @@ PyPDF2==3.0.1
 pdfplumber==0.11.4
 
 # before the breaking migration to google-genai package.
-google-generativeai==0.8.3
 
 # Cohere v5 has breaking API changes from v4. Pin to last v4.
-cohere==4.57
 
 # tiktoken for accurate token counting
 tiktoken==0.8.0

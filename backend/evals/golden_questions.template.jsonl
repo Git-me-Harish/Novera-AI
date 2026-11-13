@@ -1,0 +1,5 @@
+# One JSON object per line. Copy to a protected location, replace every placeholder
+# and pass the path to app.evaluation.live_runner / judge / runner. The schema
+# rejects any line that still contains "REPLACE WITH" so templates cannot be run.
+{"id": "policy_001", "tenant": "REPLACE WITH organization UUID", "question": "REPLACE WITH a question users really ask", "expected_answer": "REPLACE WITH the reviewed reference answer", "acceptable_answers": [], "relevant_document_ids": ["REPLACE WITH document UUID"], "relevant_chunk_ids": ["REPLACE WITH chunk UUID"], "must_cite": true, "answer_type": "factual", "should_abstain": false, "metadata": {"reviewer": "REPLACE WITH reviewer", "review_status": "DRAFT"}}
+{"id": "abstain_001", "tenant": "REPLACE WITH organization UUID", "question": "REPLACE WITH a question the documents cannot answer", "expected_answer": "", "acceptable_answers": [], "relevant_document_ids": [], "relevant_chunk_ids": [], "must_cite": false, "answer_type": "abstention", "should_abstain": true, "metadata": {"reviewer": "REPLACE WITH reviewer", "review_status": "DRAFT"}}

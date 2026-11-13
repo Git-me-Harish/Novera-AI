@@ -45,7 +45,7 @@ def upgrade():
     op.create_index('idx_chunk_edit_history_user', 'chunk_edit_history', ['edited_by'])
     op.create_index('idx_chunks_edited', 'chunks', ['is_edited', 'document_id'])
     
-    print("\n✅ Chunk editing support added")
+    print("\nChunk editing support added")
 
 
 def downgrade():
@@ -65,4 +65,4 @@ def downgrade():
     op.drop_column('chunks', 'edited_at')
     op.drop_column('chunks', 'is_edited')
     
-    print("\n✅ Chunk editing support removed")
+    print("\nChunk editing support removed")

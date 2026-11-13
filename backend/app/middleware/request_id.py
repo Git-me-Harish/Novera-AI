@@ -25,6 +25,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 from loguru import logger
+from app.core.rag_trace import RAGTrace, trace_context
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -43,13 +44,21 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
         # Store on request state so endpoints can read it if needed
         request.state.request_id = req_id
+        trace = RAGTrace(request_id=req_id)
+        request.state.rag_trace = trace
 
         # Bind to loguru context for the duration of this request
-        with logger.contextualize(request_id=req_id):
-            response: Response = await call_next(request)
+        with logger.contextualize(request_id=req_id), trace_context(trace):
+            try:
+                response: Response = await call_next(request)
+            except Exception as exc:
+                trace.finish(error=exc)
+                raise
+            trace.finish(status_code=response.status_code)
 
         # Echo the ID back in the response
         response.headers[self.HEADER] = req_id
+        response.headers["X-Trace-ID"] = trace.trace_id
         return response
 
 

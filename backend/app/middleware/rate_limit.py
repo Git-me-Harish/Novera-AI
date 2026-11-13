@@ -1,25 +1,4 @@
-"""
-Sliding-window rate limiter middleware.
-
-Rules are matched by BOTH path prefix AND HTTP method so that read-only
-requests (GET conversation history, token-stats, analytics) are never
-counted against the strict LLM-call budget.
-
-Buckets (ordered most-specific → least-specific):
-  GET/ANY /api/v1/chat/conversations  — 300 req/60s  (reads: history, analytics, token-stats)
-  POST    /api/v1/chat                — 100 req/60s  (real LLM calls; 5 msgs/min per user × 20 users)
-  POST    /api/v1/documents/upload    —  10 req/60s  (uploads)
-  ANY     /api/v1/documents           — 300 req/60s  (document reads / editor)
-  ANY     /api/v1/                    — 300 req/60s  (everything else)
-
-With the org Gemini API key (billing enabled) the backend quota is
-1 000 RPM, so 100 chat POST/min is well within limits even at 20 concurrent
-users each sending one message every 6 seconds.
-
-The identifier is the JWT sub (user ID) for authenticated requests, or the
-client IP for unauthenticated ones.  Falls back to in-memory counter when
-Redis is unavailable so rate limiting still works on a single worker.
-"""
+""" Sliding-window rate limiter middleware """
 from __future__ import annotations
 
 import time
@@ -28,64 +7,44 @@ from typing import Callable, Optional
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
+from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
-from loguru import logger
 
 from app.core.redis_manager import redis_manager
 
 
 @dataclass
 class RateRule:
-    """
-    A single rate-limit rule.
-
-    prefix  : URL path prefix (most-specific first in _RULES).
-    limit   : Max requests allowed within `window` seconds.
-    window  : Sliding-window duration in seconds.
-    methods : If non-empty, only these HTTP verbs are subject to the rule.
-              An empty set (default) matches ALL methods.
-    """
     prefix: str
     limit: int
     window: int
     methods: frozenset[str] = field(default_factory=frozenset)
 
 
-# ---------------------------------------------------------------------------
-# Rules — ORDER MATTERS.  First match wins.
-# Put more-specific prefixes before less-specific ones.
-# ---------------------------------------------------------------------------
 _RULES: list[RateRule] = [
-    # 1. Conversation reads: history, analytics, token-stats polls — generous
-    RateRule("/api/v1/chat/conversations", 300, 60),
-
-    # 2. Actual LLM chat messages — 100/min supports 20 users at normal pace
-    RateRule("/api/v1/chat", 100, 60, frozenset({"POST"})),
-
-    # 3. Document uploads — strict to prevent abuse
-    RateRule("/api/v1/documents/upload", 10, 60, frozenset({"POST"})),
-
-    # 4. Document reads / editor — generous
-    RateRule("/api/v1/documents", 300, 60),
-
-    # 5. Catch-all for every other API route
-    RateRule("/api/v1/", 300, 60),
+    # Strict email-action endpoints (5/min)
+    RateRule("/api/v1/auth/forgot-password",       5,   60, frozenset({"POST"})),
+    RateRule("/api/v1/auth/resend-verification",   5,   60, frozenset({"POST"})),
+    # Login brute-force protection (20/min)
+    RateRule("/api/v1/auth/login",                20,   60, frozenset({"POST"})),
+    # Conversation reads — generous
+    RateRule("/api/v1/chat/conversations",        300,  60),
+    # LLM calls
+    RateRule("/api/v1/chat",                      100,  60, frozenset({"POST"})),
+    # Document uploads
+    RateRule("/api/v1/documents/upload",           10,  60, frozenset({"POST"})),
+    # Document reads/editor
+    RateRule("/api/v1/documents",                 300,  60),
+    # Everything else
+    RateRule("/api/v1/",                          300,  60),
 ]
 
 
 def _match_rule(path: str, method: str) -> Optional[RateRule]:
-    """
-    Return the first rule whose prefix matches the path AND whose method
-    constraint (if any) matches the HTTP method.
-
-    Returns None only if no rule matches at all (impossible with the
-    catch-all rule in place, but kept for safety).
-    """
     for rule in _RULES:
         if not path.startswith(rule.prefix):
             continue
-        # Empty methods set means match every HTTP method
         if not rule.methods or method.upper() in rule.methods:
             return rule
     return None
@@ -93,50 +52,76 @@ def _match_rule(path: str, method: str) -> Optional[RateRule]:
 
 def _extract_identifier(request: Request) -> str:
     """
-    Extract a stable, abuse-resistant identifier for the rate-limit bucket.
+    Stable, abuse-resistant request identifier for rate-limit bucket.
 
-    Priority:
-      1. Verified JWT sub  — authenticated users get a per-user bucket.
-         We verify the signature so a crafted token can't steal another
-         user's bucket (previously we base64-decoded without verification).
-      2. X-Forwarded-For   — first IP in the chain (Render's proxy header).
-      3. Direct client IP  — fallback for non-proxied connections.
-
-    If JWT verification fails for any reason we fall back to IP so rate
-    limiting still works for unauthenticated / malformed requests.
+    1. Verified JWT sub (authenticated users → per-user bucket)
+    2. X-Forwarded-For first hop (behind Render proxy)
+    3. Direct peer IP
     """
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
         token = auth[7:]
         try:
-            from jose import jwt as jose_jwt
+            from jose import jwt as jose_jwt, ExpiredSignatureError
             from app.core.config import settings
             payload = jose_jwt.decode(
                 token,
                 settings.secret_key,
                 algorithms=[settings.algorithm],
-                options={"verify_exp": False},  # expiry checked by the auth dep elsewhere
+                options={"verify_exp": False},
             )
             sub = payload.get("sub")
             if sub:
                 return f"user:{sub}"
         except Exception:
-            # Malformed / expired / wrong-key token — fall through to IP
             pass
 
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return f"ip:{forwarded.split(',')[0].strip()}"
 
-    client = request.client
-    return f"ip:{client.host}" if client else "ip:unknown"
+    return f"ip:{request.client.host}" if request.client else "ip:unknown"
+
+
+async def _sliding_window_count(bucket_key: str, window: int) -> int:
+    """
+    True sliding-window counter using Redis sorted set.
+
+    Each request adds its timestamp as a member score.
+    Old entries (outside the window) are pruned before counting.
+    Returns the current request count within the window.
+
+    Falls back to the simpler INCR pattern (fixed window) when Redis
+    sorted-set commands are unavailable (in-memory fallback).
+    """
+    now = time.time()
+    window_start = now - window
+    zset_key = f"rl_sw:{bucket_key}"
+
+    if redis_manager.is_redis_active:
+        try:
+            pipe = redis_manager._client.pipeline()
+            # Remove timestamps outside the window
+            pipe.zremrangebyscore(zset_key, "-inf", window_start)
+            # Add current timestamp (value = unique float to allow ties)
+            pipe.zadd(zset_key, {f"{now:.6f}": now})
+            # Count remaining
+            pipe.zcard(zset_key)
+            # Reset TTL
+            pipe.expire(zset_key, window + 1)
+            results = await pipe.execute()
+            return int(results[2])  # zcard result
+        except Exception as e:
+            logger.warning(f"Sliding-window ZSET error: {e} — falling back to INCR")
+
+    return await redis_manager.increment(f"rl_fw:{bucket_key}", ttl=window)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
-    Sliding-window rate limiting via Redis INCR + EXPIRE.
-    Returns HTTP 429 with Retry-After header when a limit is exceeded.
-    Fails open (lets request through) if Redis is unavailable.
+    True sliding-window rate limiting via Redis sorted sets.
+    Returns HTTP 429 with Retry-After when a limit is exceeded.
+    Fails open if Redis is unavailable.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -146,7 +131,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         method = request.method
 
-        # Only rate-limit API routes
         if not path.startswith("/api/"):
             return await call_next(request)
 
@@ -155,16 +139,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         identifier = _extract_identifier(request)
-
-        # Include HTTP method in bucket key when the rule is method-specific
-        # so POST and GET counters are tracked independently.
         method_tag = f":{method.upper()}" if rule.methods else ""
-        bucket_key = f"rl:{identifier}:{rule.prefix}{method_tag}"
+        bucket_key = f"{identifier}:{rule.prefix}{method_tag}"
 
         try:
-            count = await redis_manager.increment(bucket_key, ttl=rule.window)
+            count = await _sliding_window_count(bucket_key, rule.window)
         except Exception as exc:
-            # Redis down — fail open
             logger.warning(f"Rate limit check error: {exc} — allowing request")
             return await call_next(request)
 

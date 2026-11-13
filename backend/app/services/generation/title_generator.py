@@ -1,10 +1,8 @@
 """
 Intelligent chunk title generation service.
-Uses Gemini to create concise, meaningful titles for chunks.
+Uses the configured utility chat model (any provider) to title chunks.
 """
 from typing import Optional, List
-import google.generativeai as genai
-from tenacity import retry, stop_after_attempt, wait_exponential
 from loguru import logger
 import asyncio
 
@@ -18,66 +16,17 @@ class TitleGeneratorService:
     """
     
     def __init__(self):
-        genai.configure(api_key=settings.gemini_api_key)
-        
-        # Use the model from settings (gemini-2.5-flash)
-        model_name = settings.gemini_chat_model.replace('models/', '')
-        
-        self.model = genai.GenerativeModel(
-            model_name=model_name,
-            generation_config={
-                "temperature": 0.3,
-                "max_output_tokens": 50,
-                "top_p": 0.95,
-            }
+        logger.info("Title generation service ready (utility chat model)")
+
+    async def _complete_title(self, prompt: str) -> Optional[str]:
+        from app.services.ai.registry import utility_chain
+        from app.services.generation.llm_service import llm_service
+
+        result = await llm_service.complete(
+            prompt, chain=utility_chain(), temperature=0.3, max_tokens=50, timeout=15.0
         )
-        
-        logger.info(f"Title generation service initialized with model: {model_name}")
-    
-    def _extract_text_from_response(self, response) -> Optional[str]:
-        """
-        Safely extract text from Gemini response.
-        Handles both simple and complex response structures.
-        """
-        try:
-            # Try simple text accessor first
-            if hasattr(response, 'text') and response.text:
-                return response.text
-        except Exception:
-            pass
-        
-        try:
-            # Try parts accessor
-            if hasattr(response, 'parts') and response.parts:
-                text_parts = []
-                for part in response.parts:
-                    if hasattr(part, 'text'):
-                        text_parts.append(part.text)
-                if text_parts:
-                    return ''.join(text_parts)
-        except Exception:
-            pass
-        
-        try:
-            # Try candidates accessor
-            if hasattr(response, 'candidates') and response.candidates:
-                for candidate in response.candidates:
-                    if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
-                        text_parts = []
-                        for part in candidate.content.parts:
-                            if hasattr(part, 'text'):
-                                text_parts.append(part.text)
-                        if text_parts:
-                            return ''.join(text_parts)
-        except Exception as e:
-            logger.warning(f"Error extracting text from response: {e}")
-        
-        return None
-    
-    @retry(
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=1, max=3)
-    )
+        return result.text if result is not None else None
+
     async def generate_title(
         self,
         content: str,
@@ -144,15 +93,11 @@ RULES:
 TITLE:"""
         
         try:
-            loop = asyncio.get_running_loop()
             
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.model.generate_content(prompt)
-            )
+            title_text = await self._complete_title(prompt)
             
             # Use safe text extraction
-            title_text = self._extract_text_from_response(response)
+            
             
             if not title_text:
                 raise ValueError("No text extracted from response")
@@ -210,15 +155,11 @@ RULES:
 TITLE:"""
         
         try:
-            loop = asyncio.get_running_loop()
             
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.model.generate_content(prompt)
-            )
+            title_text = await self._complete_title(prompt)
             
             # Use safe text extraction
-            title_text = self._extract_text_from_response(response)
+            
             
             if not title_text:
                 raise ValueError("No text extracted from response")
@@ -279,7 +220,7 @@ TITLE:"""
         else:
             title = content if content else f"Chunk {chunk_index + 1 if chunk_index is not None else ''}"
         
-        logger.debug(f"Using content preview as fallback: '{title}'")
+        logger.debug(f"Using content-derived fallback title: chars={len(title)}")
         return title
     
     async def batch_generate_titles(

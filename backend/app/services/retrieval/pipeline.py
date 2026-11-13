@@ -10,6 +10,8 @@ from app.core.config import settings
 from app.services.retrieval.query_processor import query_processor
 from app.services.retrieval.hybrid_search import hybrid_search_service
 from app.services.retrieval.reranker import reranking_service
+from app.core.rag_trace import get_current_trace
+from app.core.rag_trace import hash_value
 
 from typing import TYPE_CHECKING
 
@@ -31,12 +33,14 @@ class RetrievalPipeline:
         self,
         query: str,
         db: AsyncSession,
+        organization_id,
         top_k: Optional[int] = None,
         doc_type: Optional[str] = None,
         department: Optional[str] = None,
         include_context: bool = True,
         conversation_context: Optional['ConversationContext'] = None,
-        force_global: bool = False
+        force_global: bool = False,
+        query_embedding: Optional[list[float]] = None,
     ) -> Dict[str, Any]:
         """
         Complete retrieval pipeline with conversation context awareness and dynamic scoping.
@@ -54,7 +58,7 @@ class RetrievalPipeline:
         Returns:
             Dictionary with retrieved chunks and metadata
         """
-        logger.info(f"🔍 Starting retrieval pipeline for query: '{query[:50]}...'")
+        logger.info(f"🔍 Starting retrieval pipeline: query_hash={hash_value(query)}, chars={len(query)}")
         
         # Step 1: Process and enhance query
         logger.info("Step 1: Processing query...")
@@ -105,22 +109,30 @@ class RetrievalPipeline:
             search_results = await hybrid_search_service.search_with_context_expansion(
                 query=query,
                 db=db,
+                organization_id=organization_id,
                 top_k=initial_top_k,
                 expand_neighbors=True,
+                use_semantic=use_semantic,
+                use_keyword=use_keyword,
+                doc_type=doc_type,
+                department=department,
                 document_filter=None,  # CRITICAL: No hard filtering
-                boost_documents=boost_documents  # Only boosting
+                boost_documents=boost_documents,  # Only boosting
+                query_embedding=query_embedding,
             )
         else:
             search_results = await hybrid_search_service.search(
                 query=query,
                 db=db,
+                organization_id=organization_id,
                 top_k=initial_top_k,
                 use_semantic=use_semantic,
                 use_keyword=use_keyword,
                 doc_type=doc_type,
                 department=department,
                 document_filter=None,  # CRITICAL: No hard filtering
-                boost_documents=boost_documents  # Only boosting
+                boost_documents=boost_documents,  # Only boosting
+                query_embedding=query_embedding,
             )
 
         logger.info(f"  Initial search: {len(search_results)} chunks")
@@ -137,6 +149,7 @@ class RetrievalPipeline:
                 global_results = await hybrid_search_service.search(
                     query=query,
                     db=db,
+                    organization_id=organization_id,
                     top_k=settings.global_search_top_k,
                     use_semantic=use_semantic,
                     use_keyword=use_keyword,
@@ -172,7 +185,21 @@ class RetrievalPipeline:
                 logger.info(f"  Merged results: {len(search_results)} total chunks")
 
         # Step 6: Rerank results
+        pre_rerank_chunk_ids = [str(chunk.get("chunk_id")) for chunk in search_results]
         reranked_results = []
+
+        # Focused factual questions usually have one evidence-bearing chunk;
+        # sending every neighboring hit increases prompt cost and invites the
+        # generator to answer adjacent questions. Broader procedural and
+        # analytical questions retain a larger evidence budget.
+        broad_intents = {"procedural", "analytical", "compliance"}
+        context_chunk_limit = (
+            settings.complex_context_chunks
+            if processed_query["complexity"] == "complex"
+            or processed_query["intent"] in broad_intents
+            else settings.focused_context_chunks
+        )
+        context_chunk_limit = min(context_chunk_limit, top_k or settings.rerank_top_k)
 
         # Decide if reranking is needed
         should_rerank = (
@@ -188,7 +215,7 @@ class RetrievalPipeline:
                 reranked_results = await reranking_service.rerank(
                     query=query,
                     chunks=search_results,
-                    top_n=top_k or settings.rerank_top_k
+                    top_n=context_chunk_limit,
                 )
                 stats = reranking_service.calculate_score_statistics(reranked_results)
                 logger.info(
@@ -197,10 +224,74 @@ class RetrievalPipeline:
                 )
             except Exception as e:
                 logger.error(f"Reranking failed: {e} — using original order")
-                reranked_results = search_results[:top_k or settings.rerank_top_k]
+                reranked_results = [
+                    {**chunk, "rerank_degraded": True}
+                    for chunk in search_results[:context_chunk_limit]
+                ]
         else:
             logger.info("Step 4: Skipping reranking (disabled or insufficient results)")
-            reranked_results = search_results[:top_k or settings.rerank_top_k]
+            reranked_results = search_results[:context_chunk_limit]
+
+        # Exact domain terms are a recall safety net. A cross-encoder can
+        # occasionally score a chunk containing the requested named concept
+        # below generic explanatory text. Preserve the strongest sparse hit in
+        # the final evidence budget so hybrid retrieval cannot discard an exact
+        # lexical match before generation.
+        keyword_rescue = max(
+            (chunk for chunk in search_results if float(chunk.get("keyword_score", 0.0) or 0.0) > 0),
+            key=lambda chunk: float(chunk.get("keyword_score", 0.0) or 0.0),
+            default=None,
+        )
+        if keyword_rescue and not any(
+            chunk.get("chunk_id") == keyword_rescue.get("chunk_id")
+            for chunk in reranked_results
+        ):
+            if len(reranked_results) >= context_chunk_limit:
+                reranked_results[-1] = keyword_rescue
+            else:
+                reranked_results.append(keyword_rescue)
+            keyword_rescue["retrieval_rescue"] = "keyword_exact_match"
+            logger.info(
+                "Preserved strongest keyword match in context: %s",
+                keyword_rescue.get("chunk_id"),
+            )
+
+        # Do not send weakly relevant evidence to generation. A low-scoring
+        # context can make the model produce a plausible but unsupported answer
+        # instead of taking the required abstention path.
+        # The floor is calibrated for cross-encoder scores only. RRF fused
+        # scores are ~0.01, so applying it to them after a reranker outage
+        # silently filtered every chunk and the system abstained on all
+        # questions. When reranking is degraded, fall back to the cosine
+        # similarity floor and record the degradation.
+        rerank_degraded = any(chunk.get("rerank_degraded") for chunk in reranked_results) or (
+            not should_rerank
+        )
+
+        def _passes_floor(chunk: Dict[str, Any]) -> bool:
+            if chunk.get("retrieval_rescue") == "keyword_exact_match":
+                return True
+            if not rerank_degraded:
+                return float(chunk.get("rerank_score") or 0.0) >= settings.min_rerank_score
+            if chunk.get("keyword_score"):
+                return True
+            return float(chunk.get("similarity_score") or chunk.get("semantic_score") or 0.0) >= (
+                settings.similarity_threshold
+            )
+
+        before_relevance_filter = len(reranked_results)
+        reranked_results = [chunk for chunk in reranked_results if _passes_floor(chunk)]
+        if rerank_degraded and should_rerank:
+            logger.warning("Reranker degraded — using similarity floor instead of rerank floor")
+            trace = get_current_trace()
+            if trace:
+                trace.event("rerank_degraded", status="degraded")
+        if before_relevance_filter != len(reranked_results):
+            logger.info(
+                f"Relevance floor filtered {before_relevance_filter} -> "
+                f"{len(reranked_results)} chunks "
+                f"(minimum rerank score {settings.min_rerank_score:.3f})",
+            )
 
         logger.info(f"  After reranking: {len(reranked_results)} chunks")
         
@@ -212,6 +303,31 @@ class RetrievalPipeline:
         )
         
         logger.info(f"✅ Retrieval complete: {len(final_context['chunks'])} chunks, {final_context['total_tokens']} tokens")
+
+        ranking_scores = [
+            float(chunk.get("rerank_score", chunk.get("fused_score", 0.0)) or 0.0)
+            for chunk in final_context["chunks"]
+        ]
+        score_summary = {
+            "min": min(ranking_scores) if ranking_scores else 0.0,
+            "max": max(ranking_scores) if ranking_scores else 0.0,
+            "avg": sum(ranking_scores) / len(ranking_scores) if ranking_scores else 0.0,
+        }
+
+        trace = get_current_trace()
+        if trace:
+            trace.set_principal(tenant_id=organization_id)
+            trace.set_query(query)
+            trace.event(
+                "retrieval_completed",
+                strategy="hybrid" if (use_semantic and use_keyword) else ("semantic" if use_semantic else "keyword"),
+                candidate_k=len(search_results),
+                final_k=len(final_context["chunks"]),
+                context_tokens=final_context["total_tokens"],
+                min_score=score_summary["min"],
+                max_score=score_summary["max"],
+                avg_score=score_summary["avg"],
+            )
         
         return {
             'query': query,
@@ -224,13 +340,18 @@ class RetrievalPipeline:
                 'search_strategy': 'hybrid' if (use_semantic and use_keyword) else ('semantic' if use_semantic else 'keyword'),
                 'total_retrieved': len(search_results),
                 'after_reranking': len(reranked_results),
+                'min_rerank_score': settings.min_rerank_score,
                 'final_chunks': len(final_context['chunks']),
+                'context_chunk_limit': context_chunk_limit,
                 'intent': processed_query['intent'],
                 'complexity': processed_query['complexity'],
                 'used_scoped_search': use_scoped_search,
                 'expanded_to_global': should_expand,
                 'boosted_documents': boost_documents,
-                'search_type': 'global' if should_expand else ('scoped' if use_scoped_search else 'global')
+                'search_type': 'global' if should_expand else ('scoped' if use_scoped_search else 'global'),
+                'pre_rerank_chunk_ids': pre_rerank_chunk_ids,
+                'rerank_degraded': rerank_degraded,
+                'score_summary': score_summary,
             }
         }
     
@@ -354,7 +475,11 @@ class RetrievalPipeline:
         max_tokens = self.max_context_tokens  # use the configured 12,000 — Gemini handles it
 
         
+        seen_chunk_ids: set = set()
         for chunk in sorted_chunks:
+            chunk_key = str(chunk.get('chunk_id', chunk.get('id', '')))
+            if chunk_key in seen_chunk_ids:
+                continue
             chunk_tokens = chunk.get('token_count', 0)
             
             # if chunk_tokens > 800:
@@ -369,21 +494,21 @@ class RetrievalPipeline:
                 logger.warning(f"Reached token limit ({max_tokens}), stopping context assembly")
                 break
             
+            # Label the block with the same number as its source entry so
+            # citation [n] is unambiguous even when two chunks share a page.
+            source_number = len(sources) + 1
             chunk_text = self._format_chunk_for_context(chunk)
-            context_parts.append(chunk_text)
-            
+            context_parts.append(f"[{source_number}] {chunk_text}")
+
             chunk_metadata = self._safe_get_metadata(chunk)
-            
-            source_info = {
+
+            sources.append({
                 'document': chunk_metadata.get('document_title', chunk.get('document_name', 'Unknown Document')),
                 'page': chunk.get('page_numbers', [None])[0] if chunk.get('page_numbers') else None,
                 'section': chunk.get('section_title'),
-                'chunk_id': str(chunk.get('chunk_id', chunk.get('id', '')))
-            }
-            
-            if source_info not in sources:
-                sources.append(source_info)
-            
+                'chunk_id': chunk_key,
+            })
+            seen_chunk_ids.add(chunk_key)
             final_chunks.append(chunk)
             total_tokens += chunk_tokens
         
@@ -452,6 +577,7 @@ class RetrievalPipeline:
         query: str,
         document_id: str,
         db: AsyncSession,
+        organization_id,
         top_k: Optional[int] = None
     ) -> Dict[str, Any]:
         """
@@ -475,6 +601,7 @@ class RetrievalPipeline:
             query_embedding=query_embedding,
             document_id=UUID(document_id),
             db=db,
+            organization_id=organization_id,
             top_k=top_k or settings.retrieval_top_k
         )
         

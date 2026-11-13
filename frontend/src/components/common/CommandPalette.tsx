@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, Fragment } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Search, 
@@ -12,10 +12,8 @@ import {
   X,
   Command,
   ArrowRight,
-  Clock,
-  TrendingUp
 } from 'lucide-react';
-import api from '../../services/api';
+import api, { type ConversationSummary } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
 
 interface CommandItem {
@@ -40,7 +38,7 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const [documents, setDocuments] = useState<any[]>([]);
-  const [conversations, setConversations] = useState<any[]>([]);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -173,18 +171,17 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
 
   // Convert conversations to command items
   const conversationItems: CommandItem[] = conversations.map(conv => {
-    const preview = conv.messages?.[0]?.content?.substring(0, 50) || 'New conversation';
     return {
       id: `conv-${conv.id}`,
-      label: preview,
-      description: `${conv.messages?.length || 0} messages`,
+      label: conv.title,
+      description: `${conv.message_count} message${conv.message_count === 1 ? '' : 's'}`,
       icon: History,
       action: () => {
         navigate(`/chat/${conv.id}`);
         onClose();
       },
       category: 'conversations',
-      keywords: [preview]
+      keywords: [conv.title, conv.preview ?? ''].filter(Boolean)
     };
   });
 
@@ -308,7 +305,7 @@ export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps)
                   <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
                     {categoryLabels[category as keyof typeof categoryLabels]}
                   </div>
-                  {items.map((item, idx) => {
+                  {items.map((item) => {
                     const globalIndex = filteredItems.indexOf(item);
                     const isSelected = globalIndex === selectedIndex;
                     

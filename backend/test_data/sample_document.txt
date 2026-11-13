@@ -1,0 +1,30 @@
+
+Sample Financial Document
+
+Company: Example Corp
+Department: Finance
+Date: 2024-01-15
+
+Section 1: Revenue Summary
+Our total revenue for Q4 2024 was $1.5 million, representing a 15% increase 
+from the previous quarter. Key drivers included:
+- Product sales: $900,000
+- Service revenue: $400,000
+- Consulting: $200,000
+
+Section 2: Expense Breakdown
+Total expenses: $1.2 million
+- Salaries: $600,000
+- Operations: $300,000
+- Marketing: $200,000
+- Other: $100,000
+
+Table: Quarterly Comparison
+Quarter | Revenue | Expenses | Profit
+Q1 2024 | $1.2M   | $1.0M    | $0.2M
+Q2 2024 | $1.3M   | $1.1M    | $0.2M
+Q3 2024 | $1.4M   | $1.15M   | $0.25M
+Q4 2024 | $1.5M   | $1.2M    | $0.3M
+
+Section 3: Outlook
+We project continued growth in 2025 with expected revenue of $7 million.

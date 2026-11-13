@@ -4,7 +4,7 @@ Handles editing, re-embedding, and version tracking.
 """
 from typing import Dict, Any, List, Optional, Tuple
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from loguru import logger
@@ -105,8 +105,12 @@ class ChunkEditorService:
             chunk.content = new_content.strip()
             chunk.content_length = len(new_content.strip())
             chunk.embedding = new_embedding
+            chunk.embedding_provider = embedding_service.provider
+            chunk.embedding_model = embedding_service.model_name
+            chunk.embedding_dimensions = embedding_service.dimensions
+            chunk.embedding_task = "retrieval_document"
             chunk.is_edited = True
-            chunk.edited_at = datetime.utcnow()
+            chunk.edited_at = datetime.now(timezone.utc)
             chunk.edited_by = edited_by
             chunk.edit_count += 1
             
@@ -213,6 +217,10 @@ class ChunkEditorService:
             # Regenerate embedding for original content
             new_embedding = await embedding_service.generate_embedding(chunk.original_content)
             chunk.embedding = new_embedding
+            chunk.embedding_provider = embedding_service.provider
+            chunk.embedding_model = embedding_service.model_name
+            chunk.embedding_dimensions = embedding_service.dimensions
+            chunk.embedding_task = "retrieval_document"
             
             # Reset edit fields
             chunk.is_edited = False
