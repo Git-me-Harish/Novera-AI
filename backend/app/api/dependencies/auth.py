@@ -64,16 +64,31 @@ async def get_current_user(
 
     user_id = _parse_uuid(user_id_str, "user ID in token")
 
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-
-    if user is None:
+    # One query: the user plus their organization's lifecycle state.
+    result = await db.execute(
+        select(User, Organization.is_active)
+        .outerjoin(Organization, Organization.id == User.organization_id)
+        .where(User.id == user_id)
+    )
+    row = result.first()
+    if row is None:
         raise _credentials_error()
+    user, organization_active = row
 
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive",
+        )
+
+    # A suspended organization locks out every member immediately, including
+    # holders of still-valid access tokens. Super admins stay reachable so
+    # they can reactivate it.
+    if user.organization_id and organization_active is False and not user.is_super_admin():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "organization_suspended",
+                    "message": "Your organization is suspended. Contact your administrator."},
         )
 
     return user

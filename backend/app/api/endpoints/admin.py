@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import get_current_admin_user
@@ -17,7 +17,11 @@ from app.core.security import get_password_hash, validate_email, validate_passwo
 from app.db.session import get_db
 from app.models.document import Document
 from app.models.organization import Organization
-from app.models.user import User
+from app.models.user import RefreshToken, User
+from app.services.tenancy import audit
+from app.services.tenancy.audit import Action
+from app.services.tenancy.quotas import QuotaExceeded, ensure_user_capacity
+from app.services.tenancy.roles import RoleChangeDenied, assert_can_grant, assert_keeps_an_admin
 
 router = APIRouter()
 
@@ -159,9 +163,30 @@ async def get_user_stats(
     )
 
 
+async def _managed_user(db: AsyncSession, admin: User, user_id: UUID) -> User:
+    """Load a user the admin may manage.
+
+    Org admins only see their own organization, and nobody below super admin
+    can manage a super admin. Out-of-scope users are reported as missing so
+    the endpoint is not an existence oracle across tenants.
+    """
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not admin.is_super_admin():
+        if user.organization_id != admin.organization_id or user.role == "super_admin":
+            raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+def _quota_error(exc: QuotaExceeded) -> HTTPException:
+    return HTTPException(status_code=403, detail=exc.as_detail())
+
+
 @router.post("/admin/users", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_user(
     request: CreateUserRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user),
 ):
@@ -171,19 +196,30 @@ async def create_user(
     is_valid, error_msg = validate_password_strength(request.password)
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
+    try:
+        assert_can_grant(admin, request.role)
+    except RoleChangeDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    if not admin.organization_id:
+        raise HTTPException(status_code=400, detail="Create users from within an organization")
 
-    if request.role == "super_admin" and not admin.is_super_admin():
-        raise HTTPException(status_code=403, detail="Only super admins can create super admin users")
-    if request.role == "org_admin" and admin.is_org_admin() and not admin.is_super_admin():
-        raise HTTPException(status_code=403, detail="Only super admins can create organization admins")
-
-    if (await db.execute(select(User).where(User.email == request.email))).scalar_one_or_none():
+    if (await db.execute(select(User).where(func.lower(User.email) == request.email.lower()))).scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Email already registered")
     if (await db.execute(select(User).where(User.username == request.username))).scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Username already taken")
 
+    if request.is_active:
+        try:
+            await ensure_user_capacity(db, admin.organization_id)
+        except QuotaExceeded as exc:
+            actor = audit.snapshot(admin)
+            await db.rollback()  # release the organization row lock first
+            await audit.record_independent(Action.QUOTA_EXCEEDED, actor=actor, outcome="denied",
+                                           details=exc.as_detail(), request=http_request)
+            raise _quota_error(exc)
+
     new_user = User(
-        email=request.email,
+        email=request.email.lower(),
         username=request.username,
         hashed_password=get_password_hash(request.password),
         full_name=request.full_name,
@@ -194,10 +230,13 @@ async def create_user(
         user_metadata={"created_by": str(admin.id), "created_by_admin": True},
     )
     db.add(new_user)
+    await db.flush()
+    audit.record(db, Action.USER_CREATED, actor=admin, target_type="user", target_id=new_user.id,
+                 details={"email": new_user.email, "role": new_user.role}, request=http_request)
     await db.commit()
     await db.refresh(new_user)
 
-    logger.info(f"Admin {admin.email} created user {new_user.email} in org {admin.organization_id}")
+    logger.info(f"Admin {admin.id} created user {new_user.id} in org {admin.organization_id}")
     return {"message": "User created successfully", "user": new_user.to_dict()}
 
 
@@ -207,9 +246,7 @@ async def get_user_details(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user),
 ):
-    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = await _managed_user(db, admin, user_id)
 
     doc_count = (
         await db.execute(
@@ -243,110 +280,134 @@ async def get_user_details(
 async def update_user(
     user_id: UUID,
     request: UpdateUserRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user),
 ):
-    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    user = await _managed_user(db, admin, user_id)
+    try:
+        if request.role is not None and request.role != user.role:
+            # Previously super_admin could be granted by any org admin.
+            assert_can_grant(admin, request.role, target=user)
+            await assert_keeps_an_admin(db, user, new_role=request.role)
+        if request.is_active is False and user.is_active:
+            if user_id == admin.id:
+                raise RoleChangeDenied("You cannot deactivate your own account")
+            await assert_keeps_an_admin(db, user, deactivating=True)
+    except RoleChangeDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
-    if admin.is_org_admin() and not admin.is_super_admin():
-        if user.organization_id != admin.organization_id:
-            raise HTTPException(status_code=403, detail="You can only update users in your organization")
+    if request.is_active and not user.is_active and user.organization_id:
+        try:
+            await ensure_user_capacity(db, user.organization_id)
+        except QuotaExceeded as exc:
+            actor = audit.snapshot(admin)
+            await db.rollback()  # release the organization row lock first
+            await audit.record_independent(Action.QUOTA_EXCEEDED, actor=actor, outcome="denied",
+                                           details=exc.as_detail(), request=http_request)
+            raise _quota_error(exc)
 
-    if user.role == "super_admin" and not admin.is_super_admin():
-        raise HTTPException(status_code=403, detail="Cannot modify super admin users")
-
-    if request.role == "org_admin" and admin.is_org_admin() and not admin.is_super_admin():
-        raise HTTPException(status_code=403, detail="Only super admins can assign organization admin role")
-
-    if user_id == admin.id and request.is_active is False:
-        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
-
-    if user_id == admin.id and request.role and request.role not in ["org_admin", "super_admin", "admin"]:
-        if admin.is_org_admin() and not admin.is_super_admin():
-            other_admins = (
-                await db.execute(
-                    select(func.count()).select_from(User).where(
-                        User.role == "org_admin",
-                        User.is_active == True,
-                        User.organization_id == admin.organization_id,
-                        User.id != admin.id,
-                    )
-                )
-            ).scalar()
-            if other_admins == 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cannot remove admin role. You are the only active admin in your organization.",
-                )
-
-    if request.full_name is not None:
+    changes: dict = {}
+    if request.full_name is not None and request.full_name != user.full_name:
+        changes["full_name"] = True
         user.full_name = request.full_name
-    if request.role is not None:
+    if request.role is not None and request.role != user.role:
+        audit.record(db, Action.USER_ROLE_CHANGED, actor=admin, organization_id=user.organization_id,
+                     target_type="user", target_id=user.id,
+                     details={"from": user.role, "to": request.role}, request=http_request)
         user.role = request.role
-    if request.is_active is not None:
+    if request.is_active is not None and request.is_active != user.is_active:
         user.is_active = request.is_active
-    if request.is_verified is not None:
+        if not request.is_active:
+            # End every session now; access tokens are re-checked per request.
+            await db.execute(update(RefreshToken).where(RefreshToken.user_id == user.id)
+                             .values(revoked=True))
+        audit.record(db, Action.USER_REACTIVATED if request.is_active else Action.USER_DEACTIVATED,
+                     actor=admin, organization_id=user.organization_id, target_type="user",
+                     target_id=user.id, request=http_request)
+    if request.is_verified is not None and request.is_verified != user.is_verified:
+        changes["is_verified"] = request.is_verified
         user.is_verified = request.is_verified
+    if changes:
+        audit.record(db, Action.USER_UPDATED, actor=admin, organization_id=user.organization_id,
+                     target_type="user", target_id=user.id, details=changes, request=http_request)
 
     user.updated_at = datetime.now(timezone.utc)
-
     await db.commit()
     await db.refresh(user)
 
-    logger.info(f"Admin {admin.email} updated user {user.email}")
+    logger.info(f"Admin {admin.id} updated user {user.id}")
     return {"message": "User updated successfully", "user": user.to_dict()}
 
 
 @router.delete("/admin/users/{user_id}")
 async def delete_user(
     user_id: UUID,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user),
 ):
-    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if admin.is_org_admin() and not admin.is_super_admin():
-        if user.organization_id != admin.organization_id:
-            raise HTTPException(status_code=403, detail="You can only delete users in your organization")
-
+    user = await _managed_user(db, admin, user_id)
     if user_id == admin.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    try:
+        await assert_keeps_an_admin(db, user, deleting=True)
+    except RoleChangeDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
-    if user.role == "super_admin" and not admin.is_super_admin():
-        raise HTTPException(status_code=403, detail="Cannot delete super admin users")
-
-    await db.execute(delete(Document).where(Document.uploaded_by == user_id))
+    # Documents belong to the organization, not the uploader: uploaded_by is
+    # set to NULL by the foreign key. (Deleting them here used to wipe part of
+    # the knowledge base and orphan the files on disk.)
+    audit.record(db, Action.USER_DELETED, actor=admin, organization_id=user.organization_id,
+                 target_type="user", target_id=user.id, details={"email": user.email},
+                 request=http_request)
+    await db.execute(delete(RefreshToken).where(RefreshToken.user_id == user.id))
     await db.delete(user)
     await db.commit()
 
-    logger.info(f"Admin {admin.email} deleted user {user.email}")
+    logger.info(f"Admin {admin.id} deleted user {user_id}")
     return {"message": "User deleted successfully", "user_id": str(user_id)}
+
+
+class AdminPasswordReset(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 @router.post("/admin/users/{user_id}/reset-password")
 async def reset_user_password(
     user_id: UUID,
-    new_password: str = Query(..., min_length=8),
+    http_request: Request,
+    body: Optional[AdminPasswordReset] = None,
+    new_password: Optional[str] = Query(None, min_length=8, deprecated=True,
+                                        description="Deprecated: send it in the JSON body"),
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user),
 ):
-    is_valid, error_msg = validate_password_strength(new_password)
+    """Set a user's password. Scoped like every other user action.
+
+    This endpoint had no organization or role check, so any org admin could
+    take over any account on the platform. The password now travels in the
+    body; query strings end up in access logs.
+    """
+    password = body.new_password if body else new_password
+    if not password:
+        raise HTTPException(status_code=422, detail="new_password is required")
+    user = await _managed_user(db, admin, user_id)
+    if user.role in ("org_admin",) and not admin.is_super_admin() and user.id != admin.id:
+        raise HTTPException(status_code=403, detail="Only super admins can reset an organization admin's password")
+    is_valid, error_msg = validate_password_strength(password)
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
 
-    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user.hashed_password = get_password_hash(new_password)
-    user.updated_at = datetime.now(timezone.utc)  # FIX: timezone-aware
-
+    user.hashed_password = get_password_hash(password)
+    user.updated_at = datetime.now(timezone.utc)
+    # Old sessions must not survive a password reset.
+    await db.execute(update(RefreshToken).where(RefreshToken.user_id == user.id).values(revoked=True))
+    audit.record(db, Action.USER_PASSWORD_RESET_BY_ADMIN, actor=admin,
+                 organization_id=user.organization_id, target_type="user", target_id=user.id,
+                 request=http_request)
     await db.commit()
-    logger.info(f"Admin {admin.email} reset password for user {user.email}")
+    logger.info(f"Admin {admin.id} reset password for user {user.id}")
     return {"message": "Password reset successfully"}
 
 

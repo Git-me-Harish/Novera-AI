@@ -32,8 +32,10 @@ interface AuthContextType {
     email: string,
     username: string,
     password: string,
-    fullName?: string
+    fullName?: string,
+    organizationName?: string
   ) => Promise<void>;
+  acceptInvitation: (token: string, username: string, password: string, fullName?: string) => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: (data: Partial<User>) => Promise<void>;
   isAuthenticated: boolean;
@@ -137,9 +139,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       email: string,
       username: string,
       password: string,
-      fullName?: string
+      fullName?: string,
+      organizationName?: string
     ) => {
-      const response = await api.register(email, username, password, fullName);
+      const response = await api.register(email, username, password, fullName, organizationName);
+      setTokens(response.access_token, response.refresh_token ?? undefined);
+      setUser(response.user as User);
+    },
+    []
+  );
+
+  const acceptInvitation = useCallback(
+    async (token: string, username: string, password: string, fullName?: string) => {
+      const response = await api.acceptInvitation({ token, username, password, full_name: fullName });
       setTokens(response.access_token, response.refresh_token ?? undefined);
       setUser(response.user as User);
     },
@@ -173,6 +185,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loading,
     login,
     register,
+    acceptInvitation,
     logout,
     updateProfile,
     isAuthenticated: !!user,

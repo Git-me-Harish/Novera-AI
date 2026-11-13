@@ -10,7 +10,7 @@ import time
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -26,6 +26,8 @@ from app.services.ai.catalog import catalog, default_base_url, provider_info
 from app.services.ai.chat import build_chat_client
 from app.services.ai.endpoint_policy import EndpointNotAllowed, validate_tenant_endpoint
 from app.services.ai.types import ChatMessage, ModelSpec, ProviderError
+from app.services.tenancy import audit
+from app.services.tenancy.audit import Action
 
 router = APIRouter()
 
@@ -143,6 +145,7 @@ async def get_ai_settings(
 @router.put("/organization/ai-settings")
 async def update_ai_settings(
     body: AISettingsInput,
+    request: Request,
     organization_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_org_admin),
@@ -178,6 +181,12 @@ async def update_ai_settings(
     )
     # Reassign the dict: in-place JSONB mutation is not tracked by SQLAlchemy.
     org.settings = {**(org.settings or {}), "ai": tenant.model_dump(mode="json")}
+    audit.record(db, Action.AI_SETTINGS_UPDATED, actor=user, organization_id=org.id,
+                 target_type="organization", target_id=org.id,
+                 details={"chat_model": f"{chat.provider}:{chat.model}" if chat else "platform default",
+                          "own_api_key": bool(chat and chat.api_key_encrypted),
+                          "allow_platform_fallback": tenant.allow_platform_fallback},
+                 request=request)
     await db.commit()
     registry.invalidate_tenant(org.id)
     logger.info(
@@ -190,12 +199,15 @@ async def update_ai_settings(
 
 @router.delete("/organization/ai-settings")
 async def reset_ai_settings(
+    request: Request,
     organization_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_org_admin),
 ):
     org = await _target_org(user, organization_id, db)
     org.settings = {k: v for k, v in (org.settings or {}).items() if k != "ai"}
+    audit.record(db, Action.AI_SETTINGS_RESET, actor=user, organization_id=org.id,
+                 target_type="organization", target_id=org.id, request=request)
     await db.commit()
     registry.invalidate_tenant(org.id)
     logger.info(f"AI settings reset to platform defaults: org={org.id} by user={user.id}")

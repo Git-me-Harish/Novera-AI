@@ -22,6 +22,10 @@ class Organization(Base):
     description = Column(String(1000), nullable=True)
     
     is_active = Column(Boolean, default=True, nullable=False)
+    # Lifecycle: a suspended organization keeps its data but nobody in it can
+    # sign in or use the API until a super admin reactivates it.
+    suspended_at = Column(DateTime(timezone=True), nullable=True)
+    suspended_reason = Column(String(500), nullable=True)
     
     max_users = Column(Integer, nullable=True)
     max_documents = Column(Integer, nullable=True)
@@ -52,6 +56,8 @@ class Organization(Base):
             "display_name": self.display_name,
             "description": self.description,
             "is_active": self.is_active,
+            "suspended_at": self.suspended_at.isoformat() if self.suspended_at else None,
+            "suspended_reason": self.suspended_reason,
             "max_users": self.max_users,
             "max_documents": self.max_documents,
             "max_storage_gb": self.max_storage_gb,  # Changed from max_storage_mb

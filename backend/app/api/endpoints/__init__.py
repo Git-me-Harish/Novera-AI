@@ -13,6 +13,7 @@ from app.api.endpoints import (
     organization,
     ai_settings,
     conversations,
+    tenant_admin,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     'organization',
     'ai_settings',
     'conversations',
+    'tenant_admin',
 ]

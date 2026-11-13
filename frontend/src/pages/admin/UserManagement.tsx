@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import api, { AdminUser } from '../../services/api';
 import CreateUserModal from '../../components/admin/CreateUserModal';
+import InvitationsPanel from '../../components/admin/InvitationsPanel';
 import EditUserModal from '../../components/admin/EditUserModal';
 
 export default function UserManagement() {
@@ -191,6 +192,11 @@ export default function UserManagement() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Invitations */}
+        <div className="mb-6">
+          <InvitationsPanel onChanged={loadUsers} />
         </div>
 
         {/* Users Content */}

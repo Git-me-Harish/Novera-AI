@@ -1,10 +1,15 @@
 """ Authentication API endpoints, Handles registration, login, logout, token refresh, and password management."""
 from __future__ import annotations
 
+import hashlib
+import re
+import secrets
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies.auth import (
@@ -15,10 +20,17 @@ from app.api.dependencies.auth import (
 )
 from app.core.config import settings
 from app.db.session import get_db
+from app.core.net import client_ip
+from app.models.organization import Organization
 from app.models.user import User
 from app.services.auth.auth_service import auth_service
+from app.services.tenancy import audit
+from app.services.tenancy.audit import Action
 
 router = APIRouter()
+
+_LOGIN_FAILURES_PER_ACCOUNT = 10
+_LOGIN_FAILURE_WINDOW_SECONDS = 900
 
 
 # Request Models:
@@ -27,6 +39,8 @@ class RegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=8, max_length=128)
     full_name: Optional[str] = None
+    # self_serve mode only: name of the new organization.
+    organization_name: Optional[str] = Field(None, max_length=200)
 
 
 class LoginRequest(BaseModel):
@@ -99,6 +113,12 @@ class UserResponse(BaseModel):
 
 
 # Endpoints:
+@router.get("/auth/registration-mode")
+async def registration_mode():
+    """Lets the sign-up page show the right flow (or none)."""
+    return {"mode": settings.registration_mode}
+
+
 @router.post("/auth/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     request: RegisterRequest,
@@ -106,12 +126,34 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Register a new user account.
+    Self-registration, governed by REGISTRATION_MODE.
 
-    User is assigned to the default organization.
-    Returns access + refresh tokens on success and sends a verification email.
+    A sign-up never joins an existing organization: that used to place any
+    stranger inside the shared "default" tenant with access to its documents.
+    ``self_serve`` creates a new organization owned by the new user;
+    ``invite_only`` and ``disabled`` refuse (people join via invitations).
     """
-    ip = http_request.client.host if http_request.client else None
+    if settings.registration_mode != "self_serve":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Registration is by invitation only. Ask your administrator for an invite."
+                if settings.registration_mode == "invite_only"
+                else "Self-registration is disabled."
+            ),
+        )
+    ip = client_ip(http_request)
+    org_name = (request.organization_name or f"{request.username}'s workspace").strip()[:200]
+    org = Organization(
+        id=uuid4(),
+        name=f"{_slug(org_name)}-{secrets.token_hex(3)}",
+        slug=f"{_slug(org_name)}-{secrets.token_hex(3)}",
+        display_name=org_name,
+        is_active=True,
+        settings={},
+    )
+    db.add(org)
+    await db.flush()  # visible to register_user; rolled back if sign-up fails
 
     success, user, error = await auth_service.register_user(
         email=request.email,
@@ -120,12 +162,77 @@ async def register(
         full_name=request.full_name,
         ip_address=ip,
         db=db,
-        organization_id=None,
+        organization_id=org.id,
+        role="org_admin",
     )
-
     if not success:
+        await db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
 
+    org.created_by = user.id
+    audit.record(db, Action.REGISTERED, actor=user, organization_id=org.id, target_type="organization",
+                 target_id=org.id, details={"organization": org.display_name}, request=http_request)
+    await db.commit()
+    return await auth_service.create_tokens(user, db)
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug[:40] or "workspace"
+
+
+class InvitationAcceptRequest(BaseModel):
+    token: str = Field(..., min_length=20, max_length=200)
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=8, max_length=128)
+    full_name: Optional[str] = Field(None, max_length=255)
+
+
+@router.get("/auth/invitations/{token}")
+async def preview_invitation(token: str, db: AsyncSession = Depends(get_db)):
+    """What the accept page shows before the user sets a password."""
+    from app.services.tenancy import invitations
+
+    try:
+        invitation = await invitations.find_open(db, token)
+    except invitations.InvitationError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    org = (await db.execute(select(Organization).where(Organization.id == invitation.organization_id))).scalar_one()
+    if not org.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This invitation is invalid or has expired")
+    return {
+        "email": invitation.email,
+        "role": invitation.role,
+        "organization": org.display_name,
+        "expires_at": invitation.expires_at.isoformat(),
+    }
+
+
+@router.post("/auth/invitations/accept", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def accept_invitation(
+    request: InvitationAcceptRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.tenancy import invitations
+    from app.services.tenancy.quotas import QuotaExceeded
+
+    try:
+        user, invitation = await invitations.accept(
+            db, token=request.token, username=request.username,
+            password=request.password, full_name=request.full_name,
+        )
+    except invitations.InvitationError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except QuotaExceeded as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.as_detail())
+    audit.record(db, Action.INVITATION_ACCEPTED, actor=user, organization_id=user.organization_id,
+                 target_type="invitation", target_id=invitation.id, details={"role": user.role},
+                 request=http_request)
+    await db.commit()
+    await db.refresh(user, ["organization"])
     return await auth_service.create_tokens(user, db)
 
 
@@ -139,6 +246,22 @@ async def login(
     Authenticate with e-mail + password.
     Returns access + refresh tokens on success.
     """
+    from app.core.redis_manager import redis_manager
+
+    # Per-account throttle: IP limits cannot stop credential stuffing spread
+    # across many addresses. Keyed by a hash so emails never sit in Redis.
+    email_key = "login_fail:" + hashlib.sha256(request.email.lower().encode()).hexdigest()
+    try:
+        recent_failures = int(await redis_manager.get(email_key) or 0)
+    except Exception:
+        recent_failures = 0
+    if recent_failures >= _LOGIN_FAILURES_PER_ACCOUNT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed sign-in attempts. Try again in 15 minutes or reset your password.",
+            headers={"Retry-After": str(_LOGIN_FAILURE_WINDOW_SECONDS)},
+        )
+
     success, user, error = await auth_service.authenticate_user(
         email=request.email,
         password=request.password,
@@ -146,17 +269,30 @@ async def login(
     )
 
     if not success:
+        try:
+            await redis_manager.increment(email_key, ttl=_LOGIN_FAILURE_WINDOW_SECONDS)
+        except Exception:
+            pass
+        await audit.record_independent(
+            Action.LOGIN_FAILED, outcome="failure", details={"email": request.email.lower(), "reason": error},
+            request=http_request,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=error,
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    try:
+        await redis_manager.delete(email_key)
+    except Exception:
+        pass
+    audit.record(db, Action.LOGIN, actor=user, request=http_request)
     return await auth_service.create_tokens(
         user,
         db,
         user_agent=http_request.headers.get("user-agent"),
-        ip_address=http_request.client.host if http_request.client else None,
+        ip_address=client_ip(http_request),
     )
 
 

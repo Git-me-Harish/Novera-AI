@@ -24,6 +24,9 @@ from app.core.security import (
 from app.core.config import settings
 
 
+_DUMMY_PASSWORD_HASH = get_password_hash("timing-equalizer-not-a-real-password")
+
+
 class AuthService:
     """Service for handling authentication operations."""
 
@@ -35,7 +38,8 @@ class AuthService:
         full_name: Optional[str],
         ip_address: Optional[str],
         db: AsyncSession,
-        organization_id: Optional[UUID] = None
+        organization_id: Optional[UUID] = None,
+        role: str = "user",
     ) -> Tuple[bool, Optional[User], Optional[str]]:
         """
         Register a new user.
@@ -109,7 +113,7 @@ class AuthService:
                 username=username,
                 hashed_password=get_password_hash(password),
                 full_name=full_name,
-                role="user",
+                role=role,
                 is_active=True,
                 is_verified=False,
                 organization_id=organization_id,  # ORGANIZATION ASSIGNMENT
@@ -167,15 +171,21 @@ class AuthService:
         user = result.scalar_one_or_none()
         
         if not user:
+            # Spend the same bcrypt time as a real check so response timing
+            # does not reveal which emails have accounts.
+            verify_password(password, _DUMMY_PASSWORD_HASH)
             return False, None, "Invalid email or password"
-        
+
         # Verify password
         if not verify_password(password, user.hashed_password):
             return False, None, "Invalid email or password"
-        
+
         # Check if account is active
         if not user.is_active:
             return False, None, "Account is deactivated"
+
+        if user.organization is not None and not user.organization.is_active and not user.is_super_admin():
+            return False, None, "Your organization is suspended. Contact your administrator."
         
         # Update last login
         user.last_login = datetime.now(timezone.utc)
@@ -287,9 +297,19 @@ class AuthService:
             select(User).where(User.id == user_id)
         )
         user = result.scalar_one_or_none()
-        
+
         if not user or not user.is_active:
             return False, None, "User not found or inactive"
+
+        # Refresh must not outlive an organization suspension.
+        if user.organization_id and not user.is_super_admin():
+            from app.models.organization import Organization
+
+            org_active = (await db.execute(
+                select(Organization.is_active).where(Organization.id == user.organization_id)
+            )).scalar_one_or_none()
+            if org_active is False:
+                return False, None, "Organization is suspended"
         
         # Create new access token with role AND organization_id
         access_token = create_access_token(
