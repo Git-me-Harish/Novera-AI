@@ -16,10 +16,28 @@ from app.models.user import User
 from app.api.dependencies.auth import get_current_active_user, get_current_admin_user
 from app.services.document_editing.chunk_editor import chunk_editor_service
 from app.services.document_editing.document_viewer import document_viewer_service
+from app.services.document_processing.identity import stable_document_id
 from app.services.generation.title_generator import title_generator
 from app.models.document import Chunk as ChunkModel
 
+
 router = APIRouter()
+
+
+async def _assert_chunk_access(chunk_id: UUID, db: AsyncSession, user: User) -> None:
+    """Fail closed before any chunk read or mutation."""
+    if not user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is not assigned to an organization")
+    result = await db.execute(
+        select(ChunkModel.id)
+        .join(Document, ChunkModel.document_id == Document.id)
+        .where(
+            ChunkModel.id == chunk_id,
+            Document.organization_id == user.organization_id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chunk not found")
 
 
 # Request/Response Models
@@ -105,7 +123,9 @@ async def get_document_info(
     Get document information including preview capabilities.
     Available to all authenticated users.
     """
-    doc_info = await document_viewer_service.get_document_info(document_id, db)
+    doc_info = await document_viewer_service.get_document_info(
+        document_id, db, current_user.organization_id
+    )
     
     if not doc_info:
         raise HTTPException(
@@ -130,6 +150,13 @@ async def get_document_chunks(
     Get all chunks for a document.
     Available to all authenticated users (read-only for non-admins).
     """
+    # Verify tenant ownership before returning chunk contents.
+    doc_info = await document_viewer_service.get_document_info(
+        document_id, db, current_user.organization_id
+    )
+    if not doc_info:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
     chunks = await chunk_editor_service.get_document_chunks(
         document_id,
         db,
@@ -153,7 +180,8 @@ async def get_text_preview(
     preview = await document_viewer_service.get_text_preview(
         document_id,
         db,
-        max_chars=max_chars
+        max_chars=max_chars,
+        organization_id=current_user.organization_id,
     )
     
     if not preview:
@@ -177,7 +205,9 @@ async def download_document(
     """
     from pathlib import Path
     
-    doc_info = await document_viewer_service.get_document_info(document_id, db)
+    doc_info = await document_viewer_service.get_document_info(
+        document_id, db, current_user.organization_id
+    )
     
     if not doc_info:
         raise HTTPException(
@@ -211,6 +241,7 @@ async def edit_chunk(
     Edit a chunk's content.
     ADMIN ONLY - automatically regenerates embedding.
     """
+    await _assert_chunk_access(chunk_id, db, admin)
     success, chunk_data, error = await chunk_editor_service.edit_chunk(
         chunk_id=chunk_id,
         new_content=request.new_content,
@@ -240,6 +271,8 @@ async def batch_edit_chunks(
     Edit multiple chunks in batch.
     ADMIN ONLY.
     """
+    for edit in request.edits:
+        await _assert_chunk_access(UUID(str(edit["chunk_id"])), db, admin)
     results = await chunk_editor_service.batch_edit_chunks(
         edits=request.edits,
         edited_by=admin.id,
@@ -261,6 +294,7 @@ async def revert_chunk(
     Revert chunk to its original content.
     ADMIN ONLY.
     """
+    await _assert_chunk_access(chunk_id, db, admin)
     success, error = await chunk_editor_service.revert_chunk(chunk_id, db)
     
     if not success:
@@ -284,6 +318,7 @@ async def delete_chunk(
     Delete a chunk.
     ADMIN ONLY - use with caution.
     """
+    await _assert_chunk_access(chunk_id, db, admin)
     success, error = await chunk_editor_service.delete_chunk(chunk_id, db)
     
     if not success:
@@ -308,6 +343,7 @@ async def get_chunk_history(
     Get edit history for a chunk.
     Available to all authenticated users.
     """
+    await _assert_chunk_access(chunk_id, db, current_user)
     history = await chunk_editor_service.get_chunk_edit_history(
         chunk_id,
         db,
@@ -327,6 +363,8 @@ async def get_document_edit_stats(
     Get editing statistics for a document.
     Available to all authenticated users.
     """
+    if not await document_viewer_service.get_document_info(document_id, db, current_user.organization_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     stats = await chunk_editor_service.get_document_edit_stats(document_id, db)
     
     return DocumentEditStatsResponse(**stats)
@@ -342,6 +380,7 @@ async def generate_chunk_title(
     ADMIN ONLY.
     """
     from sqlalchemy import select, update
+    await _assert_chunk_access(chunk_id, db, admin)
     
     # Get chunk
     result = await db.execute(
@@ -400,6 +439,8 @@ async def generate_all_titles(
     ADMIN ONLY - runs in background.
     """
     from sqlalchemy import select, update
+    if not await document_viewer_service.get_document_info(document_id, db, admin.organization_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     
     # Get all chunks for document
     result = await db.execute(
@@ -469,6 +510,7 @@ async def update_chunk_title(
     ADMIN ONLY.
     """
     from sqlalchemy import select, update
+    await _assert_chunk_access(chunk_id, db, admin)
     
     if len(title) > 200:
         raise HTTPException(

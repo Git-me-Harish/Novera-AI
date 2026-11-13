@@ -5,7 +5,6 @@ import {
   FileText, 
   Clock, 
   TrendingUp, 
-  Calendar,
   BarChart3,
   CheckCircle,
   AlertCircle,
@@ -68,10 +67,6 @@ export default function AnalyticsModal({ conversationId, isOpen, onClose }: Anal
   };
 
   if (!isOpen) return null;
-
-  const getConfidencePercentage = (count: number, total: number) => {
-    return total > 0 ? Math.round((count / total) * 100) : 0;
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">

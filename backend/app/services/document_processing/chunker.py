@@ -145,85 +145,138 @@ class SemanticChunker:
         return groups
     
     def _chunk_text_group(
-        self, 
+        self,
         elements: List[ExtractedElement],
         start_index: int,
         section_title: Optional[str]
     ) -> List[Chunk]:
         """
-        Chunk a group of text elements with overlap.
+        Chunk a group of text elements with overlap while preserving
+        page-level provenance for each generated chunk.
         """
-        # Combine elements into single text
-        combined_text = "\n\n".join(e.content for e in elements)
-        page_numbers = sorted(set(e.page_number for e in elements))
-        
-        # Split into sentences for semantic boundaries
-        sentences = self._split_sentences(combined_text)
-        
+        if not elements:
+            return []
+
         chunks = []
+
+        sentence_items = []
+
+        for elem in elements:
+            sentences = self._split_sentences(elem.content)
+
+            for sentence in sentences:
+                sentence_items.append({
+                    "text": sentence,
+                    "page_number": elem.page_number,
+                })
+
         current_chunk = []
         current_tokens = 0
-        
-        for sentence in sentences:
+
+        for item in sentence_items:
+            sentence = item["text"]
+            sentence_page = item["page_number"]
             sentence_tokens = self.count_tokens(sentence)
-            
-            # If single sentence exceeds chunk size, split it
+
+            # Handle a sentence that is larger than the normal chunk size.
             if sentence_tokens > self.chunk_size:
-                # Flush current chunk if any
                 if current_chunk:
-                    chunks.append(self._create_chunk(
-                        " ".join(current_chunk),
-                        "text",
-                        start_index + len(chunks),
-                        page_numbers,
-                        section_title
-                    ))
+                    chunk_text = " ".join(
+                        item["text"] for item in current_chunk
+                    )
+
+                    chunk_pages = sorted({
+                        item["page_number"]
+                        for item in current_chunk
+                    })
+
+                    chunks.append(
+                        self._create_chunk(
+                            chunk_text,
+                            "text",
+                            start_index + len(chunks),
+                            chunk_pages,
+                            section_title
+                        )
+                    )
+
                     current_chunk = []
                     current_tokens = 0
-                
-                # Split long sentence by character limit
+
                 long_chunks = self._split_long_text(sentence)
+
                 for long_chunk in long_chunks:
-                    chunks.append(self._create_chunk(
-                        long_chunk,
+                    chunks.append(
+                        self._create_chunk(
+                            long_chunk,
+                            "text",
+                            start_index + len(chunks),
+                            [sentence_page],
+                            section_title
+                        )
+                    )
+
+                continue
+
+            # Current chunk would exceed the configured size.
+            if current_tokens + sentence_tokens > self.chunk_size and current_chunk:
+                chunk_text = " ".join(
+                    item["text"] for item in current_chunk
+                )
+
+                chunk_pages = sorted({
+                    item["page_number"]
+                    for item in current_chunk
+                })
+
+                chunks.append(
+                    self._create_chunk(
+                        chunk_text,
                         "text",
                         start_index + len(chunks),
-                        page_numbers,
+                        chunk_pages,
                         section_title
-                    ))
-                continue
-            
-            # Check if adding sentence exceeds chunk size
-            if current_tokens + sentence_tokens > self.chunk_size and current_chunk:
-                # Create chunk
-                chunks.append(self._create_chunk(
-                    " ".join(current_chunk),
-                    "text",
-                    start_index + len(chunks),
-                    page_numbers,
-                    section_title
-                ))
-                
-                # Start new chunk with overlap
-                overlap_sentences = self._get_overlap_sentences(current_chunk)
-                current_chunk = overlap_sentences + [sentence]
-                current_tokens = sum(self.count_tokens(s) for s in current_chunk)
+                    )
+                )
+
+                # Preserve page provenance through overlap.
+                overlap_sentences = self._get_overlap_sentences(
+                    current_chunk
+                )
+
+                current_chunk = overlap_sentences + [item]
+
+                current_tokens = sum(
+                    self.count_tokens(overlap_item["text"])
+                    for overlap_item in current_chunk
+                )
+
             else:
-                current_chunk.append(sentence)
+                current_chunk.append(item)
                 current_tokens += sentence_tokens
-        
-        # Add remaining chunk
+
+        # Flush final chunk.
         if current_chunk:
-            chunk_text = " ".join(current_chunk)
+            chunk_text = " ".join(
+                item["text"] for item in current_chunk
+            )
+
             if self.count_tokens(chunk_text) >= self.min_chunk_size:
-                chunks.append(self._create_chunk(
-                    chunk_text,
-                    "text",
-                    start_index + len(chunks),
-                    page_numbers,
-                    section_title
-                ))
-        
+                chunk_pages = sorted({
+                    item["page_number"]
+                    for item in current_chunk
+                })
+
+                chunks.append(
+                    self._create_chunk(
+                        chunk_text,
+                        "text",
+                        start_index + len(chunks),
+                        chunk_pages,
+                        section_title
+                    )
+                )
+
         return chunks
     
     def _chunk_table_group(
@@ -336,20 +389,26 @@ class SemanticChunker:
         
         return chunks
     
-    def _get_overlap_sentences(self, sentences: List[str]) -> List[str]:
-        """Get sentences for overlap based on token count."""
+    def _get_overlap_sentences(
+        self,
+        sentences: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Get sentences for overlap based on token count while preserving
+        page provenance.
+        """
         overlap_sentences = []
         overlap_tokens = 0
-        
-        # Take sentences from end until we reach overlap size
+
         for sentence in reversed(sentences):
-            sentence_tokens = self.count_tokens(sentence)
+            sentence_tokens = self.count_tokens(sentence["text"])
+
             if overlap_tokens + sentence_tokens <= self.chunk_overlap:
                 overlap_sentences.insert(0, sentence)
                 overlap_tokens += sentence_tokens
             else:
                 break
-        
+
         return overlap_sentences
     
     def _create_chunk(

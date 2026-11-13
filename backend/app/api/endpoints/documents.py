@@ -1,32 +1,49 @@
 """
 Document management API endpoints with RBAC.
-Handles upload, processing, listing, and deletion of documents.
+
+FIXES:
+  1. Document processing is queued in Redis Streams and executed by a
+     separate worker. API worker restarts cannot silently lose ingestion jobs.
+
+  2. /documents/{document_id}/status: the `status` query parameter shadowed
+     Python's built-in and, more critically, shadowed FastAPI's `status`
+     import used for HTTP codes. Renamed to `status_filter`.
+
+  3. list_documents: the import `from app.db.session import AsyncSessionLocal`
+     was duplicated (already imported at module level) and unused in the
+     endpoint. Removed.
+
+  4. The `status` import alias from fastapi is now only imported once and
+     used consistently through the module.
 """
+from __future__ import annotations
+
+from pathlib import Path
 from typing import List, Optional
 from uuid import UUID
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
-from pydantic import BaseModel, Field
-from datetime import datetime
+
+from fastapi import (
+    APIRouter, Depends, File, HTTPException,
+    Query, UploadFile, status,
+)
 from loguru import logger
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
-from app.models.document import Document, Chunk
-from app.models.user import User
-from app.db.session import AsyncSessionLocal   
-from app.models.organization import Organization
-from app.utils.file_utils import FileValidator, file_handler
-from app.services.document_processing.processor import document_processor
 from app.api.dependencies.auth import get_current_active_user, get_current_admin_user
-
+from app.db.session import get_db
+from app.models.document import Chunk, Document
+from app.models.user import User
+from app.services.document_processing.job_queue import document_job_queue
+from app.services.document_processing.identity import stable_document_id
+from app.utils.file_utils import FileValidator, file_handler
 
 router = APIRouter()
 
 
-# Pydantic Models for Request/Response
+# Response Models
 class DocumentUploadResponse(BaseModel):
-    """Response model for document upload."""
     document_id: str
     filename: str
     status: str
@@ -35,7 +52,6 @@ class DocumentUploadResponse(BaseModel):
 
 
 class DocumentListItem(BaseModel):
-    """Individual document in list response."""
     id: str
     filename: str
     doc_type: str
@@ -48,9 +64,9 @@ class DocumentListItem(BaseModel):
 
 
 class DocumentListResponse(BaseModel):
-    """Response model for document listing."""
     total: int
     documents: List[DocumentListItem]
+
 
 class MultiUploadResult(BaseModel):
     filename: str
@@ -68,8 +84,8 @@ class MultiUploadResponse(BaseModel):
     duplicates: int
     results: List[MultiUploadResult]
 
+
 class ProcessingStatusResponse(BaseModel):
-    """Response model for processing status."""
     document_id: str
     filename: str
     status: str
@@ -80,71 +96,63 @@ class ProcessingStatusResponse(BaseModel):
     error: Optional[str]
 
 
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
 @router.post("/documents/upload", response_model=DocumentUploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
-    doc_type: str = Query(..., description="Document type: finance, hrms, policy, etc."),
-    department: Optional[str] = Query(None, description="Department name"),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
+    doc_type: str = Query(...),
+    department: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_admin_user),
 ):
-    """
-    Upload a new document for processing.
-    
-    ADMIN ONLY - Regular users have read-only access to documents.
-    Documents are scoped to the admin's organization.
-    """
-    logger.info(f"Document upload request: {file.filename} (type: {doc_type}) by admin {current_user.email} (org: {current_user.organization_id})")
-    
-    # ORGANIZATION CHECK: Ensure user has an organization
+    """Upload a document for processing. Admin only."""
     if not current_user.organization_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User must belong to an organization to upload documents"
+            detail="User must belong to an organization to upload documents",
         )
-    
-    # Step 1: Validate file
+
     is_valid, error_message = FileValidator.validate_file(file)
     if not is_valid:
-        logger.warning(f"File validation failed: {error_message}")
         raise HTTPException(status_code=400, detail=error_message)
-    
-    # Step 2: Check for duplicate (by hash within organization)
+
     try:
         file_path, file_hash, file_size = await file_handler.save_upload_file(
-            file, 
-            str(current_user.id)
+            file, str(current_user.id)
         )
         
-        # ORGANIZATION SCOPING: Check for duplicates only within the same organization
-        result = await db.execute(
-            select(Document).where(
-                Document.file_hash == file_hash,
-                Document.organization_id == current_user.organization_id
+        document_id = stable_document_id(
+            current_user.organization_id,
+            file_hash,
+        )
+
+        existing_doc = (
+            await db.execute(
+                select(Document).where(
+                    Document.file_hash == file_hash,
+                    Document.organization_id == current_user.organization_id,
+                )
             )
-        )
-        existing_doc = result.scalar_one_or_none()
-        
+        ).scalar_one_or_none()
+
         if existing_doc:
-            logger.info(f"Duplicate document detected in organization {current_user.organization_id}: {file_hash}")
             file_handler.delete_file(file_path)
-            
             return DocumentUploadResponse(
                 document_id=str(existing_doc.id),
                 filename=existing_doc.filename,
                 status="duplicate",
                 message="This document already exists in your organization",
-                file_size_mb=round(file_size / (1024 * 1024), 2)
+                file_size_mb=round(file_size / (1024 * 1024), 2),
             )
-        
+
     except Exception as e:
-        logger.error(f"Error during file upload: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-    
-    # Step 3: Create database record with organization scoping
+        logger.error(f"Error during file upload: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+
     try:
         document = Document(
+            id=document_id,
             filename=file.filename,
             original_filename=file.filename,
             file_path=str(file_path),
@@ -154,104 +162,98 @@ async def upload_document(
             department=department,
             status="pending",
             uploaded_by=current_user.id,
-            organization_id=current_user.organization_id,  # ORGANIZATION SCOPING
-            metadata={
+            organization_id=current_user.organization_id,
+            doc_metadata={
                 "mime_type": FileValidator.get_mime_type(file.filename),
                 "upload_source": "api",
                 "uploaded_by_email": current_user.email,
-                "organization_id": str(current_user.organization_id)
-            }
+                "organization_id": str(current_user.organization_id),
+            },
         )
-        
         db.add(document)
         await db.commit()
         await db.refresh(document)
-        
-        logger.info(f"✅ Document record created: {document.id} for organization {current_user.organization_id}")
-        
+        logger.info(f"Document record created: {document.id} for org {current_user.organization_id}")
+
     except Exception as e:
-        logger.error(f"Database error: {str(e)}")
+        logger.error(f"Database error: {e}")
         file_handler.delete_file(file_path)
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-    
-    # Step 4: Queue background processing
-    background_tasks.add_task(
-        process_document_background,
-        document.id,
-        file_path,
-    )
-    
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    try:
+        await document_job_queue.enqueue(document.id)
+    except Exception as e:
+        logger.error(f"Document queue unavailable for {document.id}: {e}")
+        document.status = "failed"
+        document.processing_error = "Document processing queue unavailable"
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document processing is temporarily unavailable; please retry",
+        )
+
     return DocumentUploadResponse(
         document_id=str(document.id),
         filename=document.filename,
         status="processing",
         message="Document uploaded successfully and queued for processing",
-        file_size_mb=round(file_size / (1024 * 1024), 2)
+        file_size_mb=round(file_size / (1024 * 1024), 2),
     )
+
 
 @router.post("/documents/upload-multiple", response_model=MultiUploadResponse)
 async def upload_multiple_documents(
     files: List[UploadFile] = File(...),
-    doc_type: str = Query(..., description="Document type: finance, hrms, policy, etc."),
-    department: Optional[str] = Query(None, description="Department name"),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
+    doc_type: str = Query(...),
+    department: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_admin_user),
 ):
-    """
-    Upload multiple documents in a single request.
-    Each file is validated, deduplicated, and queued for processing independently.
-    Returns a summary of successes, failures, and duplicates.
-    """
+    """Upload up to 20 documents in a single request. Admin only."""
     if not current_user.organization_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User must belong to an organization to upload documents"
+            detail="User must belong to an organization to upload documents",
         )
 
     if not files:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No files provided"
-        )
-
+        raise HTTPException(status_code=400, detail="No files provided")
     if len(files) > 20:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Maximum 20 files per batch upload"
-        )
+        raise HTTPException(status_code=400, detail="Maximum 20 files per batch upload")
 
     results: List[MultiUploadResult] = []
-    succeeded = 0
-    failed = 0
-    duplicates = 0
+    succeeded = failed = duplicates = 0
 
     for file in files:
         try:
-            # Validate file type and size
             is_valid, error_message = FileValidator.validate_file(file)
             if not is_valid:
                 results.append(MultiUploadResult(
                     filename=file.filename or "unknown",
                     status="failed",
                     message=error_message,
-                    error=error_message
+                    error=error_message,
                 ))
                 failed += 1
                 continue
 
-            # Save file and check for duplicates
             file_path, file_hash, file_size = await file_handler.save_upload_file(
                 file, str(current_user.id)
             )
 
-            existing_result = await db.execute(
-                select(Document).where(
-                    Document.file_hash == file_hash,
-                    Document.organization_id == current_user.organization_id
-                )
+            document_id = stable_document_id(
+                current_user.organization_id,
+                file_hash,
             )
-            existing_doc = existing_result.scalar_one_or_none()
+
+            existing_doc = (
+                await db.execute(
+                    select(Document).where(
+                        Document.file_hash == file_hash,
+                        Document.organization_id == current_user.organization_id,
+                    )
+                )
+            ).scalar_one_or_none()
 
             if existing_doc:
                 file_handler.delete_file(file_path)
@@ -260,13 +262,13 @@ async def upload_multiple_documents(
                     status="duplicate",
                     message="This document already exists in your organization",
                     document_id=str(existing_doc.id),
-                    file_size_mb=round(file_size / (1024 * 1024), 2)
+                    file_size_mb=round(file_size / (1024 * 1024), 2),
                 ))
                 duplicates += 1
                 continue
 
-            # Create document record
             document = Document(
+                id=document_id,
                 filename=file.filename,
                 original_filename=file.filename,
                 file_path=str(file_path),
@@ -277,157 +279,118 @@ async def upload_multiple_documents(
                 status="pending",
                 uploaded_by=current_user.id,
                 organization_id=current_user.organization_id,
-                metadata={
+                doc_metadata={
                     "mime_type": FileValidator.get_mime_type(file.filename),
                     "upload_source": "api_multi",
                     "uploaded_by_email": current_user.email,
-                    "organization_id": str(current_user.organization_id)
-                }
+                    "organization_id": str(current_user.organization_id),
+                },
             )
             db.add(document)
             await db.commit()
             await db.refresh(document)
 
-            # Queue processing
-            background_tasks.add_task(
-                process_document_background,
-                document.id,
-                file_path,
-            )
+            try:
+                await document_job_queue.enqueue(document.id)
+            except Exception as e:
+                logger.error(f"Document queue unavailable for {document.id}: {e}")
+                document.status = "failed"
+                document.processing_error = "Document processing queue unavailable"
+                await db.commit()
+                results.append(MultiUploadResult(
+                    filename=file.filename or "unknown",
+                    status="failed",
+                    message="Upload saved but could not be queued for processing",
+                    document_id=str(document.id),
+                    file_size_mb=round(file_size / (1024 * 1024), 2),
+                    error="Processing queue unavailable",
+                ))
+                failed += 1
+                continue
 
             results.append(MultiUploadResult(
                 filename=file.filename or "unknown",
                 status="processing",
                 message="Queued for processing",
                 document_id=str(document.id),
-                file_size_mb=round(file_size / (1024 * 1024), 2)
+                file_size_mb=round(file_size / (1024 * 1024), 2),
             ))
             succeeded += 1
-            logger.info(f"Queued document: {document.id} ({file.filename})")
 
         except Exception as e:
-            logger.error(f"Error processing file {file.filename}: {str(e)}")
+            logger.error(f"Error processing file {file.filename}: {e}")
             results.append(MultiUploadResult(
                 filename=file.filename or "unknown",
                 status="failed",
                 message="Upload failed due to server error",
-                error=str(e)
+                error=str(e),
             ))
             failed += 1
-
-    logger.info(
-        f"Multi-upload complete: {succeeded} queued, "
-        f"{duplicates} duplicates, {failed} failed "
-        f"(org: {current_user.organization_id})"
-    )
 
     return MultiUploadResponse(
         total=len(files),
         succeeded=succeeded,
         failed=failed,
         duplicates=duplicates,
-        results=results
+        results=results,
     )
 
-async def process_document_background(
-    document_id: UUID,
-    file_path,
-):
-    """
-    Background task — creates its own DB session.
-    The request session is closed by the time this runs.
-    """
-    from app.db.session import AsyncSessionLocal
-    async with AsyncSessionLocal() as db:
-        try:
-            logger.info(f"Starting background processing for {document_id}")
-            stats = await document_processor.process_document(
-                document_id, file_path, db
-            )
-            logger.info(f"Background processing completed: {stats}")
-        except Exception as e:
-            logger.error(f"Background processing failed for {document_id}: {str(e)}")
-            try:
-                from sqlalchemy import update
-                await db.execute(
-                    update(Document)
-                    .where(Document.id == document_id)
-                    .values(status="failed", processing_error=str(e)[:500])
-                )
-                await db.commit()
-            except Exception as db_err:
-                logger.error(f"Failed to update error status: {db_err}")
 
 @router.get("/documents", response_model=DocumentListResponse)
 async def list_documents(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     doc_type: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
+    # FIX: renamed from `status` to `status_filter` to avoid shadowing the `status` import
+    status_filter: Optional[str] = Query(None, alias="status"),
     department: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
     """
-    List documents with optional filtering.
-    
-    ORGANIZATION SCOPED:
-    - Users see only documents in their organization
-    - Super admins see all documents across all organizations
-    - Org admins see only their organization's documents
+    List documents scoped to the current user's organization.
+    Super admins see all documents.
     """
-    # Build query with ORGANIZATION SCOPING
     query = select(Document)
-    
-    # ORGANIZATION SCOPING: Users only see documents in their organization
+
     if not current_user.is_super_admin():
         if not current_user.organization_id:
-            # User has no organization, return empty list
             return DocumentListResponse(total=0, documents=[])
-        
         query = query.where(Document.organization_id == current_user.organization_id)
-    
-    # Apply filters
+
     if doc_type:
         query = query.where(Document.doc_type == doc_type)
-    
-    if status:
-        query = query.where(Document.status == status)
-    
+    if status_filter:
+        query = query.where(Document.status == status_filter)
     if department:
         query = query.where(Document.department == department)
-    
-    # Get total count
-    count_query = select(func.count()).select_from(query.subquery())
-    total_result = await db.execute(count_query)
-    total = total_result.scalar()
-    
-    # Get documents
+
+    total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar()
+
     query = query.order_by(Document.upload_date.desc()).offset(skip).limit(limit)
-    result = await db.execute(query)
-    documents = result.scalars().all()
-    
-    logger.info(f"User {current_user.email} (org: {current_user.organization_id}, role: {current_user.role}) retrieved {len(documents)} documents")
-    
-    # Convert to response model
-    document_list = [
-        DocumentListItem(
-            id=str(doc.id),
-            filename=doc.filename,
-            doc_type=doc.doc_type,
-            department=doc.department,
-            total_pages=doc.total_pages or 0,
-            total_chunks=doc.total_chunks or 0,
-            status=doc.status,
-            upload_date=doc.upload_date.isoformat(),
-            processed_date=doc.processed_date.isoformat() if doc.processed_date else None
-        )
-        for doc in documents
-    ]
-    
+    documents = (await db.execute(query)).scalars().all()
+
+    logger.info(
+        f"User {current_user.email} (org: {current_user.organization_id}) "
+        f"retrieved {len(documents)} documents"
+    )
+
     return DocumentListResponse(
         total=total,
-        documents=document_list
+        documents=[
+            DocumentListItem(
+                id=str(doc.id),
+                filename=doc.filename,
+                doc_type=doc.doc_type,
+                department=doc.department,
+                total_pages=doc.total_pages or 0,
+                total_chunks=doc.total_chunks or 0,
+                status=doc.status,
+                upload_date=doc.upload_date.isoformat(),
+                processed_date=doc.processed_date.isoformat() if doc.processed_date else None,
+            )
+            for doc in documents
+        ],
     )
 
 
@@ -435,35 +398,23 @@ async def list_documents(
 async def get_document_status(
     document_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
 ):
-    """
-    Get processing status of a specific document.
-    
-    ORGANIZATION SCOPED: Users can only view documents in their organization.
-    Super admins can view any document.
-    """
-    # Build query with ORGANIZATION SCOPING
+    """Get processing status of a document — org-scoped."""
     query = select(Document).where(Document.id == document_id)
-    
-    # ORGANIZATION SCOPING: Users can only view documents in their org
+
     if not current_user.is_super_admin():
         if not current_user.organization_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="User must belong to an organization"
+                detail="User must belong to an organization",
             )
         query = query.where(Document.organization_id == current_user.organization_id)
-    
-    result = await db.execute(query)
-    document = result.scalar_one_or_none()
-    
+
+    document = (await db.execute(query)).scalar_one_or_none()
     if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found or access denied"
-        )
-    
+        raise HTTPException(status_code=404, detail="Document not found or access denied")
+
     return ProcessingStatusResponse(
         document_id=str(document.id),
         filename=document.filename,
@@ -472,7 +423,7 @@ async def get_document_status(
         total_chunks=document.total_chunks,
         upload_date=document.upload_date.isoformat() if document.upload_date else None,
         processed_date=document.processed_date.isoformat() if document.processed_date else None,
-        error=document.processing_error
+        error=document.processing_error,
     )
 
 
@@ -480,106 +431,68 @@ async def get_document_status(
 async def delete_document(
     document_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_admin_user),
 ):
-    """
-    Delete a document and all its chunks.
-    Also removes the file from disk.
-    
-    ADMIN ONLY with ORGANIZATION SCOPING:
-    - Org admins can only delete documents in their organization
-    - Super admins can delete any document
-    """
-    # Build query with ORGANIZATION SCOPING
+    """Delete a document and all its chunks. Admin only, org-scoped."""
     query = select(Document).where(Document.id == document_id)
-    
-    # ORGANIZATION SCOPING: Org admins can only delete docs in their org
+
     if current_user.is_org_admin() and not current_user.is_super_admin():
         if not current_user.organization_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin must belong to an organization"
+                detail="Admin must belong to an organization",
             )
         query = query.where(Document.organization_id == current_user.organization_id)
-    
-    result = await db.execute(query)
-    document = result.scalar_one_or_none()
-    
+
+    document = (await db.execute(query)).scalar_one_or_none()
     if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found or access denied"
-        )
-    
-    # Delete file from disk
-    from pathlib import Path
-    file_path = Path(document.file_path)
-    file_handler.delete_file(file_path)
-    
-    # Delete chunks (cascade should handle this, but explicit is better)
-    await db.execute(
-        delete(Chunk).where(Chunk.document_id == document_id)
-    )
-    
-    # Delete document record
+        raise HTTPException(status_code=404, detail="Document not found or access denied")
+
+    file_handler.delete_file(Path(document.file_path))
+    await db.execute(delete(Chunk).where(Chunk.document_id == document_id))
     await db.delete(document)
     await db.commit()
-    
-    logger.info(f"✅ Document deleted by admin {current_user.email} (org: {current_user.organization_id}): {document_id}")
-    
-    return {
-        "message": "Document deleted successfully",
-        "document_id": str(document_id)
-    }
+
+    logger.info(
+        f"Document deleted by {current_user.email} (org: {current_user.organization_id}): {document_id}"
+    )
+    return {"message": "Document deleted successfully", "document_id": str(document_id)}
 
 
 @router.post("/documents/{document_id}/reprocess")
 async def reprocess_document(
     document_id: UUID,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_admin_user),
 ):
-    """
-    Reprocess a document (useful if chunking/embedding parameters changed).
-    
-    ADMIN ONLY with ORGANIZATION SCOPING:
-    - Org admins can only reprocess documents in their organization
-    - Super admins can reprocess any document
-    """
-    # Build query with ORGANIZATION SCOPING
+    """Reprocess a document. Admin only, org-scoped."""
     query = select(Document).where(Document.id == document_id)
-    
-    # ORGANIZATION SCOPING: Org admins can only reprocess docs in their org
+
     if current_user.is_org_admin() and not current_user.is_super_admin():
         if not current_user.organization_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin must belong to an organization"
+                detail="Admin must belong to an organization",
             )
         query = query.where(Document.organization_id == current_user.organization_id)
-    
-    result = await db.execute(query)
-    document = result.scalar_one_or_none()
-    
-    if not document:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found or access denied"
-        )
-    
-    # Queue reprocessing
-    background_tasks.add_task(
-        document_processor.reprocess_document,
-        document_id,
-        db
-    )
-    
-    logger.info(f"Document reprocessing queued by admin {current_user.email} (org: {current_user.organization_id}): {document_id}")
-    
-    return {
-        "message": "Document reprocessing queued",
-        "document_id": str(document_id)
-    }
 
-__all__ = ['router']
+    document = (await db.execute(query)).scalar_one_or_none()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found or access denied")
+
+    try:
+        await document_job_queue.enqueue(document_id, operation="reprocess")
+    except Exception as e:
+        logger.error(f"Document queue unavailable for reprocess {document_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document processing is temporarily unavailable; please retry",
+        )
+
+    logger.info(
+        f"Reprocessing queued by {current_user.email} (org: {current_user.organization_id}): {document_id}"
+    )
+    return {"message": "Document reprocessing queued", "document_id": str(document_id)}
+
+
+__all__ = ["router"]

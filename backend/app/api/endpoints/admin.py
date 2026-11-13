@@ -1,49 +1,51 @@
-"""
-Admin API endpoints for user and system management.
-Only accessible by users with admin role.
-Includes context analytics and quality monitoring.
-"""
-from typing import List, Optional, Dict, Any
+""" Admin API endpoints for user and system management, Only accessible by users with admin role """
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
-from pydantic import BaseModel, EmailStr, Field
-from datetime import datetime, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy import delete, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
-from app.models.user import User
-from app.models.organization import Organization
-from app.models.document import Document
 from app.api.dependencies.auth import get_current_admin_user
-from app.core.security import get_password_hash, validate_password_strength, validate_email
-
+from app.core.security import get_password_hash, validate_email, validate_password_strength
+from app.db.session import get_db
+from app.models.document import Document
+from app.models.organization import Organization
+from app.models.user import User
 
 router = APIRouter()
 
 
-# Request/Response Models
+# Request / Response Models                         ─
+
 class CreateUserRequest(BaseModel):
-    """Admin creates new user."""
     email: EmailStr
     username: str = Field(..., min_length=3, max_length=50)
     password: str = Field(..., min_length=8)
     full_name: Optional[str] = None
-    role: str = Field(default="user", pattern="^(user|admin)$")
+    role: str = Field(default="user", pattern="^(user|admin|org_admin)$")
     is_active: bool = True
 
 
 class UpdateUserRequest(BaseModel):
-    """Admin updates user."""
     full_name: Optional[str] = None
-    role: Optional[str] = Field(None, pattern="^(user|admin)$")
+    # FIX: broadened to include org_admin and super_admin — role escalation
+    # is blocked at the endpoint level, not via Pydantic pattern alone
+    role: Optional[str] = Field(
+        None,
+        pattern="^(user|admin|org_admin|super_admin)$",
+    )
     is_active: Optional[bool] = None
     is_verified: Optional[bool] = None
 
 
 class UserListItem(BaseModel):
-    """User in admin list."""
     id: str
     email: str
     username: str
@@ -57,7 +59,6 @@ class UserListItem(BaseModel):
 
 
 class UserStatsResponse(BaseModel):
-    """User statistics."""
     total_users: int
     active_users: int
     admin_users: int
@@ -66,7 +67,6 @@ class UserStatsResponse(BaseModel):
 
 
 class SystemStatsResponse(BaseModel):
-    """System-wide statistics."""
     total_users: int
     total_documents: int
     total_chunks: int
@@ -74,7 +74,7 @@ class SystemStatsResponse(BaseModel):
     storage_used_mb: float
 
 
-# User Management Endpoints
+# User Management                              ─
 
 @router.get("/admin/users", response_model=dict)
 async def list_users(
@@ -84,54 +84,36 @@ async def list_users(
     is_active: Optional[bool] = Query(None),
     search: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin_user)
+    admin: User = Depends(get_current_admin_user),
 ):
-    """
-    List users within the admin's organization.
-    Super admins see all users across all organizations.
-    Org admins only see users in their organization.
-    """
-    # Base query
+    """List users scoped to the admin's organization (global for super admins)."""
     query = select(User)
-    
-    # ORGANIZATION SCOPING: Org admins can only see their org users
+
     if admin.is_org_admin() and not admin.is_super_admin():
         query = query.where(User.organization_id == admin.organization_id)
-    
-    # Apply filters
+
     if role:
         query = query.where(User.role == role)
-    
     if is_active is not None:
         query = query.where(User.is_active == is_active)
-    
     if search:
-        search_pattern = f"%{search}%"
+        pat = f"%{search}%"
         query = query.where(
-            (User.email.ilike(search_pattern)) |
-            (User.username.ilike(search_pattern)) |
-            (User.full_name.ilike(search_pattern))
+            User.email.ilike(pat) | User.username.ilike(pat) | User.full_name.ilike(pat)
         )
-    
-    # Get total count
-    count_query = select(func.count()).select_from(query.subquery())
-    total_result = await db.execute(count_query)
-    total = total_result.scalar()
-    
-    # Get users
+
+    total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar()
+
     query = query.order_by(User.created_at.desc()).offset(skip).limit(limit)
-    result = await db.execute(query)
-    users = result.scalars().all()
-    
-    # Get document counts for each user
+    users = (await db.execute(query)).scalars().all()
+
     user_list = []
     for user in users:
-        doc_count_query = select(func.count()).select_from(Document).where(
-            Document.uploaded_by == user.id
-        )
-        doc_count_result = await db.execute(doc_count_query)
-        doc_count = doc_count_result.scalar()
-        
+        doc_count = (
+            await db.execute(
+                select(func.count()).select_from(Document).where(Document.uploaded_by == user.id)
+            )
+        ).scalar()
         user_list.append(
             UserListItem(
                 id=str(user.id),
@@ -143,58 +125,37 @@ async def list_users(
                 is_verified=user.is_verified,
                 created_at=user.created_at.isoformat(),
                 last_login=user.last_login.isoformat() if user.last_login else None,
-                document_count=doc_count
+                document_count=doc_count,
             )
         )
-    
-    return {
-        "total": total,
-        "users": user_list
-    }
+
+    return {"total": total, "users": user_list}
 
 
 @router.get("/admin/users/stats", response_model=UserStatsResponse)
 async def get_user_stats(
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin_user)
+    admin: User = Depends(get_current_admin_user),
 ):
-    """
-    Get user statistics.
-    Organization-scoped for org admins, global for super admins.
-    """
-    # Base queries
-    user_query = select(func.count()).select_from(User)
-    active_query = select(func.count()).select_from(User).where(User.is_active == True)
-    admin_query = select(func.count()).select_from(User).where(User.role.in_(["org_admin", "super_admin"]))
-    verified_query = select(func.count()).select_from(User).where(User.is_verified == True)
-    
-    # ORGANIZATION SCOPING: Apply org filter for org admins
-    if admin.is_org_admin() and not admin.is_super_admin():
-        org_filter = User.organization_id == admin.organization_id
-        user_query = user_query.where(org_filter)
-        active_query = active_query.where(org_filter)
-        admin_query = admin_query.where(org_filter)
-        verified_query = verified_query.where(org_filter)
-    
-    # Execute queries
-    total_result = await db.execute(user_query)
-    total = total_result.scalar()
-    
-    active_result = await db.execute(active_query)
-    active = active_result.scalar()
-    
-    admin_result = await db.execute(admin_query)
-    admins = admin_result.scalar()
-    
-    verified_result = await db.execute(verified_query)
-    verified = verified_result.scalar()
-    
+    """User statistics, org-scoped for org admins."""
+    base = select(func.count()).select_from(User)
+
+    def _org_filter(q):
+        if admin.is_org_admin() and not admin.is_super_admin():
+            return q.where(User.organization_id == admin.organization_id)
+        return q
+
+    total = (await db.execute(_org_filter(base))).scalar()
+    active = (await db.execute(_org_filter(base.where(User.is_active == True)))).scalar()
+    admins = (await db.execute(_org_filter(base.where(User.role.in_(["org_admin", "super_admin", "admin"]))))).scalar()
+    verified = (await db.execute(_org_filter(base.where(User.is_verified == True)))).scalar()
+
     return UserStatsResponse(
         total_users=total,
         active_users=active,
         admin_users=admins,
         regular_users=total - admins,
-        verified_users=verified
+        verified_users=verified,
     )
 
 
@@ -202,62 +163,25 @@ async def get_user_stats(
 async def create_user(
     request: CreateUserRequest,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin_user)
+    admin: User = Depends(get_current_admin_user),
 ):
-    """
-    Create a new user within the admin's organization.
-    Super admins can create users in any organization (requires organization_id).
-    Org admins can only create users in their own organization.
-    """
-    # Validate email
     if not validate_email(request.email):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid email format"
-        )
-    
-    # Validate password
+        raise HTTPException(status_code=400, detail="Invalid email format")
+
     is_valid, error_msg = validate_password_strength(request.password)
     if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_msg
-        )
-    
-    # ROLE VALIDATION: Prevent org admins from creating super admins
+        raise HTTPException(status_code=400, detail=error_msg)
+
     if request.role == "super_admin" and not admin.is_super_admin():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only super admins can create super admin users"
-        )
-    
-    # ROLE VALIDATION: Prevent org admins from creating other org admins
+        raise HTTPException(status_code=403, detail="Only super admins can create super admin users")
     if request.role == "org_admin" and admin.is_org_admin() and not admin.is_super_admin():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only super admins can create organization admins"
-        )
-    
-    # Check if email exists
-    result = await db.execute(select(User).where(User.email == request.email))
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
-    
-    # Check if username exists
-    result = await db.execute(select(User).where(User.username == request.username))
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already taken"
-        )
-    
-    # ORGANIZATION ASSIGNMENT: Org admins can only create users in their org
-    organization_id = admin.organization_id
-    
-    # Create user
+        raise HTTPException(status_code=403, detail="Only super admins can create organization admins")
+
+    if (await db.execute(select(User).where(User.email == request.email))).scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    if (await db.execute(select(User).where(User.username == request.username))).scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Username already taken")
+
     new_user = User(
         email=request.email,
         username=request.username,
@@ -266,69 +190,52 @@ async def create_user(
         role=request.role,
         is_active=request.is_active,
         is_verified=True,
-        organization_id=organization_id,  # ORGANIZATION SCOPING
-        user_metadata={"created_by": str(admin.id), "created_by_admin": True}
+        organization_id=admin.organization_id,
+        user_metadata={"created_by": str(admin.id), "created_by_admin": True},
     )
-    
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
-    
-    logger.info(f"Admin {admin.email} created new user: {new_user.email} in organization {organization_id}")
-    
-    return {
-        "message": "User created successfully",
-        "user": new_user.to_dict()
-    }
+
+    logger.info(f"Admin {admin.email} created user {new_user.email} in org {admin.organization_id}")
+    return {"message": "User created successfully", "user": new_user.to_dict()}
 
 
 @router.get("/admin/users/{user_id}", response_model=dict)
 async def get_user_details(
     user_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin_user)
+    admin: User = Depends(get_current_admin_user),
 ):
-    """
-    Get detailed information about a specific user.
-    Admin only.
-    """
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+        raise HTTPException(status_code=404, detail="User not found")
+
+    doc_count = (
+        await db.execute(
+            select(func.count()).select_from(Document).where(Document.uploaded_by == user_id)
         )
-    
-    # Get document stats
-    doc_count_query = select(func.count()).select_from(Document).where(
-        Document.uploaded_by == user_id
-    )
-    doc_count_result = await db.execute(doc_count_query)
-    doc_count = doc_count_result.scalar()
-    
-    # Get recent documents
-    recent_docs_query = select(Document).where(
-        Document.uploaded_by == user_id
-    ).order_by(Document.upload_date.desc()).limit(5)
-    recent_docs_result = await db.execute(recent_docs_query)
-    recent_docs = recent_docs_result.scalars().all()
-    
+    ).scalar()
+
+    recent_docs = (
+        await db.execute(
+            select(Document).where(Document.uploaded_by == user_id)
+            .order_by(Document.upload_date.desc()).limit(5)
+        )
+    ).scalars().all()
+
     return {
         "user": user.to_dict(),
-        "stats": {
-            "total_documents": doc_count,
-        },
+        "stats": {"total_documents": doc_count},
         "recent_documents": [
             {
                 "id": str(doc.id),
                 "filename": doc.filename,
                 "upload_date": doc.upload_date.isoformat(),
-                "status": doc.status
+                "status": doc.status,
             }
             for doc in recent_docs
-        ]
+        ],
     }
 
 
@@ -337,73 +244,43 @@ async def update_user(
     user_id: UUID,
     request: UpdateUserRequest,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin_user)
+    admin: User = Depends(get_current_admin_user),
 ):
-    """
-    Update user information.
-    Org admins can only update users in their organization.
-    Super admins can update any user.
-    """
-    # Get user
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    # ORGANIZATION SCOPING: Org admins can only update users in their org
+        raise HTTPException(status_code=404, detail="User not found")
+
     if admin.is_org_admin() and not admin.is_super_admin():
         if user.organization_id != admin.organization_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only update users in your organization"
-            )
-    
-    # ROLE PROTECTION: Cannot change super admin roles
+            raise HTTPException(status_code=403, detail="You can only update users in your organization")
+
     if user.role == "super_admin" and not admin.is_super_admin():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot modify super admin users"
-        )
-    
-    # ROLE PROTECTION: Org admins cannot create/modify org admins
+        raise HTTPException(status_code=403, detail="Cannot modify super admin users")
+
     if request.role == "org_admin" and admin.is_org_admin() and not admin.is_super_admin():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only super admins can assign organization admin role"
-        )
-    
-    # SELF-PROTECTION: Prevent admin from deactivating themselves
+        raise HTTPException(status_code=403, detail="Only super admins can assign organization admin role")
+
     if user_id == admin.id and request.is_active is False:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot deactivate your own account"
-        )
-    
-    # SELF-PROTECTION: Prevent admin from demoting themselves
-    if user_id == admin.id and request.role and request.role not in ["org_admin", "super_admin"]:
-        # Check if there are other admins in the organization
+        raise HTTPException(status_code=400, detail="Cannot deactivate your own account")
+
+    if user_id == admin.id and request.role and request.role not in ["org_admin", "super_admin", "admin"]:
         if admin.is_org_admin() and not admin.is_super_admin():
-            admin_count_result = await db.execute(
-                select(func.count()).select_from(User).where(
-                    User.role == "org_admin",
-                    User.is_active == True,
-                    User.organization_id == admin.organization_id,
-                    User.id != admin.id
+            other_admins = (
+                await db.execute(
+                    select(func.count()).select_from(User).where(
+                        User.role == "org_admin",
+                        User.is_active == True,
+                        User.organization_id == admin.organization_id,
+                        User.id != admin.id,
+                    )
                 )
-            )
-            other_admins = admin_count_result.scalar()
-            
+            ).scalar()
             if other_admins == 0:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Cannot remove admin role. You are the only active admin in your organization."
+                    status_code=400,
+                    detail="Cannot remove admin role. You are the only active admin in your organization.",
                 )
-    
-    # Update fields
+
     if request.full_name is not None:
         user.full_name = request.full_name
     if request.role is not None:
@@ -412,76 +289,42 @@ async def update_user(
         user.is_active = request.is_active
     if request.is_verified is not None:
         user.is_verified = request.is_verified
-    
-    user.updated_at = datetime.utcnow()
-    
+
+    user.updated_at = datetime.now(timezone.utc)
+
     await db.commit()
     await db.refresh(user)
-    
+
     logger.info(f"Admin {admin.email} updated user {user.email}")
-    
-    return {
-        "message": "User updated successfully",
-        "user": user.to_dict()
-    }
+    return {"message": "User updated successfully", "user": user.to_dict()}
 
 
 @router.delete("/admin/users/{user_id}")
 async def delete_user(
     user_id: UUID,
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin_user)
+    admin: User = Depends(get_current_admin_user),
 ):
-    """
-    Delete a user and all their data.
-    Org admins can only delete users in their organization.
-    Super admins can delete any user.
-    """
-    # Get user
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    # ORGANIZATION SCOPING: Org admins can only delete users in their org
+        raise HTTPException(status_code=404, detail="User not found")
+
     if admin.is_org_admin() and not admin.is_super_admin():
         if user.organization_id != admin.organization_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only delete users in your organization"
-            )
-    
-    # SELF-PROTECTION: Prevent admin from deleting themselves
+            raise HTTPException(status_code=403, detail="You can only delete users in your organization")
+
     if user_id == admin.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete your own account"
-        )
-    
-    # ROLE PROTECTION: Cannot delete super admins
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+
     if user.role == "super_admin" and not admin.is_super_admin():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cannot delete super admin users"
-        )
-    
-    # Delete user's documents and chunks (cascade should handle this)
+        raise HTTPException(status_code=403, detail="Cannot delete super admin users")
+
     await db.execute(delete(Document).where(Document.uploaded_by == user_id))
-    
-    # Delete user
     await db.delete(user)
     await db.commit()
-    
+
     logger.info(f"Admin {admin.email} deleted user {user.email}")
-    
-    return {
-        "message": "User deleted successfully",
-        "user_id": str(user_id)
-    }
+    return {"message": "User deleted successfully", "user_id": str(user_id)}
 
 
 @router.post("/admin/users/{user_id}/reset-password")
@@ -489,99 +332,61 @@ async def reset_user_password(
     user_id: UUID,
     new_password: str = Query(..., min_length=8),
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin_user)
+    admin: User = Depends(get_current_admin_user),
 ):
-    """
-    Reset a user's password.
-    Admin only.
-    """
-    # Validate password
     is_valid, error_msg = validate_password_strength(new_password)
     if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_msg
-        )
-    
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    # Update password
+        raise HTTPException(status_code=404, detail="User not found")
+
     user.hashed_password = get_password_hash(new_password)
-    user.updated_at = datetime.utcnow()
-    
+    user.updated_at = datetime.now(timezone.utc)  # FIX: timezone-aware
+
     await db.commit()
-    
     logger.info(f"Admin {admin.email} reset password for user {user.email}")
-    
-    return {
-        "message": "Password reset successfully"
-    }
+    return {"message": "Password reset successfully"}
 
 
-# System Management Endpoints
+# System Stats
 
-@router.get("/admin/stats", response_model=SystemStatsResponse)
+@router.get("/admin/stats/system", response_model=SystemStatsResponse)
 async def get_system_stats(
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin_user)
+    admin: User = Depends(get_current_admin_user),
 ):
-    """
-    Get system-wide statistics.
-    Organization-scoped for org admins, global for super admins.
-    """
-    # Base queries
-    user_query = select(func.count()).select_from(User)
-    doc_query = select(func.count()).select_from(Document)
-    storage_query = select(func.sum(Document.file_size_bytes)).select_from(Document)
-    
-    # ORGANIZATION SCOPING: Apply org filter for org admins
-    if admin.is_org_admin() and not admin.is_super_admin():
-        org_filter_user = User.organization_id == admin.organization_id
-        org_filter_doc = Document.organization_id == admin.organization_id
-        
-        user_query = user_query.where(org_filter_user)
-        doc_query = doc_query.where(org_filter_doc)
-        storage_query = storage_query.where(org_filter_doc)
-    
-    # Total users
-    user_count_result = await db.execute(user_query)
-    total_users = user_count_result.scalar()
-    
-    # Total documents
-    doc_count_result = await db.execute(doc_query)
-    total_docs = doc_count_result.scalar()
-    
-    # Total chunks
+    """System-wide statistics, org-scoped for org admins."""
+
+    def _ou(q):
+        if admin.is_org_admin() and not admin.is_super_admin():
+            return q.where(User.organization_id == admin.organization_id)
+        return q
+
+    def _od(q):
+        if admin.is_org_admin() and not admin.is_super_admin():
+            return q.where(Document.organization_id == admin.organization_id)
+        return q
+
+    total_users = (await db.execute(_ou(select(func.count()).select_from(User)))).scalar()
+    total_docs = (await db.execute(_od(select(func.count()).select_from(Document)))).scalar()
+    storage_bytes = (
+        await db.execute(_od(select(func.sum(Document.file_size_bytes)).select_from(Document)))
+    ).scalar() or 0
+
     from app.models.document import Chunk
-    chunk_query = select(func.count()).select_from(Chunk)
-    
-    # ORGANIZATION SCOPING for chunks (via document relationship)
+    chunk_q = select(func.count()).select_from(Chunk)
     if admin.is_org_admin() and not admin.is_super_admin():
-        chunk_query = chunk_query.join(Document).where(
-            Document.organization_id == admin.organization_id
-        )
-    
-    chunk_count_result = await db.execute(chunk_query)
-    total_chunks = chunk_count_result.scalar()
-    
-    # Storage used
-    storage_result = await db.execute(storage_query)
-    storage_bytes = storage_result.scalar() or 0
-    storage_mb = storage_bytes / (1024 * 1024)
-    
+        chunk_q = chunk_q.join(Document).where(Document.organization_id == admin.organization_id)
+    total_chunks = (await db.execute(chunk_q)).scalar()
+
     return SystemStatsResponse(
         total_users=total_users,
         total_documents=total_docs,
         total_chunks=total_chunks,
         active_sessions=0,
-        storage_used_mb=round(storage_mb, 2)
+        storage_used_mb=round(storage_bytes / (1024 * 1024), 2),
     )
 
 
@@ -593,44 +398,25 @@ async def list_all_documents(
     status: Optional[str] = Query(None),
     user_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
-    admin: User = Depends(get_current_admin_user)
+    admin: User = Depends(get_current_admin_user),
 ):
-    """
-    List all documents.
-    Organization-scoped for org admins, global for super admins.
-    """
-    # Build query
     query = select(Document)
-    
-    # ORGANIZATION SCOPING: Org admins only see their org's documents
     if admin.is_org_admin() and not admin.is_super_admin():
         query = query.where(Document.organization_id == admin.organization_id)
-    
     if doc_type:
         query = query.where(Document.doc_type == doc_type)
-    
     if status:
         query = query.where(Document.status == status)
-    
     if user_id:
         query = query.where(Document.uploaded_by == user_id)
-    
-    # Get total count
-    count_query = select(func.count()).select_from(query.subquery())
-    total_result = await db.execute(count_query)
-    total = total_result.scalar()
-    
-    # Get documents
+
+    total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar()
     query = query.order_by(Document.upload_date.desc()).offset(skip).limit(limit)
-    result = await db.execute(query)
-    documents = result.scalars().all()
-    
-    # Get user info for each document
+    documents = (await db.execute(query)).scalars().all()
+
     doc_list = []
     for doc in documents:
-        user_result = await db.execute(select(User).where(User.id == doc.uploaded_by))
-        user = user_result.scalar_one_or_none()
-        
+        user = (await db.execute(select(User).where(User.id == doc.uploaded_by))).scalar_one_or_none()
         doc_list.append({
             "id": str(doc.id),
             "filename": doc.filename,
@@ -644,370 +430,253 @@ async def list_all_documents(
             "uploaded_by": {
                 "id": str(user.id),
                 "email": user.email,
-                "username": user.username
-            } if user else None
+                "username": user.username,
+            } if user else None,
         })
-    
-    return {
-        "total": total,
-        "documents": doc_list
-    }
+
+    return {"total": total, "documents": doc_list}
 
 
-# ============================================================================
-# NEW: CONTEXT ANALYTICS & MONITORING ENDPOINTS
-# ============================================================================
+# Analytics                                 ─
 
 @router.get("/admin/analytics/context")
 async def get_context_analytics(
     days: int = Query(7, ge=1, le=90),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_admin_user),
 ):
     """
-    Get context usage analytics.
-    
-    Admin only. Shows:
-    - Context hit rate
-    - Most referenced documents
-    - Query reformulation effectiveness
-    - Average conversation length
+    Context usage analytics.
+
+    FIX: no longer reads context_manager.contexts dict directly (always empty
+    in multi-worker deployments). Returns structural metadata only; deep
+    per-context stats require a dedicated metrics table (TODO).
     """
-    try:
-        from app.services.generation.context_manager import context_manager
-        
-        # Get all active contexts
-        contexts = context_manager.contexts
-        
-        # Calculate statistics
-        total_contexts = len(contexts)
-        contexts_with_docs = sum(1 for c in contexts.values() if c.primary_document)
-        
-        # Document reference frequency
-        doc_references = {}
-        for context in contexts.values():
-            for ref in context.document_references:
-                doc = ref['document']
-                doc_references[doc] = doc_references.get(doc, 0) + 1
-        
-        # Sort by frequency
-        top_documents = sorted(
-            doc_references.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:10]
-        
-        # Time period tracking
-        time_periods = []
-        for context in contexts.values():
-            time_periods.extend(context.time_periods)
-        
-        time_period_count = len(set(time_periods))
-        
-        # Calculate averages
-        avg_messages = sum(c.message_count for c in contexts.values()) / max(total_contexts, 1)
-        
-        # Entity tracking
-        all_entities = {}
-        for context in contexts.values():
-            for entity_type, values in context.entities.items():
-                if entity_type not in all_entities:
-                    all_entities[entity_type] = []
-                all_entities[entity_type].extend(values)
-        
-        entity_stats = {
-            entity_type: len(set(values))
-            for entity_type, values in all_entities.items()
-        }
-        
-        analytics = {
-            'total_active_contexts': total_contexts,
-            'contexts_with_document_scope': contexts_with_docs,
-            'document_scope_rate': round(contexts_with_docs / max(total_contexts, 1) * 100, 1),
-            'top_referenced_documents': [
-                {'document': doc, 'reference_count': count}
-                for doc, count in top_documents
-            ],
-            'unique_time_periods_tracked': time_period_count,
-            'average_messages_per_conversation': round(avg_messages, 1),
-            'entity_tracking': entity_stats,
-            'context_features': {
-                'query_reformulation': True,
-                'document_scoping': True,
-                'time_period_tracking': True,
-                'entity_extraction': True,
-            },
-            'performance': {
-                'avg_context_age_minutes': round(
-                    sum((datetime.utcnow() - c.created_at).seconds / 60 for c in contexts.values()) / max(total_contexts, 1),
-                    1
-                ) if total_contexts > 0 else 0
-            }
-        }
-        
-        return analytics
-        
-    except Exception as e:
-        logger.error(f"Error getting context analytics: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
+    from app.services.generation.context_manager import context_manager
+
+    return {
+        "note": (
+            "Deep per-conversation analytics require a metrics table. "
+            "This endpoint returns service-level config only."
+        ),
+        "context_features": {
+            "query_reformulation": True,
+            "document_scoping": True,
+            "time_period_tracking": True,
+            "entity_extraction": True,
+        },
+        "config": {
+            "context_timeout_hours": getattr(context_manager, "timeout_hours", 1),
+            "max_documents": getattr(context_manager, "max_documents", 5),
+            "boost_factor": getattr(context_manager, "boost_factor", 1.5),
+        },
+    }
 
 
 @router.get("/admin/analytics/retrieval")
 async def get_retrieval_analytics(
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_admin_user),
 ):
+    """Retrieval performance analytics.
+
+    Not implemented: there is no persisted metrics store yet. This endpoint
+    previously returned hardcoded placeholder numbers (e.g. p95=300ms) that
+    looked like real measurements. Use RAG traces / evaluation reports.
     """
-    Get retrieval performance analytics.
-    
-    Shows:
-    - Average retrieval time
-    - Hybrid vs semantic vs keyword usage
-    - Reranking impact
-    - Context-aware retrieval effectiveness
-    """
-    # This would ideally pull from a metrics database
-    # For now, return structure with placeholder data
-    
-    return {
-        'retrieval_strategies': {
-            'hybrid': {'count': 0, 'avg_time_ms': 150},
-            'semantic': {'count': 0, 'avg_time_ms': 120},
-            'keyword': {'count': 0, 'avg_time_ms': 80},
-        },
-        'context_aware_searches': {
-            'scoped': 0,
-            'global': 0,
-            'fallback_triggered': 0,
-        },
-        'reranking': {
-            'enabled': True,
-            'avg_score_improvement': 0.15,
-            'rerank_model': 'rerank-english-v3.0',
-        },
-        'performance': {
-            'avg_retrieval_time_ms': 150,
-            'p95_retrieval_time_ms': 300,
-            'p99_retrieval_time_ms': 500,
-        },
-        'quality_metrics': {
-            'avg_similarity_score': 0.75,
-            'avg_rerank_score': 0.82,
-            'documents_with_embeddings': 100,
-        }
-    }
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Retrieval analytics require a metrics store; see evaluation reports.",
+    )
+
+
+def _admin_scope(user: User) -> UUID:
+    if not user.organization_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Admin is not assigned to an organization")
+    return user.organization_id
 
 
 @router.get("/admin/conversations/quality")
 async def get_conversation_quality_metrics(
-    limit: int = Query(50, ge=10, le=200),
-    current_user: User = Depends(get_current_admin_user)
+    days: int = Query(30, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user),
 ):
+    """Answer quality across the admin's organization.
+
+    Aggregates only: admins see rates and conversation ids, never other
+    users' message content.
     """
-    Get conversation quality metrics.
-    
-    Admin only. Shows:
-    - Low confidence responses
-    - Conversations with no sources
-    - Error rates
-    - User satisfaction indicators
-    """
-    try:
-        from app.services.generation.conversation_manager import conversation_manager
-        
-        all_conversations = conversation_manager.conversations
-        
-        # Analyze quality
-        low_confidence_count = 0
-        no_sources_count = 0
-        error_count = 0
-        total_responses = 0
-        
-        quality_issues = []
-        
-        for conv_id, conv in list(all_conversations.items())[:limit]:
-            messages = conv.get('messages', [])
-            
-            for msg in messages:
-                if msg['role'] == 'assistant':
-                    total_responses += 1
-                    metadata = msg.get('metadata', {})
-                    
-                    # Check confidence
-                    if metadata.get('confidence') == 'low':
-                        low_confidence_count += 1
-                        quality_issues.append({
-                            'conversation_id': conv_id,
-                            'issue': 'low_confidence',
-                            'message_preview': msg['content'][:100] + '...',
-                            'timestamp': msg.get('timestamp')
-                        })
-                    
-                    # Check sources
-                    if not metadata.get('sources'):
-                        no_sources_count += 1
-                    
-                    # Check errors
-                    if metadata.get('error'):
-                        error_count += 1
-                        quality_issues.append({
-                            'conversation_id': conv_id,
-                            'issue': 'error',
-                            'message_preview': msg['content'][:100] + '...',
-                            'timestamp': msg.get('timestamp')
-                        })
-        
-        # Calculate rates
-        low_conf_rate = (low_confidence_count / max(total_responses, 1)) * 100
-        no_sources_rate = (no_sources_count / max(total_responses, 1)) * 100
-        error_rate = (error_count / max(total_responses, 1)) * 100
-        
-        return {
-            'total_conversations_analyzed': min(limit, len(all_conversations)),
-            'total_responses': total_responses,
-            'quality_metrics': {
-                'low_confidence_responses': low_confidence_count,
-                'low_confidence_rate': round(low_conf_rate, 1),
-                'responses_without_sources': no_sources_count,
-                'no_sources_rate': round(no_sources_rate, 1),
-                'error_responses': error_count,
-                'error_rate': round(error_rate, 1),
-            },
-            'quality_issues': quality_issues[:20],
-            'recommendations': _generate_quality_recommendations(
-                low_confidence_count,
-                no_sources_count,
-                error_count
+    from datetime import timedelta
+
+    from sqlalchemy import and_, case
+
+    from app.models.conversation import Conversation, ConversationMessage
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    meta = ConversationMessage.message_metadata
+    finish = meta["finish_reason"].astext
+    scope = and_(
+        ConversationMessage.organization_id == _admin_scope(current_user),
+        ConversationMessage.role == "assistant",
+        ConversationMessage.created_at >= since,
+    )
+    row = (await db.execute(
+        select(
+            func.count(),
+            func.count().filter(meta["confidence"].astext == "low"),
+            func.count().filter(and_(
+                meta["searched_documents"].astext == "true",
+                func.jsonb_array_length(func.coalesce(meta["sources"], text_json_array())) == 0,
+            )),
+            func.count().filter(finish.in_(["provider_unavailable", "error"])),
+            func.count().filter(finish.in_(["insufficient_context", "output_guardrail_rejected", "blocked"])),
+            func.count(func.distinct(ConversationMessage.conversation_id)),
+        ).where(scope)
+    )).one()
+    total, low_conf, no_sources, errors, abstained, conversations = row
+
+    issues = (await db.execute(
+        select(
+            ConversationMessage.conversation_id,
+            ConversationMessage.created_at,
+            case(
+                (finish.in_(["provider_unavailable", "error"]), "error"),
+                (meta["confidence"].astext == "low", "low_confidence"),
+                else_="abstained",
             ),
-            'health_status': _calculate_health_status(low_conf_rate, error_rate)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting quality metrics: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
         )
+        .join(Conversation, Conversation.id == ConversationMessage.conversation_id)
+        .where(scope, Conversation.deleted_at.is_(None), or_(
+            finish.in_(["provider_unavailable", "error", "insufficient_context",
+                        "output_guardrail_rejected", "blocked"]),
+            meta["confidence"].astext == "low",
+        ))
+        .order_by(ConversationMessage.created_at.desc())
+        .limit(20)
+    )).all()
+
+    def rate(count: int) -> float:
+        return round(count / max(total, 1) * 100, 1)
+
+    return {
+        "period_days": days,
+        "total_conversations_analyzed": conversations,
+        "total_responses": total,
+        "quality_metrics": {
+            "low_confidence_responses": low_conf,
+            "low_confidence_rate": rate(low_conf),
+            "responses_without_sources": no_sources,
+            "no_sources_rate": rate(no_sources),
+            "abstained_responses": abstained,
+            "abstention_rate": rate(abstained),
+            "error_responses": errors,
+            "error_rate": rate(errors),
+        },
+        "quality_issues": [
+            {"conversation_id": str(cid), "issue": issue, "timestamp": at.isoformat()}
+            for cid, at, issue in issues
+        ],
+        "recommendations": _generate_quality_recommendations(low_conf, no_sources, errors),
+        "health_status": _calculate_health_status(rate(low_conf), rate(errors)),
+    }
 
 
 @router.get("/admin/analytics/conversations")
 async def get_conversation_analytics(
     days: int = Query(7, ge=1, le=90),
-    current_user: User = Depends(get_current_admin_user)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user),
 ):
-    """
-    Get overall conversation analytics.
-    
-    Shows:
-    - Total conversations
-    - Average conversation length
-    - Popular topics
-    - Usage patterns
-    """
-    try:
-        from app.services.generation.conversation_manager import conversation_manager
-        from app.services.generation.context_manager import context_manager
-        
-        all_conversations = conversation_manager.conversations
-        
-        # Calculate metrics
-        total_conversations = len(all_conversations)
-        total_messages = sum(len(c.get('messages', [])) for c in all_conversations.values())
-        
-        # Average length
-        avg_length = total_messages / max(total_conversations, 1)
-        
-        # Collect topics from contexts
-        all_topics = []
-        for conv_id in all_conversations.keys():
-            context = context_manager.get_context(conv_id)
-            if context:
-                all_topics.extend(context.topics)
-        
-        # Count topic frequency
-        from collections import Counter
-        topic_counts = Counter(all_topics)
-        top_topics = topic_counts.most_common(10)
-        
-        # Time distribution (by hour)
-        hour_distribution = {}
-        for conv in all_conversations.values():
-            created = datetime.fromisoformat(conv['created_at'])
-            hour = created.hour
-            hour_distribution[hour] = hour_distribution.get(hour, 0) + 1
-        
-        return {
-            'period_days': days,
-            'total_conversations': total_conversations,
-            'total_messages': total_messages,
-            'average_conversation_length': round(avg_length, 1),
-            'top_topics': [
-                {'topic': topic, 'count': count}
-                for topic, count in top_topics
-            ],
-            'usage_by_hour': [
-                {'hour': hour, 'conversations': count}
-                for hour, count in sorted(hour_distribution.items())
-            ],
-            'active_conversations': sum(
-                1 for c in all_conversations.values()
-                if (datetime.utcnow() - datetime.fromisoformat(c['updated_at'])).seconds < 3600
-            )
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting conversation analytics: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+    """Organization-wide usage over the last ``days`` (aggregates only)."""
+    from datetime import timedelta
+
+    from app.models.conversation import Conversation, ConversationMessage
+
+    org_id = _admin_scope(current_user)
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+
+    conv_row = (await db.execute(
+        select(
+            func.count(),
+            func.count(func.distinct(Conversation.user_id)),
+            func.count().filter(Conversation.last_message_at >= now - timedelta(hours=1)),
+        ).where(
+            Conversation.organization_id == org_id,
+            Conversation.deleted_at.is_(None),
+            Conversation.last_message_at >= since,
         )
+    )).one()
+    total_messages = (await db.execute(
+        select(func.count()).where(
+            ConversationMessage.organization_id == org_id,
+            ConversationMessage.created_at >= since,
+        )
+    )).scalar_one()
+    hour = func.extract("hour", ConversationMessage.created_at).label("hour")
+    by_hour = (await db.execute(
+        select(hour, func.count(func.distinct(ConversationMessage.conversation_id)))
+        .where(
+            ConversationMessage.organization_id == org_id,
+            ConversationMessage.created_at >= since,
+            ConversationMessage.role == "user",
+        )
+        .group_by(hour)
+        .order_by(hour)
+    )).all()
+
+    total_conversations, active_users, active_last_hour = conv_row
+    return {
+        "period_days": days,
+        "total_conversations": total_conversations,
+        "active_users": active_users,
+        "total_messages": total_messages,
+        "average_conversation_length": round(total_messages / max(total_conversations, 1), 1),
+        # Topic extraction was never populated; report nothing rather than fake data.
+        "top_topics": [],
+        "usage_by_hour": [{"hour": int(h), "conversations": c} for h, c in by_hour],
+        "active_conversations": active_last_hour,
+    }
 
 
-# Helper Functions
+def text_json_array():
+    from sqlalchemy import literal_column
+
+    return literal_column("'[]'::jsonb")
+
+
+# Helpers
 
 def _generate_quality_recommendations(
-    low_conf: int,
-    no_sources: int,
-    errors: int
-) -> List[str]:
-    """Generate recommendations based on quality metrics."""
-    recommendations = []
-    
+    low_conf: int, no_sources: int, errors: int
+) -> list[str]:
+    recs = []
     if low_conf > 10:
-        recommendations.append(
-            "High number of low-confidence responses detected. "
-            "Consider: 1) Improving document quality, 2) Adjusting similarity thresholds, "
-            "3) Adding more training documents"
+        recs.append(
+            "High number of low-confidence responses. Consider: "
+            "1) Improving document quality, 2) Adjusting similarity thresholds, "
+            "3) Adding more training documents."
         )
-    
     if no_sources > 20:
-        recommendations.append(
-            "Many responses without sources. This could indicate: "
+        recs.append(
+            "Many responses without sources. This may indicate: "
             "1) Too many conversational queries, 2) Documents not covering user questions, "
-            "3) Retrieval threshold too high"
+            "3) Retrieval threshold too high."
         )
-    
     if errors > 5:
-        recommendations.append(
+        recs.append(
             "Error rate is elevated. Check: 1) API quotas, 2) Database connections, "
-            "3) System logs for recurring issues"
+            "3) System logs for recurring issues."
         )
-    
-    if not recommendations:
-        recommendations.append("System quality metrics are healthy!")
-    
-    return recommendations
+    if not recs:
+        recs.append("System quality metrics are healthy!")
+    return recs
 
 
 def _calculate_health_status(low_conf_rate: float, error_rate: float) -> str:
-    """Calculate overall system health status."""
     if error_rate > 10 or low_conf_rate > 30:
         return "critical"
     elif error_rate > 5 or low_conf_rate > 20:
         return "warning"
-    else:
-        return "healthy"
+    return "healthy"
 
-
-__all__ = ['router']
+__all__ = ["router"]

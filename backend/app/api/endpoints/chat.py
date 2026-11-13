@@ -1,41 +1,46 @@
-"""
-Chat API endpoints for RAG system.
-Provides conversational interface with full RAG pipeline.
-"""
-from typing import List, Dict, Any, Optional
-from uuid import UUID
-from fastapi import APIRouter, Depends, Query, HTTPException, status
-from fastapi.responses import StreamingResponse, Response
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, text
-from pydantic import BaseModel, Field
-from datetime import datetime
-from loguru import logger
+"""Chat API endpoints for RAG system."""
+
+from __future__ import annotations
+
 import json
 import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+from uuid import UUID
 
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response, StreamingResponse
+from loguru import logger
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.dependencies.auth import get_current_admin_user, get_current_user
+from app.core.config import settings
 from app.db.session import get_db
-from app.services.generation.chat_service import chat_service
-from app.api.dependencies.auth import get_current_user
+from app.models.document import Chunk as ChunkModel
+from app.models.document import Document
 from app.models.user import User
-from app.models.document import Document, Chunk as ChunkModel
-
+from app.services.ai.pricing import estimate_cost
+from app.services.generation.chat_service import ConversationAccessError, chat_service
+from app.api.endpoints.conversations import load_conversation_dict
 
 router = APIRouter()
 
+# Pricing constants — update here when Gemini pricing changes
 
-# Request/Response Models
+
+# Models:
+
 class ChatRequest(BaseModel):
-    """Chat request model."""
-    query: str = Field(..., min_length=1, max_length=1000, description="User's question")
-    conversation_id: Optional[str] = Field(None, description="Existing conversation ID")
-    doc_type: Optional[str] = Field(None, description="Filter by document type")
-    department: Optional[str] = Field(None, description="Filter by department")
-    stream: bool = Field(False, description="Enable streaming response")
+    query: str = Field(..., min_length=1, max_length=2000)
+    conversation_id: Optional[str] = Field(None)
+    doc_type: Optional[str] = Field(None)
+    department: Optional[str] = Field(None)
+    stream: bool = Field(False)
 
 
 class SourceInfo(BaseModel):
-    """Source citation information."""
     document: str
     page: Optional[int] = None
     section: Optional[str] = None
@@ -43,7 +48,6 @@ class SourceInfo(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    """Chat response model."""
     answer: str
     conversation_id: str
     sources: List[SourceInfo]
@@ -55,7 +59,6 @@ class ChatResponse(BaseModel):
 
 
 class ConversationMessage(BaseModel):
-    """Individual message in conversation."""
     id: str
     role: str
     content: str
@@ -64,7 +67,6 @@ class ConversationMessage(BaseModel):
 
 
 class ConversationDetail(BaseModel):
-    """Complete conversation details."""
     id: str
     user_id: str
     created_at: str
@@ -74,448 +76,14 @@ class ConversationDetail(BaseModel):
     context: dict = {}
 
 
-@router.post("/chat", response_model=ChatResponse)
-async def chat(
-    request: ChatRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Chat with the AI assistant using RAG."""
-    user_id = str(current_user.id)
-    logger.info(f"Chat request from user {user_id}: '{request.query[:50]}...'")
-    
-    if request.stream:
-        return StreamingResponse(
-            _stream_chat(request, db, user_id),
-            media_type="text/event-stream"
-        )
-    
-    try:
-        result = await chat_service.chat(
-            query=request.query,
-            conversation_id=request.conversation_id,
-            user_id=user_id,
-            db=db,
-            doc_type=request.doc_type,
-            department=request.department,
-            stream=False
-        )
-        
-        if result.get('error'):
-            logger.error(f"Chat service returned error: {result['error']}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=result['error']
-            )
-        
-        sources = []
-        for src in result.get('sources', []):
-            try:
-                sources.append(SourceInfo(
-                    document=src.get('document', 'Unknown'),
-                    page=src.get('page'),
-                    section=src.get('section'),
-                    chunk_id=src.get('chunk_id', 'unknown')
-                ))
-            except Exception as e:
-                logger.warning(f"Error formatting source: {str(e)}")
-                continue
-        
-        logger.info(f"Chat service returned suggestions: {result.get('suggestions')}")
-        
-        response = ChatResponse(
-            answer=result['answer'],
-            conversation_id=result['conversation_id'],
-            sources=sources,
-            citations=result.get('citations', []),
-            confidence=result.get('confidence', 'medium'),
-            status=result.get('status', 'success'),
-            suggestions=result.get('suggestions', []),
-            metadata=result.get('metadata', {})
-        )
-        
-        logger.info(f"Returning {len(response.suggestions)} suggestions to frontend")
-        
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Chat error: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Chat processing failed: {str(e)}"
-        )
+class SelectiveExportRequest(BaseModel):
+    message_indices: List[int] = Field(..., description="Indices of messages to export")
+    format: str = Field("markdown", pattern="^(markdown|json|pdf)$")
 
 
-async def _stream_chat(request: ChatRequest, db: AsyncSession, user_id: str):
-    """Internal function to stream chat responses."""
-    try:
-        result_stream = await chat_service.chat(
-            query=request.query,
-            conversation_id=request.conversation_id,
-            user_id=user_id,
-            db=db,
-            doc_type=request.doc_type,
-            department=request.department,
-            stream=True
-        )
-        
-        async for chunk in result_stream:
-            yield f"data: {json.dumps(chunk)}\n\n"
-        
-        yield "data: [DONE]\n\n"
-        
-    except Exception as e:
-        logger.error(f"Streaming error: {str(e)}")
-        error_data = {'type': 'error', 'error': str(e)}
-        yield f"data: {json.dumps(error_data)}\n\n"
-
-
-@router.get("/chat/conversations")
-async def list_conversations(
-    limit: int = Query(10, ge=1, le=50),
-    current_user: User = Depends(get_current_user)
-):
-    """List all conversations for the current user."""
-    user_id = str(current_user.id)
-    
-    try:
-        conversations = await chat_service.list_conversations(
-            user_id=user_id,
-            limit=limit
-        )
-        return conversations
-    except Exception as e:
-        logger.error(f"Error listing conversations: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
-
-
-@router.get("/chat/conversations/{conversation_id}")
-async def get_conversation(
-    conversation_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    """Get complete conversation history."""
-    user_id = str(current_user.id)
-    
-    try:
-        conversation = await chat_service.get_conversation_history(
-            conversation_id=conversation_id,
-            user_id=user_id
-        )
-        
-        if 'error' in conversation:
-            error_msg = conversation['error']
-            if error_msg == 'Conversation not found':
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=error_msg)
-            else:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=error_msg)
-        
-        messages = []
-        for msg in conversation.get('messages', []):
-            try:
-                messages.append(ConversationMessage(
-                    id=msg.get('id', ''),
-                    role=msg.get('role', 'user'),
-                    content=msg.get('content', ''),
-                    timestamp=msg.get('timestamp', ''),
-                    metadata=msg.get('metadata', {})
-                ))
-            except Exception as e:
-                logger.warning(f"Error formatting message: {str(e)}")
-                continue
-        
-        return ConversationDetail(
-            id=conversation['id'],
-            user_id=conversation['user_id'],
-            created_at=conversation['created_at'],
-            updated_at=conversation['updated_at'],
-            messages=messages,
-            metadata=conversation.get('metadata', {}),
-            context=conversation.get('context', {})
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting conversation: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
-
-
-@router.delete("/chat/conversations/{conversation_id}")
-async def delete_conversation(
-    conversation_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    """Delete a conversation and its history."""
-    user_id = str(current_user.id)
-    
-    try:
-        deleted = await chat_service.delete_conversation(
-            conversation_id=conversation_id,
-            user_id=user_id
-        )
-        
-        if not deleted:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Conversation not found or unauthorized"
-            )
-        
-        return {
-            'message': 'Conversation deleted successfully',
-            'conversation_id': conversation_id
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting conversation: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
-
-
-@router.get("/chat/test")
-async def test_chat():
-    """Test endpoint to verify chat API is working."""
-    return {
-        'status': 'operational',
-        'message': 'Chat API is ready',
-        'features': [
-            'RAG-based question answering',
-            'Conversation history',
-            'Source citations',
-            'Input/output guardrails',
-            'Streaming responses',
-            'Natural conversational responses'
-        ]
-    }
-
-
-@router.get("/chat/conversations/{conversation_id}/analytics")
-async def get_conversation_analytics(
-    conversation_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    """Get analytics for a conversation."""
-    user_id = str(current_user.id)
-    
-    try:
-        from app.services.generation.context_manager import context_manager
-        
-        conversation = await chat_service.get_conversation_history(
-            conversation_id=conversation_id,
-            user_id=user_id
-        )
-        
-        if 'error' in conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=conversation['error']
-            )
-        
-        context = await context_manager.get_or_create_context(conversation_id)
-        messages = conversation.get('messages', [])
-        user_messages = [m for m in messages if m['role'] == 'user']
-        assistant_messages = [m for m in messages if m['role'] == 'assistant']
-        
-        documents_referenced = set()
-        sources_count = 0
-        
-        for msg in assistant_messages:
-            metadata = msg.get('metadata', {})
-            sources = metadata.get('sources', [])
-            sources_count += len(sources)
-            for source in sources:
-                documents_referenced.add(source.get('document', 'Unknown'))
-        
-        confidences = [
-            msg.get('metadata', {}).get('confidence', 'medium')
-            for msg in assistant_messages
-        ]
-        
-        confidence_scores = {
-            'high': confidences.count('high'),
-            'medium': confidences.count('medium'),
-            'low': confidences.count('low')
-        }
-        
-        context_summary = context.get_context_summary() if context else {}
-        
-        analytics = {
-            'conversation_id': conversation_id,
-            'total_messages': len(messages),
-            'user_queries': len(user_messages),
-            'ai_responses': len(assistant_messages),
-            'documents_referenced': list(documents_referenced),
-            'total_documents': len(documents_referenced),
-            'total_sources_cited': sources_count,
-            'confidence_distribution': confidence_scores,
-            'primary_document': context_summary.get('primary_document'),
-            'active_documents': context_summary.get('active_documents', []),
-            'topics': context_summary.get('topics', []),
-            'time_periods_discussed': context_summary.get('time_periods', []),
-            'created_at': conversation['created_at'],
-            'duration_minutes': _calculate_duration(conversation),
-        }
-        
-        return analytics
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting analytics: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
-
-
-def _calculate_duration(conversation: Dict[str, Any]) -> float:
-    """Calculate conversation duration in minutes."""
-    from datetime import datetime
-    created = datetime.fromisoformat(conversation['created_at'])
-    updated = datetime.fromisoformat(conversation['updated_at'])
-    duration = (updated - created).total_seconds() / 60
-    return round(duration, 1)
-
-
-def _export_to_markdown(conversation: Dict[str, Any]) -> str:
-    """Convert conversation to markdown format."""
-    lines = [
-        f"# Conversation Export",
-        f"",
-        f"**Conversation ID:** {conversation['id']}",
-        f"**Created:** {conversation['created_at']}",
-        f"**Last Updated:** {conversation['updated_at']}",
-        f"",
-        f"---",
-        f"",
-    ]
-    
-    for msg in conversation['messages']:
-        role = "**User**" if msg['role'] == 'user' else "**AI Assistant**"
-        timestamp = msg.get('timestamp', '')
-        
-        lines.append(f"### {role} ({timestamp})")
-        lines.append(f"")
-        lines.append(msg['content'])
-        lines.append(f"")
-        
-        if msg['role'] == 'assistant':
-            metadata = msg.get('metadata', {})
-            sources = metadata.get('sources', [])
-            
-            if sources:
-                lines.append(f"**Sources:**")
-                for source in sources:
-                    lines.append(f"- {source.get('document')} (Page {source.get('page', 'N/A')})")
-                lines.append(f"")
-        
-        lines.append(f"---")
-        lines.append(f"")
-    
-    return "\n".join(lines)
-
-
-@router.get("/chat/conversations/{conversation_id}/export")
-async def export_conversation(
-    conversation_id: str,
-    format: str = Query("markdown", pattern="^(markdown|json|pdf)$"),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Export conversation in various formats.
-    
-    Formats:
-    - markdown: Formatted markdown with sources
-    - json: Complete JSON with metadata
-    - pdf: Professional PDF report
-    """
-    user_id = str(current_user.id)
-    
-    try:
-        conversation = await chat_service.get_conversation_history(
-            conversation_id=conversation_id,
-            user_id=user_id
-        )
-        
-        if 'error' in conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=conversation['error']
-            )
-        
-        if format == "json":
-            return conversation
-        
-        elif format == "markdown":
-            markdown = _export_to_markdown(conversation)
-            return Response(
-                content=markdown,
-                media_type="text/markdown",
-                headers={
-                    "Content-Disposition": f"attachment; filename=conversation_{conversation_id[:8]}.md"
-                }
-            )
-        
-        elif format == "pdf":
-            try:
-                from app.services.export.pdf_generator import pdf_generator
-                pdf_buffer = pdf_generator.generate_conversation_pdf(conversation)
-                return Response(
-                    content=pdf_buffer.read(),
-                    media_type="application/pdf",
-                    headers={
-                        "Content-Disposition": f"attachment; filename=conversation_{conversation_id[:8]}.pdf"
-                    }
-                )
-            except ImportError:
-                # reportlab not installed — fall back to markdown download
-                logger.warning("reportlab not available, falling back to markdown export")
-                markdown = _export_to_markdown(conversation)
-                return Response(
-                    content=markdown,
-                    media_type="text/markdown",
-                    headers={
-                        "Content-Disposition": f"attachment; filename=conversation_{conversation_id[:8]}.md"
-                    }
-                )
-            except Exception as e:
-                logger.error(f"PDF generation failed: {str(e)}", exc_info=True)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"PDF generation failed: {str(e)}"
-                )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error exporting conversation: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
-
-
-
-# ====== DEBUG ENDPOINTS (development / admin only) ======
-
+# Helpers:
 def _require_debug_mode():
-    """
-    Dependency that blocks debug endpoints in production.
-    Returns 403 if environment != 'development' so these endpoints
-    are completely inaccessible on Render even to authenticated users.
-    """
-    from app.core.config import settings
+    """Dependency that blocks debug endpoints in production."""
     if settings.environment != "development":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -523,435 +91,604 @@ def _require_debug_mode():
         )
 
 
-@router.get("/chat/debug/database")
-async def debug_database(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-,
-    _: None = Depends(_require_debug_mode),
-):
-    """Debug endpoint: Check database contents."""
-    doc_query = select(
-        Document.status,
-        func.count(Document.id).label('count')
-    ).group_by(Document.status)
-    
-    doc_result = await db.execute(doc_query)
-    doc_counts = {row.status: row.count for row in doc_result.all()}
-    
-    chunk_query = select(func.count(ChunkModel.id))
-    chunk_result = await db.execute(chunk_query)
-    total_chunks = chunk_result.scalar()
-    
-    embedding_check = await db.execute(
-        text("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL")
-    )
-    chunks_with_embeddings = embedding_check.scalar()
-    
-    sample_query = select(
-        Document.filename,
-        Document.status,
-        Document.total_chunks,
-        Document.upload_date
-    ).limit(5)
-    
-    sample_result = await db.execute(sample_query)
-    samples = [
-        {
-            'filename': row.filename,
-            'status': row.status,
-            'chunks': row.total_chunks,
-            'uploaded': row.upload_date.isoformat() if row.upload_date else None
-        }
-        for row in sample_result.all()
+def _calculate_duration(conversation: Dict[str, Any]) -> float:
+    """Calculate conversation duration in minutes."""
+    try:
+        created = datetime.fromisoformat(conversation["created_at"])
+        updated = datetime.fromisoformat(conversation["updated_at"])
+        # FIX: normalise to UTC if naive so subtraction never raises TypeError
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        return round((updated - created).total_seconds() / 60, 1)
+    except Exception:
+        return 0.0
+
+
+def _export_to_markdown(conversation: Dict[str, Any]) -> str:
+    lines = [
+        "# Conversation Export",
+        "",
+        f"**Conversation ID:** {conversation['id']}",
+        f"**Created:** {conversation['created_at']}",
+        f"**Last Updated:** {conversation['updated_at']}",
+        "",
+        "---",
+        "",
     ]
-    
-    return {
-        'database_status': 'connected',
-        'documents_by_status': doc_counts,
-        'total_chunks': total_chunks,
-        'chunks_with_embeddings': chunks_with_embeddings,
-        'sample_documents': samples,
-        'diagnosis': {
-            'has_documents': sum(doc_counts.values()) > 0,
-            'has_chunks': total_chunks > 0,
-            'has_embeddings': chunks_with_embeddings > 0,
-            'ready_for_search': chunks_with_embeddings > 0
-        }
-    }
+    for msg in conversation["messages"]:
+        role = "**User**" if msg["role"] == "user" else "**AI Assistant**"
+        lines += [f"### {role} ({msg.get('timestamp', '')})", "", msg["content"], ""]
+        if msg["role"] == "assistant":
+            sources = msg.get("metadata", {}).get("sources", [])
+            if sources:
+                lines.append("**Sources:**")
+                for src in sources:
+                    lines.append(f"- {src.get('document')} (Page {src.get('page', 'N/A')})")
+                lines.append("")
+        lines.append("---")
+        lines.append("")
+    return "\n".join(lines)
 
 
-@router.get("/chat/debug/chunks")
-async def debug_chunks(
+def _export_selected_to_markdown(conversation: Dict[str, Any]) -> str:
+    metadata = conversation.get("metadata", {})
+    # FIX: timezone-aware
+    exported_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        "# Selective Conversation Export",
+        "",
+        f"**Conversation ID:** {conversation['id']}",
+        f"**Created:** {conversation['created_at']}",
+        f"**Exported:** {exported_at}",
+        "",
+        f"**Selection:** {metadata.get('exported_message_count', 0)} of {metadata.get('total_messages_in_conversation', 0)} messages",
+        "",
+        "---",
+        "",
+        "## Selected Messages",
+        "",
+    ]
+    for idx, msg in enumerate(conversation["messages"], 1):
+        role = "**User**" if msg["role"] == "user" else "**AI Assistant**"
+        ts = msg.get("timestamp", "")
+        lines.append(f"### Message {idx}: {role}")
+        if ts:
+            try:
+                dt = datetime.fromisoformat(ts)
+                lines.append(f"*{dt.strftime('%I:%M %p')}*")
+            except Exception:
+                lines.append(f"*{ts}*")
+        lines += ["", msg["content"], ""]
+        if msg["role"] == "assistant":
+            sources = msg.get("metadata", {}).get("sources", [])
+            if sources:
+                lines.append("**Sources:**")
+                for src in sources:
+                    lines.append(f"- {src.get('document', 'Unknown')} (Page {src.get('page', 'N/A')})")
+                lines.append("")
+        lines += ["---", ""]
+    return "\n".join(lines)
+
+
+# Endpoints
+@router.post("/chat", response_model=ChatResponse)
+async def chat(
+    request: ChatRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-,
-    _: None = Depends(_require_debug_mode),
+    current_user: User = Depends(get_current_user),
 ):
-    """Debug: Check chunk embeddings in database."""
-    total_result = await db.execute(select(func.count(ChunkModel.id)))
-    total_chunks = total_result.scalar()
-    
-    embedding_result = await db.execute(
-        text("SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL")
-    )
-    chunks_with_embeddings = embedding_result.scalar()
-    
-    dimension_result = await db.execute(
-        text("SELECT array_length(embedding, 1) as dim FROM chunks LIMIT 1")
-    )
-    dimension_row = dimension_result.first()
-    actual_dimensions = dimension_row[0] if dimension_row else None
-    
-    sample_result = await db.execute(
-        select(ChunkModel.id, ChunkModel.content, ChunkModel.chunk_type)
-        .limit(1)
-    )
-    sample = sample_result.first()
-    
-    return {
-        'total_chunks': total_chunks,
-        'chunks_with_embeddings': chunks_with_embeddings,
-        'expected_dimensions': settings.gemini_embedding_dimensions,
-        'actual_dimensions': actual_dimensions,
-        'dimension_match': actual_dimensions == settings.gemini_embedding_dimensions if actual_dimensions else False,
-        'sample_chunk': {
-            'id': str(sample[0]),
-            'content': sample[1][:100] + '...' if sample and sample[1] else None,
-            'type': sample[2] if sample else None
-        } if sample else None,
-        'status': 'ready' if chunks_with_embeddings > 0 else 'no_data'
-    }
-
-
-@router.get("/chat/debug/test-embedding")
-async def test_embedding(
-    current_user: User = Depends(get_current_user)
-,
-    _: None = Depends(_require_debug_mode),
-):
-    """Test if Gemini embedding API is working."""
-    from app.services.embedding.embedding_service import embedding_service
-    
-    test_text = "This is a test sentence to verify Gemini embeddings are working."
-    
-    try:
-        start_time = time.time()
-        embedding = await embedding_service.generate_embedding(test_text)
-        elapsed_time = time.time() - start_time
-        
-        return {
-            'status': 'success',
-            'model': embedding_service.model_name,
-            'dimensions': len(embedding),
-            'expected_dimensions': embedding_service.dimensions,
-            'dimension_match': len(embedding) == embedding_service.dimensions,
-            'elapsed_seconds': round(elapsed_time, 2),
-            'sample_values': embedding[:5],
-            'using_local_fallback': embedding_service.use_local_fallback
-        }
-    except Exception as e:
-        logger.error(f"Embedding test failed: {str(e)}")
-        return {
-            'status': 'error',
-            'error': str(e),
-            'error_type': type(e).__name__,
-            'using_local_fallback': getattr(embedding_service, 'use_local_fallback', False)
-        }
-
-
-@router.get("/chat/debug/config")
-async def debug_config(current_user: User = Depends(get_current_user),
-    _: None = Depends(_require_debug_mode),
-):
-    """Debug: Check current configuration."""
-    from app.core.config import settings
-    
-    return {
-        'embedding_model': settings.gemini_embedding_model,
-        'embedding_dimensions': settings.gemini_embedding_dimensions,
-        'chat_model': settings.gemini_chat_model,
-        'chunk_size': settings.chunk_size,
-        'retrieval_top_k': settings.retrieval_top_k,
-        'similarity_threshold': settings.similarity_threshold
-    }
-
-@router.get("/chat/conversations/{conversation_id}/token-stats")
-async def get_conversation_token_stats(
-    conversation_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Get detailed token usage and cost statistics for a conversation.
-    """
+    """Chat with the AI assistant using the full RAG pipeline."""
     user_id = str(current_user.id)
-    
-    try:
-        conversation = await chat_service.get_conversation_history(
-            conversation_id=conversation_id,
-            user_id=user_id
+
+    if not current_user.organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is not assigned to an organization",
         )
-        
-        if 'error' in conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=conversation['error']
-            )
-        
-        messages = conversation.get('messages', [])
-        assistant_messages = [m for m in messages if m['role'] == 'assistant']
-        
-        total_tokens = 0
-        total_cached_tokens = 0
-        total_prompt_tokens = 0
-        total_completion_tokens = 0
-        total_cost = 0.0
-        
-        message_stats = []
-        
+
+    if request.stream:
+        return StreamingResponse(
+            _stream_chat(request, db, user_id, current_user.organization_id),
+            media_type="text/event-stream",
+        )
+
+    try:
+        result = await chat_service.chat(
+            query=request.query,
+            conversation_id=request.conversation_id,
+            user_id=user_id,
+            organization_id=current_user.organization_id,
+            db=db,
+            doc_type=request.doc_type,
+            department=request.department,
+            stream=False,
+        )
+
+        if result.get("error"):
+            raise HTTPException(status_code=400, detail=result["error"])
+
+        sources = []
+        for src in result.get("sources", []):
+            try:
+                sources.append(SourceInfo(
+                    document=src.get("document", "Unknown"),
+                    page=src.get("page"),
+                    section=src.get("section"),
+                    chunk_id=src.get("chunk_id", "unknown"),
+                ))
+            except Exception as e:
+                logger.warning(f"Error formatting source: {e}")
+
+        return ChatResponse(
+            answer=result["answer"],
+            conversation_id=result["conversation_id"],
+            sources=sources,
+            citations=result.get("citations", []),
+            confidence=result.get("confidence", "medium"),
+            status=result.get("status", "success"),
+            suggestions=result.get("suggestions", []),
+            metadata=result.get("metadata", {}),
+        )
+
+    except HTTPException:
+        raise
+    except ConversationAccessError:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    except Exception as e:
+        # Internal errors (SQL, provider messages) must not reach the client.
+        logger.error(f"Chat error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Chat processing failed")
+
+
+async def _stream_chat(request: ChatRequest, db: AsyncSession, user_id: str, organization_id):
+    try:
+        result_stream = await chat_service.chat(
+            query=request.query,
+            conversation_id=request.conversation_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            db=db,
+            doc_type=request.doc_type,
+            department=request.department,
+            stream=True,
+        )
+        async for chunk in result_stream:
+            yield f"data: {json.dumps(chunk)}\n\n"
+        yield "data: [DONE]\n\n"
+    except ConversationAccessError:
+        yield f"data: {json.dumps({'type': 'error', 'error': 'Conversation not found'})}\n\n"
+    except Exception as e:
+        # Internal errors (SQL, provider messages) must not reach the client.
+        logger.error(f"Streaming error: {e}", exc_info=True)
+        yield f"data: {json.dumps({'type': 'error', 'error': 'Chat processing failed'})}\n\n"
+
+
+@router.get("/chat/test", dependencies=[Depends(_require_debug_mode)])
+async def test_chat(current_user: User = Depends(get_current_admin_user)):
+    """Test endpoint — development only."""
+    return {
+        "status": "operational",
+        "message": "Chat API is ready",
+        "features": [
+            "RAG-based question answering",
+            "Conversation history",
+            "Source citations",
+            "Input/output guardrails",
+            "Streaming responses",
+            "Natural conversational responses",
+        ],
+    }
+
+
+@router.get("/chat/conversations/{conversation_id}/analytics")
+async def get_conversation_analytics(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    user_id = str(current_user.id)
+    try:
+        from app.services.generation.context_manager import context_manager
+
+        conversation = await load_conversation_dict(db, conversation_id, current_user)
+
+        context = await context_manager.get_or_create_context(conversation_id)
+        messages = conversation.get("messages", [])
+        user_messages = [m for m in messages if m["role"] == "user"]
+        assistant_messages = [m for m in messages if m["role"] == "assistant"]
+
+        documents_referenced = set()
+        sources_count = 0
+        confidences = []
+
         for msg in assistant_messages:
-            metadata = msg.get('metadata', {})
-            tokens = metadata.get('tokens', {})
-            
-            msg_total = tokens.get('total_tokens', 0)
-            msg_cached = tokens.get('cached_tokens', 0)
-            msg_prompt = tokens.get('prompt_tokens', 0)
-            msg_completion = tokens.get('completion_tokens', 0)
-            
-            msg_regular = msg_total - msg_cached
-            msg_cost = (msg_cached * 0.00000003) + (msg_regular * 0.0000003)
-            
-            total_tokens += msg_total
-            total_cached_tokens += msg_cached
-            total_prompt_tokens += msg_prompt
-            total_completion_tokens += msg_completion
-            total_cost += msg_cost
-            
-            message_stats.append({
-                'message_id': msg.get('id'),
-                'timestamp': msg.get('timestamp'),
-                'tokens': {
-                    'total': msg_total,
-                    'cached': msg_cached,
-                    'prompt': msg_prompt,
-                    'completion': msg_completion
-                },
-                'cost_usd': round(msg_cost, 6)
-            })
-        
-        cache_efficiency = (total_cached_tokens / total_tokens * 100) if total_tokens > 0 else 0
-        
+            meta = msg.get("metadata", {})
+            for src in meta.get("sources", []):
+                sources_count += 1
+                documents_referenced.add(src.get("document", "Unknown"))
+            confidences.append(meta.get("confidence", "medium"))
+
+        context_summary = context.get_context_summary() if context else {}
+
         return {
-            'conversation_id': conversation_id,
-            'summary': {
-                'total_messages': len(assistant_messages),
-                'total_tokens': total_tokens,
-                'cached_tokens': total_cached_tokens,
-                'prompt_tokens': total_prompt_tokens,
-                'completion_tokens': total_completion_tokens,
-                'cache_efficiency_percent': round(cache_efficiency, 2),
-                'total_cost_usd': round(total_cost, 6),
-                'avg_tokens_per_message': round(total_tokens / len(assistant_messages)) if assistant_messages else 0,
-                'avg_cost_per_message': round(total_cost / len(assistant_messages), 6) if assistant_messages else 0
+            "conversation_id": conversation_id,
+            "total_messages": len(messages),
+            "user_queries": len(user_messages),
+            "ai_responses": len(assistant_messages),
+            "documents_referenced": list(documents_referenced),
+            "total_documents": len(documents_referenced),
+            "total_sources_cited": sources_count,
+            "confidence_distribution": {
+                "high": confidences.count("high"),
+                "medium": confidences.count("medium"),
+                "low": confidences.count("low"),
             },
-            'messages': message_stats,
-            'pricing_info': {
-                'model': 'gemini-2.5-flash',
-                'cached_token_price': 0.00000003,
-                'regular_token_price': 0.0000003,
-                'currency': 'USD'
-            }
+            "primary_document": context_summary.get("primary_document"),
+            "active_documents": context_summary.get("active_documents", []),
+            "topics": context_summary.get("topics", []),
+            "time_periods_discussed": context_summary.get("time_periods", []),
+            "created_at": conversation["created_at"],
+            "duration_minutes": _calculate_duration(conversation),
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting token stats: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
-        )
+        logger.error(f"Error getting analytics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/chat/debug/list-models")
-async def list_gemini_models(
-    _: None = Depends(_require_debug_mode),
+
+@router.get("/chat/conversations/{conversation_id}/export")
+async def export_conversation(
+    conversation_id: str,
+    format: str = Query("markdown", pattern="^(markdown|json|pdf)$"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """List all available Gemini models."""
-    import google.generativeai as genai
-    from app.core.config import settings
-    
-    genai.configure(api_key=settings.gemini_api_key)
-    
+    user_id = str(current_user.id)
     try:
-        models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                models.append({
-                    'name': m.name,
-                    'display_name': m.display_name,
-                    'description': m.description[:100] if m.description else ''
-                })
-        
-        return {
-            'available_models': models,
-            'current_config': settings.gemini_chat_model
-        }
+        conversation = await load_conversation_dict(db, conversation_id, current_user)
+
+        if format == "json":
+            return conversation
+
+        if format == "markdown":
+            return Response(
+                content=_export_to_markdown(conversation),
+                media_type="text/markdown",
+                headers={
+                    "Content-Disposition": f"attachment; filename=conversation_{conversation_id[:8]}.md"
+                },
+            )
+
+        if format == "pdf":
+            try:
+                from app.services.export.pdf_generator import pdf_generator
+                buf = pdf_generator.generate_conversation_pdf(conversation)
+                return Response(
+                    content=buf.read(),
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=conversation_{conversation_id[:8]}.pdf"
+                    },
+                )
+            except ImportError:
+                logger.warning("reportlab not available, falling back to markdown")
+                return Response(
+                    content=_export_to_markdown(conversation),
+                    media_type="text/markdown",
+                    headers={
+                        "Content-Disposition": f"attachment; filename=conversation_{conversation_id[:8]}.md"
+                    },
+                )
+
+    except HTTPException:
+        raise
     except Exception as e:
-        return {'error': str(e)}
-    
-class SelectiveExportRequest(BaseModel):
-    """Request model for selective export."""
-    message_indices: List[int] = Field(..., description="Indices of messages to export")
-    format: str = Field("markdown", pattern="^(markdown|json|pdf)$")
+        logger.error(f"Error exporting conversation: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/chat/conversations/{conversation_id}/export-selected")
 async def export_selected_messages(
     conversation_id: str,
     request: SelectiveExportRequest,
-    current_user: User = Depends(get_current_user)
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Export selected messages from conversation.
-    
-    Supports PDF, Markdown, and JSON formats with professional formatting.
-    """
     user_id = str(current_user.id)
-    
     try:
-        # Get full conversation
-        conversation = await chat_service.get_conversation_history(
-            conversation_id=conversation_id,
-            user_id=user_id
-        )
-        
-        if 'error' in conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=conversation['error']
-            )
-        
-        # Filter messages by indices
-        all_messages = conversation.get('messages', [])
-        selected_messages = []
-        
-        for idx in sorted(request.message_indices):
-            if 0 <= idx < len(all_messages):
-                selected_messages.append(all_messages[idx])
-        
-        if not selected_messages:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No valid messages selected"
-            )
-        
-        # Create filtered conversation object
-        filtered_conversation = {
+        conversation = await load_conversation_dict(db, conversation_id, current_user)
+
+        all_messages = conversation.get("messages", [])
+        selected = [all_messages[i] for i in sorted(request.message_indices) if 0 <= i < len(all_messages)]
+        if not selected:
+            raise HTTPException(status_code=400, detail="No valid messages selected")
+
+        filtered = {
             **conversation,
-            'messages': selected_messages,
-            'metadata': {
-                **conversation.get('metadata', {}),
-                'is_selective_export': True,
-                'total_messages_in_conversation': len(all_messages),
-                'exported_message_count': len(selected_messages),
-                'exported_indices': request.message_indices
-            }
+            "messages": selected,
+            "metadata": {
+                **conversation.get("metadata", {}),
+                "is_selective_export": True,
+                "total_messages_in_conversation": len(all_messages),
+                "exported_message_count": len(selected),
+                "exported_indices": request.message_indices,
+            },
         }
-        
-        # Export based on format
+
         if request.format == "json":
-            return filtered_conversation
-        
-        elif request.format == "markdown":
-            markdown = _export_selected_to_markdown(filtered_conversation)
+            return filtered
+
+        if request.format == "markdown":
             return Response(
-                content=markdown,
+                content=_export_selected_to_markdown(filtered),
                 media_type="text/markdown",
                 headers={
                     "Content-Disposition": f"attachment; filename=conversation_selective_{conversation_id[:8]}.md"
-                }
+                },
             )
-        
-        elif request.format == "pdf":
+
+        if request.format == "pdf":
             try:
                 from app.services.export.pdf_generator import pdf_generator
-                
-                # Generate PDF with selection info
-                pdf_buffer = pdf_generator.generate_conversation_pdf(filtered_conversation)
-                
+                buf = pdf_generator.generate_conversation_pdf(filtered)
                 return Response(
-                    content=pdf_buffer.read(),
+                    content=buf.read(),
                     media_type="application/pdf",
                     headers={
                         "Content-Disposition": f"attachment; filename=conversation_selective_{conversation_id[:8]}.pdf"
-                    }
+                    },
                 )
             except Exception as e:
-                logger.error(f"PDF generation failed: {str(e)}", exc_info=True)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"PDF generation failed: {str(e)}"
-                )
-        
+                logger.error(f"PDF generation failed: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"PDF generation failed: {e}")
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in selective export: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+        logger.error(f"Error in selective export: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/chat/conversations/{conversation_id}/token-stats")
+async def get_conversation_token_stats(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    user_id = str(current_user.id)
+    try:
+        conversation = await load_conversation_dict(db, conversation_id, current_user)
+
+        assistant_messages = [m for m in conversation.get("messages", []) if m["role"] == "assistant"]
+
+        total_tokens = total_cached = total_prompt = total_completion = 0
+        total_cost = 0.0
+        priced_messages = 0
+        message_stats = []
+
+        for msg in assistant_messages:
+            tokens = msg.get("metadata", {}).get("tokens", {})
+            t = tokens.get("total_tokens", 0)
+            c = tokens.get("cached_tokens", 0)
+            p = tokens.get("prompt_tokens", 0)
+            comp = tokens.get("completion_tokens", 0)
+            # Priced per message by the model that produced it; None when no
+            # price is configured (never a guessed number).
+            cost = estimate_cost(msg.get("metadata", {}).get("model"), tokens)
+
+            total_tokens += t
+            total_cached += c
+            total_prompt += p
+            total_completion += comp
+            if cost is not None:
+                total_cost += cost
+                priced_messages += 1
+
+            message_stats.append({
+                "message_id": msg.get("id"),
+                "timestamp": msg.get("timestamp"),
+                "tokens": {"total": t, "cached": c, "prompt": p, "completion": comp},
+                "model": msg.get("metadata", {}).get("model"),
+                "cost_usd": round(cost, 6) if cost is not None else None,
+            })
+
+        cache_efficiency = (total_cached / total_tokens * 100) if total_tokens > 0 else 0
+
+        return {
+            "conversation_id": conversation_id,
+            "summary": {
+                "total_messages": len(assistant_messages),
+                "total_tokens": total_tokens,
+                "cached_tokens": total_cached,
+                "prompt_tokens": total_prompt,
+                "completion_tokens": total_completion,
+                "cache_efficiency_percent": round(cache_efficiency, 2),
+                "total_cost_usd": round(total_cost, 6) if priced_messages else None,
+                "priced_messages": priced_messages,
+                "avg_tokens_per_message": round(total_tokens / len(assistant_messages)) if assistant_messages else 0,
+                "avg_cost_per_message": round(total_cost / priced_messages, 6) if priced_messages else None,
+            },
+            "messages": message_stats,
+            "pricing_info": {
+                "source": "LLM_PRICING configuration (USD per million tokens)",
+                "currency": "USD",
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting token stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Debug endpoints:
+@router.get("/chat/debug/database", dependencies=[Depends(_require_debug_mode)])
+async def debug_database(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user),
+):
+    if not current_user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is not assigned to an organization")
+    doc_counts = {
+        row.status: row.count
+        for row in (
+            await db.execute(
+                select(Document.status, func.count(Document.id).label("count"))
+                .where(Document.organization_id == current_user.organization_id)
+                .group_by(Document.status)
+            )
+        ).all()
+    }
+    total_chunks = (
+        await db.execute(
+            select(func.count(ChunkModel.id))
+            .join(Document)
+            .where(Document.organization_id == current_user.organization_id)
         )
-
-
-def _export_selected_to_markdown(conversation: Dict[str, Any]) -> str:
-    """Convert selected messages to markdown format."""
-    metadata = conversation.get('metadata', {})
-    
-    lines = [
-        f"# Selective Conversation Export",
-        f"",
-        f"**Conversation ID:** {conversation['id']}",
-        f"**Created:** {conversation['created_at']}",
-        f"**Exported:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"",
-        f"**Selection:** {metadata.get('exported_message_count', 0)} of {metadata.get('total_messages_in_conversation', 0)} messages",
-        f"",
-        f"---",
-        f"",
-        f"## Selected Messages",
-        f"",
+    ).scalar()
+    chunks_with_embeddings = (
+        await db.execute(
+            text(
+                "SELECT COUNT(*) FROM chunks c "
+                "JOIN documents d ON d.id = c.document_id "
+                "WHERE d.organization_id = :organization_id AND c.embedding IS NOT NULL"
+            ),
+            {"organization_id": str(current_user.organization_id)},
+        )
+    ).scalar()
+    samples = [
+        {
+            "filename": row.filename,
+            "status": row.status,
+            "chunks": row.total_chunks,
+            "uploaded": row.upload_date.isoformat() if row.upload_date else None,
+        }
+        for row in (
+            await db.execute(
+                select(Document.filename, Document.status, Document.total_chunks, Document.upload_date)
+                .where(Document.organization_id == current_user.organization_id)
+                .limit(5)
+            )
+        ).all()
     ]
-    
-    for idx, msg in enumerate(conversation['messages'], 1):
-        role = "**User**" if msg['role'] == 'user' else "**AI Assistant**"
-        timestamp = msg.get('timestamp', '')
-        
-        lines.append(f"### Message {idx}: {role}")
-        if timestamp:
-            try:
-                dt = datetime.fromisoformat(timestamp)
-                lines.append(f"*{dt.strftime('%I:%M %p')}*")
-            except Exception:
-                lines.append(f"*{timestamp}*")
-        lines.append(f"")
-        lines.append(msg['content'])
-        lines.append(f"")
-        
-        if msg['role'] == 'assistant':
-            msg_metadata = msg.get('metadata', {})
-            sources = msg_metadata.get('sources', [])
-            
-            if sources:
-                lines.append(f"**Sources:**")
-                for source in sources:
-                    doc_name = source.get('document', 'Unknown')
-                    page = source.get('page', 'N/A')
-                    lines.append(f"- {doc_name} (Page {page})")
-                lines.append(f"")
-        
-        lines.append(f"---")
-        lines.append(f"")
-    
-    return "\n".join(lines)
+    return {
+        "database_status": "connected",
+        "documents_by_status": doc_counts,
+        "total_chunks": total_chunks,
+        "chunks_with_embeddings": chunks_with_embeddings,
+        "sample_documents": samples,
+        "diagnosis": {
+            "has_documents": sum(doc_counts.values()) > 0,
+            "has_chunks": total_chunks > 0,
+            "has_embeddings": chunks_with_embeddings > 0,
+            "ready_for_search": chunks_with_embeddings > 0,
+        },
+    }
 
-__all__ = ['router']
+
+@router.get("/chat/debug/chunks", dependencies=[Depends(_require_debug_mode)])
+async def debug_chunks(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user),
+):
+    if not current_user.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is not assigned to an organization")
+    tenant_filter = Document.organization_id == current_user.organization_id
+    total_chunks = (
+        await db.execute(select(func.count(ChunkModel.id)).join(Document).where(tenant_filter))
+    ).scalar()
+    chunks_with_embeddings = (
+        await db.execute(
+            text(
+                "SELECT COUNT(*) FROM chunks c "
+                "JOIN documents d ON d.id = c.document_id "
+                "WHERE d.organization_id = :organization_id AND c.embedding IS NOT NULL"
+            ),
+            {"organization_id": str(current_user.organization_id)},
+        )
+    ).scalar()
+    dimension_row = (
+        await db.execute(
+            text(
+                "SELECT array_length(c.embedding, 1) as dim FROM chunks c "
+                "JOIN documents d ON d.id = c.document_id "
+                "WHERE d.organization_id = :organization_id LIMIT 1"
+            ),
+            {"organization_id": str(current_user.organization_id)},
+        )
+    ).first()
+    actual_dim = dimension_row[0] if dimension_row else None
+    sample = (
+        await db.execute(
+            select(ChunkModel.id, ChunkModel.content, ChunkModel.chunk_type)
+            .join(Document)
+            .where(tenant_filter)
+            .limit(1)
+        )
+    ).first()
+
+    return {
+        "total_chunks": total_chunks,
+        "chunks_with_embeddings": chunks_with_embeddings,
+        "expected_dimensions": settings.embedding_dimensions,
+        "actual_dimensions": actual_dim,
+        "dimension_match": actual_dim == settings.embedding_dimensions if actual_dim else False,
+        "sample_chunk": {
+            "id": str(sample[0]),
+            "content": (sample[1][:100] + "...") if sample and sample[1] else None,
+            "type": sample[2] if sample else None,
+        } if sample else None,
+        "status": "ready" if chunks_with_embeddings > 0 else "no_data",
+    }
+
+
+@router.get("/chat/debug/test-embedding", dependencies=[Depends(_require_debug_mode)])
+async def test_embedding(current_user: User = Depends(get_current_admin_user)):
+    from app.services.embedding.embedding_service import embedding_service
+    test_text = "This is a test sentence to verify embeddings are working."
+    try:
+        start = time.time()
+        embedding = await embedding_service.generate_embedding(test_text)
+        return {
+            "status": "success",
+            "provider": embedding_service.provider,
+            "model": embedding_service.model_name,
+            "dimensions": len(embedding),
+            "expected_dimensions": embedding_service.dimensions,
+            "dimension_match": len(embedding) == embedding_service.dimensions,
+            "elapsed_seconds": round(time.time() - start, 2),
+            "sample_values": embedding[:5],
+            "using_local_fallback": embedding_service.use_local_fallback,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e), "error_type": type(e).__name__}
+
+
+@router.get("/chat/debug/config", dependencies=[Depends(_require_debug_mode)])
+async def debug_config(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user),
+):
+    from app.services.ai.registry import chat_chain_for, rerank_client
+    from app.services.embedding.embedding_service import embedding_service
+
+    chain = await chat_chain_for(db, current_user.organization_id)
+    reranker = rerank_client()
+    return {
+        "chat_models": chain.labels,
+        "chat_model_source": chain.source,
+        "embedding_model": f"{embedding_service.provider}:{embedding_service.model_name}",
+        "embedding_dimensions": embedding_service.dimensions,
+        "rerank_model": reranker.label if reranker else "none",
+        "chunk_size": settings.chunk_size,
+        "retrieval_top_k": settings.retrieval_top_k,
+        "similarity_threshold": settings.similarity_threshold,
+    }
+
+
+__all__ = ["router"]

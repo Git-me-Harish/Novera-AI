@@ -1,13 +1,18 @@
 """
 Enhanced Organization customization model with comprehensive theming support.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 from sqlalchemy import Column, String, Boolean, DateTime, Index, Text, ForeignKey, inspect as sa_inspect
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
+
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class OrganizationCustomization(Base):
@@ -121,8 +126,8 @@ class OrganizationCustomization(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     
     # Timestamps
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
     created_by = Column(PGUUID(as_uuid=True), nullable=True)
     
     __table_args__ = (

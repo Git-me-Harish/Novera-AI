@@ -26,16 +26,16 @@ services:
     image: pgvector/pgvector:pg16
     container_name: novera_postgres
     environment:
-      POSTGRES_USER: novera_user
-      POSTGRES_PASSWORD: novera_pass_2025
-      POSTGRES_DB: novera_db
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
     ports:
       - "5433:5432"
     volumes:
       - novera_postgres_data:/var/lib/postgresql/data
       - ./scripts/init_extensions.sql:/docker-entrypoint-initdb.d/init_extensions.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U novera_user -d novera_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -48,13 +48,13 @@ services:
   novera_redis:
     image: redis:7-alpine
     container_name: novera_redis
-    command: redis-server --appendonly yes --requirepass novera_redis_2025
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     ports:
       - "6380:6379"
     volumes:
       - novera_redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "novera_redis_2025", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -77,7 +77,7 @@ services:
     command: >
       sh -c "
         echo '⏳ Waiting for Postgres...' &&
-        until pg_isready -h novera_postgres -U novera_user -d novera_db 2>/dev/null; do
+        until pg_isready -h novera_postgres -U ${POSTGRES_USER} -d ${POSTGRES_DB} 2>/dev/null; do
           sleep 2
         done &&
         echo '✅ Postgres ready' &&
@@ -91,8 +91,8 @@ services:
       - .env
     environment:
       # Override so DB always resolves inside Docker network
-      DATABASE_URL: postgresql+asyncpg://novera_user:novera_pass_2025@novera_postgres:5432/novera_db
-      REDIS_URL: redis://:novera_redis_2025@novera_redis:6379/0
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@novera_postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@novera_redis:6379/0
       POSTGRES_HOST: novera_postgres
       POSTGRES_PORT: "5432"
     ports:
@@ -115,6 +115,35 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # ── Durable document-processing worker ─────────────────────
+  novera_document_worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: novera_document_worker
+    command: python -m app.workers.document_worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@novera_postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@novera_redis:6379/0
+      POSTGRES_HOST: novera_postgres
+      POSTGRES_PORT: "5432"
+      DOCUMENT_WORKER_NAME: document-worker-1
+    volumes:
+      - novera_uploads:/app/data/uploads
+      - novera_logs:/app/logs
+    depends_on:
+      novera_postgres:
+        condition: service_healthy
+      novera_redis:
+        condition: service_healthy
+      novera_backend:
+        condition: service_healthy
+    networks:
+      - novera_net
+    restart: unless-stopped
 
   # ── Frontend (Vite dev server + HMR) ─────────────────────────
   novera_frontend:
@@ -148,8 +177,8 @@ services:
     profiles:
       - tools
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@novera.local
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?PGADMIN_DEFAULT_EMAIL must be set}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?PGADMIN_DEFAULT_PASSWORD must be set}
       PGADMIN_CONFIG_SERVER_MODE: "False"
     ports:
       - "5051:80"

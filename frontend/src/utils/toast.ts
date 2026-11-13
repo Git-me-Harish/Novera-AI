@@ -4,10 +4,16 @@
 
 export type ToastType = 'success' | 'error' | 'info' | 'warning';
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Toast {
   id: string;
   message: string;
   type: ToastType;
+  action?: ToastAction;
 }
 
 class ToastManager {
@@ -28,9 +34,9 @@ class ToastManager {
     this.listeners.forEach(listener => listener([...this.toasts]));
   }
 
-  show(message: string, type: ToastType = 'info', duration = 5000) {
+  show(message: string, type: ToastType = 'info', duration = 5000, action?: ToastAction) {
     const id = `toast-${++this.idCounter}`;
-    const toast: Toast = { id, message, type };
+    const toast: Toast = { id, message, type, action };
     
     this.toasts.push(toast);
     this.notify();
@@ -61,6 +67,11 @@ class ToastManager {
 
   warning(message: string, duration?: number) {
     return this.show(message, 'warning', duration);
+  }
+
+  /** A toast with one action (e.g. "Undo"); the action dismisses the toast. */
+  withAction(message: string, action: ToastAction, type: ToastType = 'info', duration = 8000) {
+    return this.show(message, type, duration, action);
   }
 }
 

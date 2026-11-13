@@ -1,18 +1,29 @@
-"""
-Enhanced user models with authentication support.
-"""
-from datetime import datetime
+""" Enhanced user models with authentication support """
+from __future__ import annotations
+
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
-from sqlalchemy import Column, String, Boolean, DateTime, Index, ForeignKey, inspect as sa_inspect
+
+from sqlalchemy import Column, String, Boolean, DateTime, Index, ForeignKey
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from sqlalchemy.orm import relationship
+
 from app.db.session import Base
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# Role hierarchy constants — add new roles here once
+_ADMIN_ROLES = frozenset({"admin", "org_admin", "super_admin"})
+_ORG_ADMIN_ROLES = frozenset({"admin", "org_admin"})
+
+
 class User(Base):
-    """
-    User model with authentication and profile information.
-    """
+    """User model with authentication and profile information."""
+
     __tablename__ = "users"
 
     # Primary Key
@@ -23,52 +34,64 @@ class User(Base):
     username = Column(String(100), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
 
-    # Profile Information
+    # Profile
     full_name = Column(String(255), nullable=True)
     avatar_url = Column(String(512), nullable=True)
 
     # Role & Status
     role = Column(String(20), nullable=False, default="user")
-    organization_id = Column(PGUUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True)
-    # Organization (for customization)
+    organization_id = Column(
+        PGUUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     organization = relationship("Organization", back_populates="users")
     is_active = Column(Boolean, default=True, nullable=False)
     is_verified = Column(Boolean, default=False, nullable=False)
 
-    # Timestamps
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-    last_login = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+    last_login = Column(DateTime(timezone=True), nullable=True)
 
-    # JSONB Columns
+    # JSONB
     preferences = Column(JSONB, nullable=False, default=dict)
     user_metadata = Column("metadata", JSONB, nullable=False, default=dict)
 
     __table_args__ = (
-        Index('idx_email_active', 'email', 'is_active'),
-        Index('idx_username_active', 'username', 'is_active'),
+        Index("idx_email_active", "email", "is_active"),
+        Index("idx_username_active", "username", "is_active"),
     )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email}, role={self.role})>"
 
-    def is_admin(self):
-        return self.role in ["admin", "org_admin", "super_admin"]
-    
-    def is_super_admin(self):
+    # Role helpers:
+    def is_admin(self) -> bool:
+        return self.role in _ADMIN_ROLES
+
+    def is_super_admin(self) -> bool:
         return self.role == "super_admin"
 
-    def is_org_admin(self):
-        return self.role in ["admin", "org_admin"]
+    def is_org_admin(self) -> bool:
+        return self.role in _ORG_ADMIN_ROLES
 
-    def to_dict(self, include_sensitive: bool = False, include_organization: bool = True):
+    # Serialisation:
+    def to_dict(
+        self,
+        include_sensitive: bool = False,
+        include_organization: bool = True,
+    ) -> dict:
         """
-        Convert user to dictionary.
-        
-        IMPORTANT: This method is defensive against lazy loading in async contexts.
-        It checks if the organization relationship is loaded before accessing it.
+        Convert user to a plain dict.
+
+        Defensive against lazy-load in async contexts: checks SQLAlchemy's
+        inspect to see if the organization relationship is already loaded
+        before accessing it.
         """
-        data = {
+        data: dict = {
             "id": str(self.id),
             "email": self.email,
             "username": self.username,
@@ -81,97 +104,92 @@ class User(Base):
             "last_login": self.last_login.isoformat() if self.last_login else None,
             "preferences": self.preferences or {},
             "metadata": self.user_metadata or {},
+            # FIX: always include, even when None
             "organization_id": str(self.organization_id) if self.organization_id else None,
         }
-        
-        # Include organization details if requested and available
-        # FIX: Check if organization is loaded before accessing to avoid lazy load
+
         if include_organization and self.organization_id:
-            # Use SQLAlchemy's inspect to check if relationship is loaded
             insp = sa_inspect(self)
-            
-            # Only access self.organization if it's already loaded
-            if 'organization' not in insp.unloaded:
-                # Organization is loaded, safe to access
-                if self.organization:
-                    data["organization"] = {
-                        "id": str(self.organization.id),
-                        "name": self.organization.name,
-                        "display_name": self.organization.display_name
-                    }
+            if "organization" not in insp.unloaded and self.organization:
+                data["organization"] = {
+                    "id": str(self.organization.id),
+                    "name": self.organization.name,
+                    "display_name": self.organization.display_name,
+                }
             else:
-                # Organization not loaded - don't trigger lazy load in async context
-                # Just set to None, the organization_id is already in the data
                 data["organization"] = None
-        
+
         return data
 
+
 class RefreshToken(Base):
-    """
-    Refresh token model for JWT authentication.
-    """
+    """JWT refresh token — revocable per session."""
+
     __tablename__ = "refresh_tokens"
 
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id = Column(PGUUID(as_uuid=True), nullable=False, index=True)
     token = Column(String(512), unique=True, nullable=False, index=True)
-    expires_at = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=False)     # FIX: TIMESTAMPTZ
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     revoked = Column(Boolean, default=False, nullable=False)
 
     user_agent = Column(String(512), nullable=True)
     ip_address = Column(String(45), nullable=True)
 
     __table_args__ = (
-        Index('idx_token_active', 'token', 'revoked'),
-        Index('idx_user_active', 'user_id', 'revoked'),
+        Index("idx_token_active", "token", "revoked"),
+        Index("idx_user_active", "user_id", "revoked"),
     )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<RefreshToken(id={self.id}, user_id={self.user_id}, revoked={self.revoked})>"
-    
+
+
 class PasswordResetToken(Base):
-    """
-    Password reset token model for secure password recovery.
-    """
+    """One-time password reset token."""
+
     __tablename__ = "password_reset_tokens"
 
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id = Column(PGUUID(as_uuid=True), nullable=False, index=True)
     token = Column(String(512), unique=True, nullable=False, index=True)
-    expires_at = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     used = Column(Boolean, default=False, nullable=False)
     ip_address = Column(String(45), nullable=True)
 
     __table_args__ = (
-        Index('idx_reset_token_active', 'token', 'used'),
-        Index('idx_reset_user_active', 'user_id', 'used'),
+        Index("idx_reset_token_active", "token", "used"),
+        Index("idx_reset_user_active", "user_id", "used"),
     )
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"<PasswordResetToken(id={self.id}, user_id={self.user_id}, used={self.used})>"
 
+
 class EmailVerificationToken(Base):
-    """
-    Email verification token model for account activation.
-    """
+    """One-time email verification token."""
+
     __tablename__ = "email_verification_tokens"
 
     id = Column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id = Column(PGUUID(as_uuid=True), nullable=False, index=True)
     token = Column(String(512), unique=True, nullable=False, index=True)
-    expires_at = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_utcnow)
     used = Column(Boolean, default=False, nullable=False)
     ip_address = Column(String(45), nullable=True)
 
     __table_args__ = (
-        Index('idx_verification_token_active', 'token', 'used'),
-        Index('idx_verification_user_active', 'user_id', 'used'),
+        Index("idx_verification_token_active", "token", "used"),
+        Index("idx_verification_user_active", "user_id", "used"),
     )
 
-    def __repr__(self):
-        return f"<EmailVerificationToken(id={self.id}, user_id={self.user_id}, used={self.used})>"
+    def __repr__(self) -> str:
+        return (
+            f"<EmailVerificationToken(id={self.id}, user_id={self.user_id}, used={self.used})>"
+        )
 
-__all__ = ['User', 'RefreshToken', 'PasswordResetToken', 'EmailVerificationToken']
+
+__all__ = ["User", "RefreshToken", "PasswordResetToken", "EmailVerificationToken"]

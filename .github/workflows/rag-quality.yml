@@ -1,0 +1,123 @@
+name: Novera RAG quality
+
+on:
+  workflow_call:
+    inputs:
+      dataset-path:
+        description: "Protected golden JSONL path materialized by the caller"
+        required: true
+        type: string
+      predictions-path:
+        description: "Protected predictions JSONL path materialized by the caller"
+        required: true
+        type: string
+      judgments-path:
+        description: "Judge verdicts JSONL from app.evaluation.judge, recorded with the predictions"
+        required: true
+        type: string
+      min-recall-at-5:
+        required: true
+        type: number
+      min-answer-correctness:
+        required: true
+        type: number
+      min-faithfulness:
+        required: true
+        type: number
+      min-citation-recall:
+        required: true
+        type: number
+      max-p95-latency-ms:
+        required: true
+        type: number
+
+jobs:
+  regression-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      # Chat-history tests exercise real SQL (keyset paging, full-text search,
+      # row locks); without a database they would silently skip.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: novera_ci
+          POSTGRES_PASSWORD: novera_ci
+          POSTGRES_DB: novera_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U novera_ci" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://novera_ci:novera_ci@localhost:5432/novera_ci
+      SECRET_KEY: ci-only-secret-key-not-used-anywhere-else-0123456789
+      ENVIRONMENT: test
+      # Migration 002 creates the first admin and refuses to run without these.
+      DEFAULT_ADMIN_EMAIL: admin@example.invalid
+      DEFAULT_ADMIN_PASSWORD: Ci-Throwaway-Passw0rd!
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: psql postgresql://novera_ci:novera_ci@localhost:5432/novera_ci -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
+      - run: alembic upgrade head
+      - run: python -m pytest tests/test_phase0_release_blockers.py tests/test_evaluation_foundation.py tests/test_rag_correctness.py tests/test_ai_providers.py tests/test_ai_settings_api.py tests/test_conversation_store.py tests/test_auth_token_flows.py -q
+
+  frontend:
+    # vite build alone does not typecheck; the 23 API methods that pages called
+    # but the client no longer had shipped silently because of that.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  rag-quality-gate:
+    needs: regression-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Validate protected evaluation artifacts
+        shell: bash
+        run: |
+          test -f "${{ inputs.dataset-path }}"
+          test -f "${{ inputs.predictions-path }}"
+          test -f "${{ inputs.judgments-path }}"
+      - name: Run RAG quality gate
+        env:
+          PYTHONPATH: .
+        run: >-
+          python -m app.evaluation.runner
+          --dataset "${{ inputs.dataset-path }}"
+          --predictions "${{ inputs.predictions-path }}"
+          --judgments "${{ inputs.judgments-path }}"
+          --output ../rag-evaluation-report.json
+          --min-recall-at-5 "${{ inputs.min-recall-at-5 }}"
+          --min-answer-correctness "${{ inputs.min-answer-correctness }}"
+          --min-faithfulness "${{ inputs.min-faithfulness }}"
+          --min-citation-recall "${{ inputs.min-citation-recall }}"
+          --max-p95-latency-ms "${{ inputs.max-p95-latency-ms }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: novera-rag-evaluation-report
+          path: rag-evaluation-report.json

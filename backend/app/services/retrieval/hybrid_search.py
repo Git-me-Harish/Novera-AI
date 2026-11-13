@@ -9,19 +9,18 @@ FIX NOTES:
   the session between the semantic and keyword search steps so keyword search
   always runs on a clean transaction.
 - Added a helper _safe_rollback() to avoid swallowing secondary errors.
-- Debug count query wrapped in its own try/except so it never blocks search.
 """
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
 from loguru import logger
 
 from app.core.config import settings
 from app.services.retrieval.vector_search import vector_search_service
 from app.services.retrieval.keyword_search import keyword_search_service
 from app.services.embedding.embedding_service import embedding_service
+from app.core.rag_trace import hash_value
 
 
 class HybridSearchService:
@@ -50,25 +49,6 @@ class HybridSearchService:
         except Exception as e:
             logger.warning(f"Rollback attempt failed [{context}]: {e}")
 
-    async def _count_available_chunks(self, db: AsyncSession) -> int:
-        """
-        Debug helper: count completed chunks in DB.
-        Isolated in its own try/except so it never breaks the main search.
-        """
-        try:
-            from app.models.document import Document, Chunk as ChunkModel
-            count_query = (
-                select(func.count(ChunkModel.id))
-                .join(Document)
-                .where(Document.status == "completed")
-            )
-            result = await db.execute(count_query)
-            return result.scalar() or 0
-        except Exception as e:
-            logger.warning(f"Could not count chunks (non-fatal): {e}")
-            await self._safe_rollback(db, "chunk count fallback")
-            return -1   # -1 signals "unknown"
-
     # ------------------------------------------------------------------
     # Main search
     # ------------------------------------------------------------------
@@ -77,6 +57,7 @@ class HybridSearchService:
         self,
         query: str,
         db: AsyncSession,
+        organization_id: UUID,
         top_k: Optional[int] = None,
         use_semantic: bool = True,
         use_keyword: bool = True,
@@ -84,26 +65,22 @@ class HybridSearchService:
         department: Optional[str] = None,
         document_filter: Optional[List[str]] = None,
         boost_documents: Optional[List[str]] = None,
+        query_embedding: Optional[List[float]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Perform hybrid search with optional document scoping and boosting.
 
         Execution order:
-          1. (debug) count available chunks
-          2. Semantic (vector) search   — rollback session on failure
-          3. Keyword (FTS) search       — rollback session on failure
-          4. RRF fusion + sort
+          1. Semantic (vector) search   — rollback session on failure
+          2. Keyword (FTS) search       — rollback session on failure
+          3. RRF fusion + sort
         """
         k = top_k or self.top_k
 
-        logger.info(f"Hybrid search: query='{query[:50]}...', k={k}")
+        logger.info(f"Hybrid search: query_hash={hash_value(query)}, chars={len(query)}, k={k}")
         logger.info(f"  Filters: doc_type={doc_type}, department={department}")
         logger.info(f"  Document filter: {document_filter}")
         logger.info(f"  Boost documents: {boost_documents}")
-
-        # Debug: total chunk count (best-effort, non-blocking)
-        total_available = await self._count_available_chunks(db)
-        logger.info(f"  Total chunks available in DB: {total_available}")
 
         results: Dict[str, Dict[str, Any]] = {}
 
@@ -113,11 +90,12 @@ class HybridSearchService:
         if use_semantic:
             logger.info("Running semantic search...")
             try:
-                query_embedding = await embedding_service.embed_query(query)
+                query_embedding = query_embedding or await embedding_service.embed_query(query)
 
                 semantic_results = await vector_search_service.search_similar_chunks(
                     query_embedding=query_embedding,
                     db=db,
+                    organization_id=organization_id,
                     top_k=k * 2,
                     doc_type=doc_type,
                     department=department,
@@ -152,6 +130,7 @@ class HybridSearchService:
                 keyword_results = await keyword_search_service.search_keywords(
                     query=query,
                     db=db,
+                    organization_id=organization_id,
                     top_k=k,
                     doc_type=doc_type,
                     department=department,
@@ -245,10 +224,16 @@ class HybridSearchService:
         self,
         query: str,
         db: AsyncSession,
+        organization_id: UUID,
         top_k: Optional[int] = None,
         expand_neighbors: bool = True,
+        use_semantic: bool = True,
+        use_keyword: bool = True,
+        doc_type: Optional[str] = None,
+        department: Optional[str] = None,
         document_filter: Optional[List[str]] = None,
         boost_documents: Optional[List[str]] = None,
+        query_embedding: Optional[List[float]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Hybrid search with automatic neighboring-chunk context expansion.
@@ -267,9 +252,15 @@ class HybridSearchService:
         initial_results = await self.search(
             query=query,
             db=db,
+            organization_id=organization_id,
             top_k=top_k,
+            use_semantic=use_semantic,
+            use_keyword=use_keyword,
+            doc_type=doc_type,
+            department=department,
             document_filter=document_filter,
             boost_documents=boost_documents,
+            query_embedding=query_embedding,
         )
 
         if not expand_neighbors:
@@ -294,6 +285,7 @@ class HybridSearchService:
             neighbors = await vector_search_service.get_chunk_neighbors(
                 chunk_id=chunk_id,
                 db=db,
+                organization_id=organization_id,
                 n_before=1,
                 n_after=1,
             )

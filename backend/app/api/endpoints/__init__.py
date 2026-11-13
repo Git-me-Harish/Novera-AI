@@ -11,6 +11,8 @@ from app.api.endpoints import (
     document_editor,
     customization,
     organization,
+    ai_settings,
+    conversations,
 )
 
 __all__ = [
@@ -23,4 +25,6 @@ __all__ = [
     'document_editor',
     'customization',
     'organization',
+    'ai_settings',
+    'conversations',
 ]

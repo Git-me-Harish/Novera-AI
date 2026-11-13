@@ -57,7 +57,7 @@ export default function ToastContainer() {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-4 right-4 z-50 space-y-2 max-w-md">
+    <div className="fixed top-4 right-4 z-50 space-y-2 max-w-md" role="status" aria-live="polite">
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -72,6 +72,17 @@ export default function ToastContainer() {
           <p className={`flex-1 text-sm font-medium ${getTextColor(t.type)}`}>
             {t.message}
           </p>
+          {t.action && (
+            <button
+              onClick={() => {
+                t.action?.onClick();
+                toast.remove(t.id);
+              }}
+              className="text-sm font-semibold underline underline-offset-2 hover:no-underline"
+            >
+              {t.action.label}
+            </button>
+          )}
           <button
             onClick={() => toast.remove(t.id)}
             className="text-gray-400 hover:text-gray-600 transition-colors"

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 import httpx
 from loguru import logger
-from backend.app.core.config import settings
+from app.core.config import settings
 
 
 
@@ -183,7 +183,8 @@ async def test_chunk_retrieval():
                 logger.info(f"   Tokens: {chunk.token_count}")
                 logger.info(f"   Pages: {chunk.page_numbers}")
                 logger.info(f"   Content preview: {chunk.content[:150]}...")
-                logger.info(f"   Embedding dimensions: {len(chunk.embedding) if chunk.embedding else 0}")
+                embedding_dimensions = len(chunk.embedding) if chunk.embedding is not None else 0
+                logger.info(f"   Embedding dimensions: {embedding_dimensions}")
         else:
             logger.warning("No documents found in database")
 

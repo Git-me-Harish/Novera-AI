@@ -167,7 +167,7 @@ export default function ChunkList({ chunks, onEditChunk }: ChunkListProps) {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start gap-2 mb-1">
                           {hasAITitle && (
-                            <Sparkles className="w-4 h-4 text-purple-500 flex-shrink-0 mt-0.5" title="AI-generated title" />
+                            <span title="AI-generated title" className="flex-shrink-0 mt-0.5"><Sparkles className="w-4 h-4 text-purple-500" /></span>
                           )}
                           <h3 className="text-sm sm:text-base font-semibold text-gray-900 break-words flex-1">
                             {displayTitle}

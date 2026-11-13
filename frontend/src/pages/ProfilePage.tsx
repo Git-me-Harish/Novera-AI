@@ -128,7 +128,7 @@ export default function ProfilePage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-xs text-gray-500">Member Since</p>
                   <p className="text-sm sm:text-base font-medium text-gray-900">
-                    {formatDistanceToNow(new Date(user.created_at), { addSuffix: true })}
+                    {user.created_at ? formatDistanceToNow(new Date(user.created_at), { addSuffix: true }) : '—'}
                   </p>
                 </div>
               </div>

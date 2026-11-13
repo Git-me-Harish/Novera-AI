@@ -1,0 +1,4 @@
+# Test and quality tooling; not installed in the production image.
+pytest==8.3.4
+pytest-asyncio==0.25.0
+httpx==0.28.1

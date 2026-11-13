@@ -4,7 +4,6 @@ import { LogIn, Mail, Lock, AlertCircle, Loader2, Eye, EyeOff } from 'lucide-rea
 import { useAuth } from '../contexts/AuthContext';
 import { useCustomization } from '../contexts/CustomizationContext';
 import VerificationReminder from '../components/auth/VerificationReminder';
-import api from '../services/api';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -19,7 +18,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showVerificationReminder, setShowVerificationReminder] = useState(false);
-  const [userEmail, setUserEmail] = useState('');
+  const [userEmail] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
   const from = (location.state as any)?.from?.pathname || '/chat';

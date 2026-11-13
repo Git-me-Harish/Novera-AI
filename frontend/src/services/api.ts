@@ -1,17 +1,75 @@
-/**
- * API Service for communicating with the backend
- */
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import type { Customization, CustomizationUpdateRequest, ThemePreset } from '../types';
+import { apiBase } from '../utils/apiBase';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '';const API_VERSION = '/api/v1';
+const API_VERSION = '/api/v1';
+const ACCESS_TOKEN_KEY = 'access_token';
+const REFRESH_TOKEN_KEY = 'refresh_token';
 
-console.log('🔧 API Configuration:', {
-  baseURL: `${API_BASE_URL}${API_VERSION}`,
-  env: import.meta.env.MODE
-});
+/** Fired when the session cannot be refreshed; AuthContext listens and signs out. */
+export const AUTH_EXPIRED_EVENT = 'novera:auth-expired';
 
-// Types
+/* ── Chat history ─────────────────────────────────────────────────────────── */
+
+/** Search snippets wrap matches in these control characters (never in user text). */
+export const HIGHLIGHT_START = '\u0002';
+export const HIGHLIGHT_END = '\u0003';
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  title_source: 'default' | 'auto' | 'user';
+  is_pinned: boolean;
+  is_archived: boolean;
+  message_count: number;
+  last_message_at: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  /** Latest message, trimmed. */
+  preview: string | null;
+  /** Best search match with highlight markers; only present when searching. */
+  snippet: string | null;
+}
+
+export interface ConversationPage {
+  items: ConversationSummary[];
+  next_cursor: string | null;
+  retention_days: number;
+}
+
+export interface StoredMessage {
+  id: string;
+  sequence: number;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: string;
+  metadata: ChatMessage['metadata'] & Record<string, unknown>;
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  user_id: string;
+  metadata: Record<string, unknown>;
+  context: Record<string, unknown>;
+  messages: StoredMessage[];
+  has_more_before: boolean;
+}
+
+export interface ConversationStats {
+  total: number;
+  pinned: number;
+  archived: number;
+  deleted: number;
+  messages: number;
+}
+
+export type ConversationListView = 'all' | 'pinned' | 'archived' | 'deleted';
+
+/** @deprecated kept for older components; use ConversationDetail. */
+export type Conversation = ConversationDetail;
+
+/* ── Domain types ───────────────────────────────────────────────────────── */
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -76,14 +134,6 @@ export interface Document {
   processed_date: string | null;
 }
 
-export interface Conversation {
-  id: string;
-  user_id: string;
-  created_at: string;
-  updated_at: string;
-  messages: ChatMessage[];
-  metadata: any;
-}
 
 export interface AdminUser {
   id: string;
@@ -202,176 +252,157 @@ export interface DocumentEditStats {
   edit_percentage: number;
 }
 
-class ApiService {
-  private api: AxiosInstance;
+/* ── Transport ────────────────────────────────────────────────────────────── */
 
-  constructor() {
-    this.api = axios.create({
-      baseURL: `${API_BASE_URL}${API_VERSION}`,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      timeout: 120000,
-      withCredentials: true,
-    });
+export const apiClient: AxiosInstance = axios.create({
+  baseURL: `${apiBase}${API_VERSION}`,
+  headers: { 'Content-Type': 'application/json' },
+  // Answers can take a while; uploads set their own timeout.
+  timeout: 60_000,
+});
+const client = apiClient;
 
-    // Request interceptor
-    this.api.interceptors.request.use(
-      (config) => {
-        const token = localStorage.getItem('access_token');
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-        
-        console.log('📤 API Request:', {
-          method: config.method?.toUpperCase(),
-          url: config.url,
-          baseURL: config.baseURL,
-          fullURL: `${config.baseURL}${config.url}`,
-          headers: {
-            ...config.headers,
-            Authorization: token ? 'Bearer ***' : 'None'
-          }
-        });
-        
-        return config;
-      },
-      (error) => {
-        console.error('❌ Request Error:', error);
-        return Promise.reject(error);
-      }
-    );
-
-    // Response interceptor
-    this.api.interceptors.response.use(
-    (response) => {
-      console.log('✅ API Response:', {
-        status: response.status,
-        url: response.config.url,
-      });
-      return response;
-    },
-    async (error) => {
-      const originalRequest = error.config;
-
-      console.error('❌ API Error:', {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        url: originalRequest?.url,
-        method: originalRequest?.method,
-        hasToken: !!localStorage.getItem('access_token'),
-      });
-
-      // Handle authentication errors
-      if (error.response?.status === 401 && !originalRequest._retry) {
-        originalRequest._retry = true;
-
-        const refreshToken = localStorage.getItem('refresh_token');
-        
-        if (!refreshToken) {
-          console.error('No refresh token available, redirecting to login');
-          localStorage.clear();
-          window.location.href = '/login';
-          return Promise.reject(error);
-        }
-
-        try {
-          console.log('🔄 Attempting to refresh token...');
-          
-          const response = await axios.post(
-            `${API_BASE_URL}${API_VERSION}/auth/refresh`,
-            { refresh_token: refreshToken },
-            {
-              headers: {
-                'Content-Type': 'application/json',
-              }
-            }
-          );
-
-          const { access_token } = response.data;
-          
-          console.log('✅ Token refreshed successfully');
-          localStorage.setItem('access_token', access_token);
-
-          // Retry original request with new token
-          originalRequest.headers.Authorization = `Bearer ${access_token}`;
-          return this.api(originalRequest);
-          
-        } catch (refreshError: any) {
-          console.error('❌ Token refresh failed:', refreshError);
-          
-          // Clear tokens and redirect to login
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
-          
-          // Don't redirect if already on login page
-          if (!window.location.pathname.includes('/login')) {
-            window.location.href = '/login';
-          }
-          
-          return Promise.reject(refreshError);
-        }
-      }
-
-      // Handle validation errors
-      if (error.response?.status === 422) {
-        console.error('Validation Error (422):', {
-          url: originalRequest.url,
-          method: originalRequest.method,
-          data: originalRequest.data,
-          errors: error.response.data.detail,
-        });
-      }
-
-      // Handle network errors
-      if (error.message === 'Network Error') {
-        console.error('🚫 Network Error - Possible CORS issue or server not running');
-      }
-
-      return Promise.reject(error);
-    }
-  );
+client.interceptors.request.use((config) => {
+  const token = localStorage.getItem(ACCESS_TOKEN_KEY);
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
   }
+  return config;
+});
 
+let refreshInFlight: Promise<string | null> | null = null;
+
+/**
+ * Exchange the refresh token for a new access token.
+ * Single-flight: concurrent callers share one request, so a burst of 401s
+ * triggers exactly one refresh instead of racing each other.
+ */
+export function refreshAccessToken(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+      if (!refreshToken) return null;
+      try {
+        const res = await axios.post<{ access_token: string; refresh_token?: string }>(
+          `${apiBase}${API_VERSION}/auth/refresh`,
+          { refresh_token: refreshToken },
+          { timeout: 15_000 }
+        );
+        localStorage.setItem(ACCESS_TOKEN_KEY, res.data.access_token);
+        // Store a rotated refresh token if the server issues one.
+        if (res.data.refresh_token) {
+          localStorage.setItem(REFRESH_TOKEN_KEY, res.data.refresh_token);
+        }
+        return res.data.access_token;
+      } catch {
+        return null;
+      } finally {
+        refreshInFlight = null;
+      }
+    })();
+  }
+  return refreshInFlight;
+}
+
+export function clearSession(): void {
+  // Only our own keys: other preferences in localStorage must survive sign-out.
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+const NO_REFRESH_PATHS = ['/auth/login', '/auth/refresh', '/auth/register', '/auth/logout'];
+
+client.interceptors.response.use(
+  (response) => response,
+  async (error: AxiosError) => {
+    const original = error.config as (InternalAxiosRequestConfig & { _retried?: boolean }) | undefined;
+    const isAuthCall = NO_REFRESH_PATHS.some((p) => original?.url?.startsWith(p));
+    if (error.response?.status === 401 && original && !original._retried && !isAuthCall) {
+      original._retried = true;
+      const token = await refreshAccessToken();
+      if (token) {
+        original.headers.Authorization = `Bearer ${token}`;
+        return client(original);
+      }
+      clearSession();
+      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+    }
+    return Promise.reject(error);
+  }
+);
+
+/** The server's error message for display, without leaking request data. */
+export function errorMessage(error: unknown, fallback = 'Something went wrong'): string {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data as { detail?: unknown; message?: string } | undefined;
+    if (typeof data?.detail === 'string') return data.detail;
+    if (Array.isArray(data?.detail)) return 'Please check the highlighted fields';
+    if (data?.message) return data.message;
+    if (error.code === 'ECONNABORTED') return 'The request timed out. Please try again.';
+    if (!error.response) return 'Cannot reach the server. Check your connection.';
+  }
+  return fallback;
+}
+
+/**
+ * Turn a FastAPI 422 into a readable Error. Never logs: validation errors echo
+ * the submitted input, which for login is the password.
+ */
+function throwValidationError(error: unknown): void {
+  const detail = axios.isAxiosError(error)
+    ? (error.response?.data as { detail?: unknown } | undefined)?.detail
+    : undefined;
+  if (Array.isArray(detail)) {
+    throw new Error(
+      detail
+        .map((item: { loc?: unknown[]; msg?: string }) =>
+          `${(item.loc ?? []).filter((part) => part !== 'body').join('.')}: ${item.msg ?? 'invalid'}`)
+        .join('; ')
+    );
+  }
+}
+
+function downloadFilename(header: string | undefined, fallback: string): string {
+  const match = header?.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  return match ? decodeURIComponent(match[1]) : fallback;
+}
+
+/** Save a Blob as a file in the browser. */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+/* ── API ──────────────────────────────────────────────────────────────── */
+
+class APIService {
   async healthCheck() {
     try {
-      const response = await this.api.get('/health');
-      console.log('💚 Health check passed:', response.data);
+      const response = await client.get('/health');
       return response.data;
     } catch (error) {
-      console.error('💔 Health check failed:', error);
       throw error;
     }
   }
 
   async sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
-    const response = await this.api.post('/chat', request);
+    const response = await client.post('/chat', request);
     return response.data;
-  }
-
-  async getConversations(limit: number = 10): Promise<Conversation[]> {
-    const response = await this.api.get('/chat/conversations', {
-      params: { limit },
-    });
-    return response.data;
-  }
-
-  async getConversation(conversationId: string): Promise<Conversation> {
-    const response = await this.api.get(`/chat/conversations/${conversationId}`);
-    return response.data;
-  }
-
-  async deleteConversation(conversationId: string): Promise<void> {
-    await this.api.delete(`/chat/conversations/${conversationId}`);
   }
 
   async getConversationAnalytics(conversationId: string): Promise<any> {
-    const response = await this.api.get(`/chat/conversations/${conversationId}/analytics`);
+    const response = await client.get(`/chat/conversations/${conversationId}/analytics`);
     return response.data;
   }
 
   async getConversationTokenStats(conversationId: string): Promise<TokenStats> {
-    const response = await this.api.get(`/chat/conversations/${conversationId}/token-stats`);
+    const response = await client.get(`/chat/conversations/${conversationId}/token-stats`);
     return response.data;
   }
 
@@ -386,7 +417,7 @@ class ApiService {
     const params: any = { doc_type: docType };
     if (department) params.department = department;
 
-    const response = await this.api.post('/documents/upload', formData, {
+    const response = await client.post('/documents/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
@@ -406,7 +437,7 @@ class ApiService {
     const params: any = { doc_type: docType };
     if (department) params.department = department;
 
-    const response = await this.api.post('/documents/upload-multiple', formData, {
+    const response = await client.post('/documents/upload-multiple', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       params,
     });
@@ -420,21 +451,21 @@ class ApiService {
     status?: string;
     department?: string;
   }): Promise<{ total: number; documents: Document[] }> {
-    const response = await this.api.get('/documents', { params });
+    const response = await client.get('/documents', { params });
     return response.data;
   }
 
   async getDocumentStatus(documentId: string): Promise<any> {
-    const response = await this.api.get(`/documents/${documentId}/status`);
+    const response = await client.get(`/documents/${documentId}/status`);
     return response.data;
   }
 
   async deleteDocument(documentId: string): Promise<void> {
-    await this.api.delete(`/documents/${documentId}`);
+    await client.delete(`/documents/${documentId}`);
   }
 
   async search(query: string, topK: number = 5, docType?: string) {
-    const response = await this.api.post('/search', null, {
+    const response = await client.post('/search', null, {
       params: { query, top_k: topK, doc_type: docType },
     });
     return response.data;
@@ -447,22 +478,19 @@ class ApiService {
     fullName?: string
   ): Promise<any> {
     try {
-      console.log('Registration attempt:', { email, username });
       
-      const response = await this.api.post('/auth/register', {
+      const response = await client.post('/auth/register', {
         email,
         username,
         password,
         full_name: fullName,
       });
       
-      console.log('Registration successful');
       return response.data;
       
     } catch (error: any) {
       if (error.response?.status === 422) {
-        console.error('Registration validation failed');
-        this.handleValidationError(error);
+        throwValidationError(error);
       }
       throw error;
     }
@@ -470,34 +498,19 @@ class ApiService {
 
   async login(email: string, password: string): Promise<any> {
     try {
-      console.log('Login attempt:', { 
-        email, 
-        passwordLength: password.length,
-        requestPayload: { email, password: '***' }
-      });
       
-      const response = await this.api.post('/auth/login', {
+      const response = await client.post('/auth/login', {
         email: email,
         password: password,
       });
       
-      console.log('Login successful:', {
-        hasAccessToken: !!response.data.access_token,
-        hasRefreshToken: !!response.data.refresh_token,
-        user: response.data.user?.email,
-      });
       
       return response.data;
       
     } catch (error: any) {
-      console.error('Login failed:', {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data,
-      });
       
       if (error.response?.status === 422) {
-        this.handleValidationError(error);
+        throwValidationError(error);
       }
       
       throw error;
@@ -505,13 +518,13 @@ class ApiService {
   }
 
   async logout(refreshToken: string): Promise<void> {
-    await this.api.post('/auth/logout', {
+    await client.post('/auth/logout', {
       refresh_token: refreshToken,
     });
   }
 
   async getCurrentUser(): Promise<any> {
-    const response = await this.api.get('/auth/me');
+    const response = await client.get('/auth/me');
     return response.data;
   }
 
@@ -521,7 +534,7 @@ class ApiService {
     preferences?: Record<string, any>;
     metadata?: Record<string, any>;
   }): Promise<any> {
-    const response = await this.api.put('/auth/profile', data);
+    const response = await client.put('/auth/profile', data);
     return response.data;
   }
 
@@ -529,7 +542,7 @@ class ApiService {
     currentPassword: string,
     newPassword: string
   ): Promise<void> {
-    await this.api.post('/auth/change-password', {
+    await client.post('/auth/change-password', {
       current_password: currentPassword,
       new_password: newPassword,
     });
@@ -537,61 +550,54 @@ class ApiService {
 
   async forgotPassword(email: string): Promise<any> {
   try {
-    console.log('Sending forgot password request for:', email);
-    const response = await this.api.post('/auth/forgot-password', {
+    const response = await client.post('/auth/forgot-password', {
       email,
     });
-    console.log('Forgot password response:', response.data);
     return response.data;
   } catch (error: any) {
-    console.error('Forgot password error:', error.response?.data);
     throw error;
   }
 }
 
   async verifyResetToken(token: string): Promise<any> {
     try {
-      const response = await this.api.post('/auth/verify-reset-token', {
+      const response = await client.post('/auth/verify-reset-token', {
         token,
       });
       return response.data;
     } catch (error: any) {
-      console.error('Verify reset token error:', error.response?.data);
       throw error;
     }
   }
 
   async resetPassword(token: string, newPassword: string): Promise<any> {
     try {
-      const response = await this.api.post('/auth/reset-password', {
+      const response = await client.post('/auth/reset-password', {
         token,
         new_password: newPassword,
       });
       return response.data;
     } catch (error: any) {
-      console.error('Reset password error:', error.response?.data);
       throw error;
     }
   }
 
   async verifyEmail(token: string): Promise<any> {
     try {
-      const response = await this.api.post('/auth/verify-email', {
+      const response = await client.post('/auth/verify-email', {
         token,
       });
       return response.data;
     } catch (error: any) {
-      console.error('Email verification error:', error.response?.data);
       throw error;
     }
   }
 
   async resendVerificationEmail(): Promise<any> {
     try {
-      const response = await this.api.post('/auth/resend-verification');
+      const response = await client.post('/auth/resend-verification');
       return response.data;
     } catch (error: any) {
-      console.error('Resend verification error:', error.response?.data);
       throw error;
     }
   }
@@ -603,17 +609,17 @@ class ApiService {
     is_active?: boolean;
     search?: string;
   }): Promise<{ total: number; users: AdminUser[] }> {
-    const response = await this.api.get('/admin/users', { params });
+    const response = await client.get('/admin/users', { params });
     return response.data;
   }
 
   async getUserStats(): Promise<UserStats> {
-    const response = await this.api.get('/admin/users/stats');
+    const response = await client.get('/admin/users/stats');
     return response.data;
   }
 
   async getSystemStats(): Promise<SystemStats> {
-    const response = await this.api.get('/admin/stats');
+    const response = await client.get('/admin/stats/system');
     return response.data;
   }
 
@@ -625,12 +631,12 @@ class ApiService {
     role: string;
     is_active: boolean;
   }): Promise<any> {
-    const response = await this.api.post('/admin/users', data);
+    const response = await client.post('/admin/users', data);
     return response.data;
   }
 
   async getUserDetails(userId: string): Promise<any> {
-    const response = await this.api.get(`/admin/users/${userId}`);
+    const response = await client.get(`/admin/users/${userId}`);
     return response.data;
   }
 
@@ -643,16 +649,16 @@ class ApiService {
       is_verified?: boolean;
     }
   ): Promise<any> {
-    const response = await this.api.put(`/admin/users/${userId}`, data);
+    const response = await client.put(`/admin/users/${userId}`, data);
     return response.data;
   }
 
   async deleteUser(userId: string): Promise<void> {
-    await this.api.delete(`/admin/users/${userId}`);
+    await client.delete(`/admin/users/${userId}`);
   }
 
   async resetUserPassword(userId: string, newPassword: string): Promise<void> {
-    await this.api.post(`/admin/users/${userId}/reset-password`, null, {
+    await client.post(`/admin/users/${userId}/reset-password`, null, {
       params: { new_password: newPassword },
     });
   }
@@ -664,36 +670,36 @@ class ApiService {
     status?: string;
     user_id?: string;
   }): Promise<{ total: number; documents: any[] }> {
-    const response = await this.api.get('/admin/documents', { params });
+    const response = await client.get('/admin/documents', { params });
     return response.data;
   }
 
   async getDocumentInfo(documentId: string): Promise<DocumentInfo> {
-    const response = await this.api.get(`/documents/${documentId}/info`);
+    const response = await client.get(`/documents/${documentId}/info`);
     return response.data;
   }
 
   async getDocumentChunks(documentId: string): Promise<ChunkData[]> {
-    const response = await this.api.get(`/documents/${documentId}/chunks`);
+    const response = await client.get(`/documents/${documentId}/chunks`);
     return response.data;
   }
 
   async getTextPreview(documentId: string, maxChars: number = 5000): Promise<any> {
-    const response = await this.api.get(`/documents/${documentId}/preview/text`, {
+    const response = await client.get(`/documents/${documentId}/preview/text`, {
       params: { max_chars: maxChars }
     });
     return response.data;
   }
 
   async downloadDocument(documentId: string): Promise<Blob> {
-    const response = await this.api.get(`/documents/${documentId}/download`, {
+    const response = await client.get(`/documents/${documentId}/download`, {
       responseType: 'blob'
     });
     return response.data;
   }
 
   async editChunk(chunkId: string, newContent: string, metadata?: any): Promise<ChunkData> {
-    const response = await this.api.put(`/chunks/${chunkId}/edit`, {
+    const response = await client.put(`/chunks/${chunkId}/edit`, {
       chunk_id: chunkId,
       new_content: newContent,
       metadata: metadata
@@ -702,74 +708,43 @@ class ApiService {
   }
 
   async batchEditChunks(edits: Array<{ chunk_id: string; new_content: string }>): Promise<any> {
-    const response = await this.api.post('/chunks/batch-edit', { edits });
+    const response = await client.post('/chunks/batch-edit', { edits });
     return response.data;
   }
 
   async revertChunk(chunkId: string): Promise<void> {
-    await this.api.post(`/chunks/${chunkId}/revert`);
+    await client.post(`/chunks/${chunkId}/revert`);
   }
 
   async deleteChunk(chunkId: string): Promise<void> {
-    await this.api.delete(`/chunks/${chunkId}`);
+    await client.delete(`/chunks/${chunkId}`);
   }
 
   async getChunkHistory(chunkId: string, limit: number = 10): Promise<EditHistoryItem[]> {
-    const response = await this.api.get(`/chunks/${chunkId}/history`, {
+    const response = await client.get(`/chunks/${chunkId}/history`, {
       params: { limit }
     });
     return response.data;
   }
 
   async getDocumentEditStats(documentId: string): Promise<DocumentEditStats> {
-    const response = await this.api.get(`/documents/${documentId}/edit-stats`);
+    const response = await client.get(`/documents/${documentId}/edit-stats`);
     return response.data;
-  }
-
-  async exportConversation(
-    conversationId: string,
-    format: 'markdown' | 'json' = 'markdown'
-  ): Promise<Blob | any> {
-    const response = await this.api.get(
-      `/chat/conversations/${conversationId}/export`,
-      {
-        params: { format },
-        responseType: format === 'markdown' ? 'blob' : 'json'
-      }
-    );
-    return response.data;
-  }
-
-  private handleValidationError(error: any): void {
-    const validationErrors = error.response?.data?.detail;
-    
-    if (Array.isArray(validationErrors)) {
-      console.error('Validation errors:');
-      validationErrors.forEach((err: any, index: number) => {
-        console.error(`  ${index + 1}. Field: ${err.loc?.join('.')}`);
-        console.error(`     Error: ${err.msg}`);
-        console.error(`     Input: ${err.input}`);
-      });
-      
-      const errorMessage = validationErrors
-        .map((err: any) => `${err.loc?.join('.')}: ${err.msg}`)
-        .join('; ');
-      
-      throw new Error(errorMessage);
-    }
   }
 
   // ============================================================================
+
   // CUSTOMIZATION API
+
   // ============================================================================
 
   async getCurrentCustomization(): Promise<Customization> {
-    const response = await this.api.get('/customization/current');
+    const response = await client.get('/customization/current');
     return response.data;
   }
 
   async getAdminCustomization(organizationName: string = 'default'): Promise<Customization> {
-    const response = await this.api.get('/admin/customization', {
+    const response = await client.get('/admin/customization', {
       params: { organization_name: organizationName }
     });
     return response.data;
@@ -779,7 +754,7 @@ class ApiService {
     data: CustomizationUpdateRequest,
     organizationName: string = 'default'
   ): Promise<Customization> {
-    const response = await this.api.put('/admin/customization', data, {
+    const response = await client.put('/admin/customization', data, {
       params: { organization_name: organizationName }
     });
     return response.data;
@@ -793,7 +768,7 @@ class ApiService {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await this.api.post('/admin/customization/logo', formData, {
+    const response = await client.post('/admin/customization/logo', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
@@ -809,7 +784,7 @@ class ApiService {
     logoType: 'light' | 'dark' | 'favicon' = 'light',
     organizationName: string = 'default'
   ): Promise<void> {
-    await this.api.delete('/admin/customization/logo', {
+    await client.delete('/admin/customization/logo', {
       params: {
         logo_type: logoType,
         organization_name: organizationName
@@ -818,31 +793,31 @@ class ApiService {
   }
 
   async resetCustomization(organizationName: string = 'default'): Promise<any> {
-    const response = await this.api.post('/admin/customization/reset', null, {
+    const response = await client.post('/admin/customization/reset', null, {
       params: { organization_name: organizationName }
     });
     return response.data;
   }
 
   async generateChunkTitle(chunkId: string): Promise<any> {
-    const response = await this.api.post(`/chunks/${chunkId}/generate-title`);
+    const response = await client.post(`/chunks/${chunkId}/generate-title`);
     return response.data;
   }
 
   async generateAllTitles(documentId: string): Promise<any> {
-    const response = await this.api.post(`/documents/${documentId}/generate-all-titles`);
+    const response = await client.post(`/documents/${documentId}/generate-all-titles`);
     return response.data;
   }
 
   async updateChunkTitle(chunkId: string, title: string): Promise<any> {
-    const response = await this.api.put(`/chunks/${chunkId}/title`, null, {
+    const response = await client.put(`/chunks/${chunkId}/title`, null, {
       params: { title }
     });
     return response.data;
   }
 
   async getThemePresets(): Promise<ThemePreset[]> {
-    const response = await this.api.get('/admin/customization/presets');
+    const response = await client.get('/admin/customization/presets');
     return response.data;
   }
 
@@ -850,7 +825,7 @@ class ApiService {
     presetName: string,
     organizationName: string = 'default'
   ): Promise<any> {
-    const response = await this.api.post('/admin/customization/apply-preset', null, {
+    const response = await client.post('/admin/customization/apply-preset', null, {
       params: {
         preset_name: presetName,
         organization_name: organizationName
@@ -860,7 +835,7 @@ class ApiService {
   }
 
   async exportCustomization(organizationName: string = 'default'): Promise<Customization> {
-    const response = await this.api.get('/admin/customization/export', {
+    const response = await client.get('/admin/customization/export', {
       params: { organization_name: organizationName }
     });
     return response.data;
@@ -894,7 +869,118 @@ class ApiService {
       passes_aaa: ratio >= 7
     };
   }
+
+  // ── Chat history ──────────────────────────────────────────────────────────
+
+  async listConversations(options: {
+    view?: ConversationListView;
+    q?: string;
+    cursor?: string | null;
+    limit?: number;
+  } = {}): Promise<ConversationPage> {
+    const view = options.view ?? 'all';
+    const response = await client.get<ConversationPage>('/chat/conversations', {
+      params: {
+        limit: options.limit ?? 30,
+        cursor: options.cursor || undefined,
+        q: options.q?.trim() || undefined,
+        pinned: view === 'pinned' || undefined,
+        archived: view === 'archived' || undefined,
+        deleted: view === 'deleted' || undefined,
+      },
+    });
+    return response.data;
+  }
+
+  /** Most recent conversations (first page), for menus and the command palette. */
+  async getConversations(limit: number = 10): Promise<ConversationSummary[]> {
+    return (await this.listConversations({ limit })).items;
+  }
+
+  async getConversationStats(): Promise<ConversationStats> {
+    const response = await client.get<ConversationStats>('/chat/conversations/stats');
+    return response.data;
+  }
+
+  async getConversation(
+    conversationId: string,
+    options: { before?: number; limit?: number } = {}
+  ): Promise<ConversationDetail> {
+    const response = await client.get<ConversationDetail>(`/chat/conversations/${conversationId}`, {
+      params: { before: options.before, limit: options.limit },
+    });
+    return response.data;
+  }
+
+  async updateConversation(
+    conversationId: string,
+    patch: { title?: string; is_pinned?: boolean; is_archived?: boolean }
+  ): Promise<ConversationSummary> {
+    const response = await client.patch<ConversationSummary>(
+      `/chat/conversations/${conversationId}`,
+      patch
+    );
+    return response.data;
+  }
+
+  /** Soft delete; restorable for the retention window. */
+  async deleteConversation(
+    conversationId: string
+  ): Promise<{ conversation_id: string; restorable_until: string | null }> {
+    const response = await client.delete(`/chat/conversations/${conversationId}`);
+    return response.data;
+  }
+
+  async bulkDeleteConversations(ids: string[]): Promise<{ deleted: number }> {
+    const response = await client.post('/chat/conversations/bulk-delete', { ids });
+    return response.data;
+  }
+
+  async restoreConversation(conversationId: string): Promise<ConversationSummary> {
+    const response = await client.post<ConversationSummary>(
+      `/chat/conversations/${conversationId}/restore`
+    );
+    return response.data;
+  }
+
+  /** Irreversible; only allowed for conversations already in Recently deleted. */
+  async deleteConversationPermanently(conversationId: string): Promise<void> {
+    await client.delete(`/chat/conversations/${conversationId}/permanent`);
+  }
+
+  async exportConversationFile(
+    conversationId: string,
+    format: 'markdown' | 'pdf' | 'json'
+  ): Promise<{ blob: Blob; filename: string }> {
+    const response = await client.get(`/chat/conversations/${conversationId}/export`, {
+      params: { format },
+      responseType: 'blob',
+    });
+    const extension = format === 'markdown' ? 'md' : format;
+    return {
+      blob: response.data as Blob,
+      filename: downloadFilename(
+        response.headers['content-disposition'],
+        `conversation_${conversationId.slice(0, 8)}.${extension}`
+      ),
+    };
+  }
+
+  /** Download a conversation export straight to the user's machine. */
+  async downloadConversation(conversationId: string, format: 'markdown' | 'pdf' | 'json'): Promise<void> {
+    const { blob, filename } = await this.exportConversationFile(conversationId, format);
+    saveBlob(blob, filename);
+  }
+
+  /** @deprecated use downloadConversation; kept for existing callers. */
+  async exportConversation(conversationId: string, format: 'markdown' | 'pdf' | 'json' = 'markdown'): Promise<Blob> {
+    return (await this.exportConversationFile(conversationId, format)).blob;
+  }
+
+  async exportConversationPDF(conversationId: string): Promise<Blob> {
+    return this.exportConversation(conversationId, 'pdf');
+  }
 }
 
-export const api = new ApiService();
+export const api = new APIService();
 export default api;

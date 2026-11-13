@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from loguru import logger
+from app.core.rag_trace import hash_value
 
 from app.core.config import settings
 from app.core.redis_manager import redis_manager
@@ -111,7 +112,7 @@ class ConversationContext:
 
         if enhancements:
             enhanced = f"{query} ({' '.join(enhancements)})"
-            logger.debug(f"Enhanced query: '{query}' → '{enhanced}'")
+            logger.debug(f"Enhanced query: query_hash={hash_value(query)}, output_chars={len(enhanced)}")
             return enhanced
 
         return query

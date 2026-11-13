@@ -113,7 +113,12 @@ export default function ChatPage() {
   const loadConversation = async (convId: string) => {
     try {
       const conversation = await api.getConversation(convId);
-      setMessages(conversation.messages);
+      setMessages(
+        conversation.messages
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content,
+                         timestamp: m.timestamp, metadata: m.metadata }))
+      );
       setCurrentConversationIdLocal(convId);
     } catch (err: any) {
       const status = err?.response?.status;

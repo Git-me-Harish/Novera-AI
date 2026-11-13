@@ -108,10 +108,20 @@ Base = declarative_base()
 
 async def init_db() -> None:
     """
-    Initialize database with required extensions and tables.
-    Called once at application startup.
+    Verify database connectivity at startup.
+
+    Schema ownership belongs to Alembic in production. ``create_all`` and
+    extension creation are retained only for local development, where the app
+    is intentionally self-initialising. Running DDL from every application
+    worker can race with deployments and bypass migration review.
     """
     async with engine.begin() as conn:
+        await conn.execute(text("SELECT 1"))
+        is_development = settings.environment.lower() in {"development", "local", "docker"}
+        if not is_development:
+            logger.info("Database connectivity verified; production schema is migration-managed")
+            return
+
         # pgvector extension — must exist before any vector column DDL
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         logger.info("✅ pgvector extension enabled")
