@@ -150,12 +150,19 @@ async def _purge_deleted_conversations() -> None:
         from app.db.session import AsyncSessionLocal
         from app.services.generation.conversation_manager import conversation_store
 
+        from app.services.tenancy import audit
+
         async with AsyncSessionLocal() as db:
             purged = await conversation_store.purge_deleted(
                 db, older_than=timedelta(days=settings.conversation_delete_retention_days)
             )
+            expired_audit = await audit.purge_expired(
+                db, older_than=timedelta(days=settings.audit_retention_days)
+            )
         if purged:
             logger.info("Purged {} conversations past the restore window", purged)
+        if expired_audit:
+            logger.info("Purged {} audit events past retention", expired_audit)
     except Exception as exc:  # retention must never stop document processing
         logger.error("Conversation purge failed: {}", type(exc).__name__)
 

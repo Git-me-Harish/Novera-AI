@@ -1,6 +1,7 @@
 """ Sliding-window rate limiter middleware """
 from __future__ import annotations
 
+import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -11,7 +12,9 @@ from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from app.core.net import client_ip
 from app.core.redis_manager import redis_manager
+from app.services.tenancy.limits import limits_for
 
 
 @dataclass
@@ -50,37 +53,40 @@ def _match_rule(path: str, method: str) -> Optional[RateRule]:
     return None
 
 
-def _extract_identifier(request: Request) -> str:
-    """
-    Stable, abuse-resistant request identifier for rate-limit bucket.
+def _principal(request: Request) -> tuple[str, Optional[str]]:
+    """(bucket identity, organization id) for the request.
 
-    1. Verified JWT sub (authenticated users → per-user bucket)
-    2. X-Forwarded-For first hop (behind Render proxy)
-    3. Direct peer IP
+    A signed JWT identifies the user and their organization. The signature is
+    verified; expiry is not, because an expired token still names the caller
+    for rate-limit purposes (auth rejects it separately). Without a token the
+    identity is the client IP, which honours X-Forwarded-For only for the
+    configured number of trusted proxies — a client-supplied header used to
+    let anyone dodge the login limit by inventing a new IP per request.
     """
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
-        token = auth[7:]
         try:
-            from jose import jwt as jose_jwt, ExpiredSignatureError
+            from jose import jwt as jose_jwt
+
             from app.core.config import settings
+
             payload = jose_jwt.decode(
-                token,
-                settings.secret_key,
-                algorithms=[settings.algorithm],
+                auth[7:], settings.secret_key, algorithms=[settings.algorithm],
                 options={"verify_exp": False},
             )
-            sub = payload.get("sub")
-            if sub:
-                return f"user:{sub}"
+            if payload.get("sub"):
+                return f"user:{payload['sub']}", payload.get("organization_id")
         except Exception:
             pass
+    return f"ip:{client_ip(request)}", None
 
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return f"ip:{forwarded.split(',')[0].strip()}"
 
-    return f"ip:{request.client.host}" if request.client else "ip:unknown"
+def _org_category(path: str, method: str) -> str:
+    if method == "POST" and path.rstrip("/") == "/api/v1/chat":
+        return "chat"
+    if method == "POST" and path.startswith("/api/v1/documents/upload"):
+        return "upload"
+    return "api"
 
 
 async def _sliding_window_count(bucket_key: str, window: int) -> int:
@@ -104,7 +110,8 @@ async def _sliding_window_count(bucket_key: str, window: int) -> int:
             # Remove timestamps outside the window
             pipe.zremrangebyscore(zset_key, "-inf", window_start)
             # Add current timestamp (value = unique float to allow ties)
-            pipe.zadd(zset_key, {f"{now:.6f}": now})
+            # Random suffix: same-microsecond requests must not collapse into one.
+            pipe.zadd(zset_key, {f"{now:.6f}:{secrets.token_hex(4)}": now})
             # Count remaining
             pipe.zcard(zset_key)
             # Reset TTL
@@ -129,56 +136,78 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         path = request.url.path
-        method = request.method
+        method = request.method.upper()
 
         if not path.startswith("/api/"):
             return await call_next(request)
 
+        identifier, organization_id = _principal(request)
+        checks: list[tuple[str, str, int, int]] = []  # (scope, bucket, limit, window)
+
         rule = _match_rule(path, method)
-        if rule is None:
-            return await call_next(request)
+        if rule is not None:
+            method_tag = f":{method}" if rule.methods else ""
+            checks.append(("user" if identifier.startswith("user:") else "ip",
+                           f"{identifier}:{rule.prefix}{method_tag}", rule.limit, rule.window))
 
-        identifier = _extract_identifier(request)
-        method_tag = f":{method.upper()}" if rule.methods else ""
-        bucket_key = f"{identifier}:{rule.prefix}{method_tag}"
+        daily_key = None
+        daily_limit = 0
+        if organization_id:
+            limits = await limits_for(organization_id)
+            category = _org_category(path, method)
+            checks.append(("organization", f"org:{organization_id}:{category}",
+                           limits[f"{category}_per_minute"], 60))
+            if category == "chat" and limits["chat_messages_per_day"]:
+                daily_limit = limits["chat_messages_per_day"]
+                daily_key = f"org_day:{organization_id}:chat:{time.strftime('%Y%m%d', time.gmtime())}"
 
-        try:
-            count = await _sliding_window_count(bucket_key, rule.window)
-        except Exception as exc:
-            logger.warning(f"Rate limit check error: {exc} — allowing request")
-            return await call_next(request)
+        tightest: Optional[tuple[str, int, int, int]] = None  # scope, limit, remaining, window
+        for scope, bucket, limit, window in checks:
+            try:
+                count = await _sliding_window_count(bucket, window)
+            except Exception as exc:
+                # Availability over strictness: a Redis outage must not take the API down.
+                logger.warning(f"Rate limit check error ({scope}): {type(exc).__name__} — allowing")
+                continue
+            if count > limit:
+                logger.warning(f"Rate limit exceeded: {scope} {bucket} ({count}/{limit} in {window}s)")
+                return _too_many(scope, limit, window,
+                                 f"Rate limit exceeded: max {limit} requests per {window} seconds"
+                                 + (" for your organization." if scope == "organization" else "."))
+            remaining = max(0, limit - count)
+            if tightest is None or remaining < tightest[2]:
+                tightest = (scope, limit, remaining, window)
 
-        remaining = max(0, rule.limit - count)
-        reset_at = int(time.time()) + rule.window
-
-        if count > rule.limit:
-            logger.warning(
-                f"Rate limit exceeded: {identifier} on {method} {rule.prefix} "
-                f"({count}/{rule.limit} in {rule.window}s)"
-            )
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "error": "Too Many Requests",
-                    "message": (
-                        f"Rate limit exceeded. "
-                        f"Max {rule.limit} requests per {rule.window} seconds."
-                    ),
-                    "retry_after": rule.window,
-                },
-                headers={
-                    "Retry-After": str(rule.window),
-                    "X-RateLimit-Limit": str(rule.limit),
-                    "X-RateLimit-Remaining": "0",
-                    "X-RateLimit-Reset": str(reset_at),
-                },
-            )
+        if daily_key:
+            try:
+                used = await redis_manager.increment(daily_key, ttl=2 * 86400)
+            except Exception:
+                used = 0
+            if used > daily_limit:
+                seconds_left = 86400 - int(time.time()) % 86400
+                return _too_many("organization_daily", daily_limit, seconds_left,
+                                 "Your organization has used today's chat allowance.")
 
         response = await call_next(request)
-        response.headers["X-RateLimit-Limit"] = str(rule.limit)
-        response.headers["X-RateLimit-Remaining"] = str(remaining)
-        response.headers["X-RateLimit-Reset"] = str(reset_at)
+        if tightest is not None:
+            scope, limit, remaining, window = tightest
+            response.headers["X-RateLimit-Limit"] = str(limit)
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
+            response.headers["X-RateLimit-Reset"] = str(int(time.time()) + window)
+            response.headers["X-RateLimit-Scope"] = scope
         return response
 
 
-__all__ = ["RateLimitMiddleware"]
+def _too_many(scope: str, limit: int, retry_after: int, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"error": "Too Many Requests", "detail": message, "message": message, "scope": scope,
+                 "retry_after": retry_after},
+        headers={
+            "Retry-After": str(retry_after),
+            "X-RateLimit-Limit": str(limit),
+            "X-RateLimit-Remaining": "0",
+            "X-RateLimit-Reset": str(int(time.time()) + retry_after),
+            "X-RateLimit-Scope": scope,
+        },
+    )
