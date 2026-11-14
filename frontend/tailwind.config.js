@@ -1,70 +1,123 @@
 /** @type {import('tailwindcss').Config} */
+
+// Semantic colours backed by CSS variables (src/styles/tokens.css). The default
+// palette is replaced, not extended: off-system colours such as bg-blue-500
+// generate nothing, so stray colours are easy to spot in review.
+const token = (name) => `rgb(var(--${name}) / <alpha-value>)`;
+
 export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   darkMode: 'class',
   theme: {
+    colors: {
+      transparent: 'transparent',
+      current: 'currentColor',
+      inherit: 'inherit',
+      canvas: {
+        DEFAULT: token('canvas'),
+        soft: token('canvas-soft'),
+        tint: token('canvas-tint'),
+        warm: token('canvas-warm'),
+      },
+      hairline: token('hairline'),
+      divider: token('divider'),
+      'field-border': token('field-border'),
+      'ink-deep': token('ink-deep'),
+      ink: { DEFAULT: token('ink'), muted: token('ink-muted') },
+      link: token('link'),
+      primary: { DEFAULT: token('primary'), pressed: token('primary-pressed') },
+      'on-primary': token('on-primary'),
+      brand: token('brand-mark'),
+      gold: { DEFAULT: token('accent-gold'), soft: token('accent-gold-soft') },
+      focus: token('focus'),
+      error: token('error'),
+      success: token('success'),
+      warning: token('warning'),
+      disabled: token('disabled-ink'),
+      band: { teal: token('band-teal'), forest: token('band-forest') },
+      highlight: token('highlight'),
+    },
+    // Design.md breakpoints.
+    screens: {
+      sm: '451px',
+      md: '601px',
+      lg: '771px',
+      xl: '975px',
+      '2xl': '1345px',
+      '3xl': '1744px',
+    },
+    fontFamily: {
+      // Inter stands in for Oracle Sans (variable 300–800 axis).
+      sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+      serif: ['Georgia', 'Gelasio', 'Cambria', 'Times New Roman', 'serif'],
+      mono: ['JetBrains Mono', 'Consolas', 'ui-monospace', 'monospace'],
+    },
+    fontSize: {
+      // [size, { lineHeight }] — headings 1.2, body 1.4–1.5, zero tracking.
+      'display-xl': ['56px', { lineHeight: '67.2px' }],
+      'display-lg': ['40px', { lineHeight: '48px' }],
+      'display-md': ['36px', { lineHeight: '43.2px' }],
+      'display-sm': ['28px', { lineHeight: '33.6px' }],
+      'heading-xl': ['28px', { lineHeight: '33.6px' }],
+      'heading-lg': ['24px', { lineHeight: '28.8px' }],
+      'heading-md': ['20px', { lineHeight: '24px' }],
+      'heading-sm': ['18px', { lineHeight: '21.6px' }],
+      lead: ['20px', { lineHeight: '28px' }],
+      body: ['16px', { lineHeight: '22.4px' }],
+      'body-loose': ['16px', { lineHeight: '24px' }],
+      label: ['14px', { lineHeight: '16.8px' }],
+      small: ['14px', { lineHeight: '20px' }],
+      caption: ['12px', { lineHeight: '18px' }],
+    },
+    fontWeight: {
+      light: '300',
+      book: '350',
+      normal: '400',
+      medium: '500',
+      semibold: '600',
+      bold: '700',
+      heavy: '800',
+    },
+    letterSpacing: { normal: '0' },
+    borderRadius: {
+      none: '0',
+      xs: '4px', // buttons
+      sm: '6px', // fields
+      md: '8px', // cards, media
+      lg: '12px',
+      xl: '15px',
+      full: '9999px',
+    },
+    // No shadows: depth comes from the neutral ladder.
+    boxShadow: { none: 'none' },
     extend: {
-      colors: {
-        primary: {
-          50: '#EEF3FB',
-          100: '#D6E2F4',
-          200: '#ADC4E9',
-          300: '#7A9FD6',
-          400: '#4A79C0',
-          500: '#2D5499',
-          600: '#1B3A6B',
-          700: '#0F2347',
-          800: '#081629',
-          900: '#030A14',
-        },
-        secondary: {
-          DEFAULT: '#C8982A',
-          light: '#F0C96A',
-          dark: '#A07820',
-        },
-        gold: {
-          DEFAULT: '#D4A843',
-          light: '#F0C96A',
-          dark: '#C8982A',
-        },
+      spacing: {
+        section: '48px',
+        gutter: '72px',
       },
-      fontFamily: {
-        sans: ['DM Sans', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-        display: ['DM Serif Display', 'Georgia', 'serif'],
-        mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
-      },
-      animation: {
-        shimmer: 'shimmer 1.6s infinite',
-        fadeIn: 'fadeIn 0.3s ease forwards',
-        slideUp: 'slideUp 0.35s ease forwards',
+      maxWidth: {
+        content: '1600px',
+        outer: '1744px',
+        prose: '72ch',
       },
       keyframes: {
-        shimmer: {
-          '0%': { backgroundPosition: '-200% 0' },
-          '100%': { backgroundPosition: '200% 0' },
-        },
-        fadeIn: {
-          from: { opacity: 0, transform: 'translateY(6px)' },
-          to: { opacity: 1, transform: 'translateY(0)' },
-        },
-        slideUp: {
-          from: { opacity: 0, transform: 'translateY(16px)' },
-          to: { opacity: 1, transform: 'translateY(0)' },
-        },
+        'fade-in': { from: { opacity: '0' }, to: { opacity: '1' } },
+        'rise-in': { from: { opacity: '0', transform: 'translateY(4px)' }, to: { opacity: '1', transform: 'none' } },
+        shimmer: { from: { backgroundPosition: '200% 0' }, to: { backgroundPosition: '-200% 0' } },
+        pulse: { '0%, 100%': { opacity: '0.25' }, '50%': { opacity: '1' } },
       },
-      borderRadius: {
-        'xl': '14px',
-        '2xl': '18px',
-      },
-      boxShadow: {
-        finance: '0 2px 12px rgba(27, 58, 107, 0.07)',
-        'finance-hover': '0 8px 28px rgba(27, 58, 107, 0.14)',
-        'finance-lg': '0 20px 60px rgba(27, 58, 107, 0.12)',
+      animation: {
+        'fade-in': 'fade-in 160ms ease-out both',
+        'rise-in': 'rise-in 200ms ease-out both',
+        shimmer: 'shimmer 1.8s linear infinite',
+        pulse: 'pulse 1.2s ease-in-out infinite',
       },
     },
   },
-  plugins: [],
-}
+  plugins: [
+    // Touch-sized targets on coarse pointers (WCAG 2.5.8): pointer-coarse:min-h-[44px].
+    function ({ addVariant }) {
+      addVariant('pointer-coarse', '@media (pointer: coarse)');
+    },
+  ],
+};

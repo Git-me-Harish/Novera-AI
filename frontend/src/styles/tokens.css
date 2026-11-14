@@ -1,0 +1,92 @@
+/*
+ * Novera design tokens — docs/Design.md.
+ *
+ * Colors are RGB channels so Tailwind opacity modifiers work (bg-ink/10).
+ * Components use the semantic names only; the theme decides what they mean,
+ * so no component needs dark: variants.
+ *
+ * Structure comes from a warm neutral ladder, not shadows: a surface reads as
+ * raised because it sits on a different rung. There are no shadows anywhere.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Neutral ladder */
+  --canvas: 255 255 255;          /* #ffffff — masthead, cards, brightest bands */
+  --canvas-soft: 251 249 248;     /* #fbf9f8 — most common section fill */
+  --canvas-tint: 245 244 242;     /* #f5f4f2 — supporting sections, table heads */
+  --canvas-warm: 241 239 237;     /* #f1efed — hero bands, app background */
+  --hairline: 228 225 221;        /* #e4e1dd — tile and disabled borders */
+  --divider: 233 231 228;         /* #e9e7e4 — column rules */
+  /* Interactive field outline. Design.md's #d4cfca is 1.55:1 on white; WCAG
+   * 1.4.11 needs 3:1 when the border identifies the control, so this is the
+   * lightest tone on the same warm hue that passes on canvas and canvas-warm. */
+  --field-border: 140 137 133;    /* #8c8985 — 3.48:1 */
+  --ink-deep: 33 30 28;           /* #211e1c — dark bands (sub-navigation) */
+
+  /* Text */
+  --ink: 22 21 19;                /* #161513 — headings and body, never pure black */
+  /* App extension: metadata text. 7.0:1 on canvas, 6.3:1 on canvas-warm (AA). */
+  --ink-muted: 95 89 84;          /* #5f5954 */
+  --link: 0 107 143;              /* #006b8f — color alone carries the affordance */
+
+  /* Actions: every action is charcoal; colour never arrives on a control. */
+  --primary: 49 45 42;            /* #312d2a */
+  --primary-pressed: 71 66 62;    /* #47423e */
+  --on-primary: 255 255 255;
+
+  /* Accents */
+  --brand-mark: 199 70 52;        /* #c74634 — the wordmark, and only the wordmark */
+  --accent-gold: 240 204 113;     /* #f0cc71 — the 40×4 hero rule */
+  --accent-gold-soft: 247 224 161;/* #f7e0a1 — active tab bar on dark sub-nav */
+
+  /* Semantic */
+  --focus: 34 126 158;            /* #227e9e — one focus ring on every surface */
+  --error: 214 59 37;             /* #d63b25 */
+  --disabled-ink: 174 168 162;    /* #aea8a2 */
+  /* App extensions for status text, on canvas tints (AA). */
+  --success: 47 107 63;           /* #2f6b3f */
+  --warning: 138 90 0;            /* #8a5a00 */
+
+  /* Whole-band chromatic colour only */
+  --band-teal: 214 229 229;       /* #d6e5e5 */
+  --band-forest: 51 85 60;        /* #33553c */
+
+  /* Highlight for search matches and cited passages */
+  --highlight: 247 224 161;       /* gold-soft */
+}
+
+/* Warm dark ladder derived from the ink-deep end of the light system: same
+ * rules (tonal steps, no shadows); actions flip polarity instead of colour. */
+.dark {
+  color-scheme: dark;
+
+  --canvas: 27 25 23;             /* #1b1917 */
+  --canvas-soft: 31 29 27;        /* #1f1d1b */
+  --canvas-tint: 37 34 31;        /* #25221f */
+  --canvas-warm: 22 21 19;        /* #161513 — app background, the darkest rung */
+  --hairline: 58 53 49;           /* #3a3531 */
+  --divider: 51 47 43;            /* #332f2b */
+  --field-border: 108 100 93;     /* #6c645d — 3.0:1 */
+  --ink-deep: 14 13 12;           /* #0e0d0c */
+
+  --ink: 241 239 237;             /* #f1efed */
+  --ink-muted: 184 177 170;       /* #b8b1aa — 8.6:1 on canvas */
+  --link: 111 193 220;            /* #6fc1dc */
+
+  --primary: 241 239 237;         /* inverse: light action on dark */
+  --primary-pressed: 217 213 208;
+  --on-primary: 22 21 19;
+
+  --brand-mark: 226 110 92;       /* lifted for contrast on dark */
+  --focus: 95 179 209;
+  --error: 255 128 107;
+  --disabled-ink: 112 106 100;
+  --success: 126 196 141;
+  --warning: 230 184 92;
+
+  --band-teal: 34 52 52;
+  --band-forest: 38 64 45;
+  --highlight: 92 72 26;
+}

@@ -8,10 +8,10 @@
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check:tokens": "node scripts/check-design-tokens.mjs"
   },
   "dependencies": {
-    "@monaco-editor/react": "^4.7.0",
     "axios": "^1.6.5",
     "clsx": "^2.1.0",
     "date-fns": "^3.2.0",

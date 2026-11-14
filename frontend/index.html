@@ -1,33 +1,30 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <link rel="icon" type="image/png" href="/Novera.jpg" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Novera AI</title>
-  <meta
-    name="description"
-    content="AI-powered knowledge assistant for MFI, Finance and HRMS systems"
-  />
-</head>
-<body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
-
-
-<!--<!doctype html>
-<html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Novera AI - Knowledge Assistant</title>
-    <meta name="description" content="AI-powered knowledge assistant for finance and HRMS documentation" />
+    <link rel="icon" type="image/png" href="/Novera.jpg" id="app-favicon" />
+    <title>Novera</title>
+    <meta name="description" content="Answers grounded in your organization's documents, with citations." />
+    <!-- Apply the saved/OS theme before first paint to avoid a light flash. -->
+    <script>
+      (function () {
+        try {
+          var pref = localStorage.getItem('novera:theme') || 'system';
+          var dark = pref === 'dark' || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300..800&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
-</html>!-->
+</html>
