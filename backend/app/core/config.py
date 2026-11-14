@@ -197,6 +197,8 @@ class Settings(BaseSettings):
     rerank_top_k: int = 12
     similarity_threshold: float = 0.3
     hybrid_alpha: float = 0.7
+    # HNSW candidate list per query: higher = better recall, more latency.
+    hnsw_ef_search: int = Field(default=100, ge=10, le=1000)
     global_search_top_k: int = Field(default=20)
     scoped_search_top_k: int = Field(default=12)
     min_rerank_score: float = Field(default=0.2, ge=0.0, le=1.0)

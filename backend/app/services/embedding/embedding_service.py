@@ -95,12 +95,17 @@ class EmbeddingService:
     # backoff. Ingestion can wait; a user's query gets one quick retry.
     _ATTEMPTS = {"document": 5, "query": 2}
     _MAX_WAIT_SECONDS = {"document": 60.0, "query": 2.0}
+    # A user waits on a query embedding; a stalled provider must not hold
+    # the request for the client's 60 s default (twice, with the retry).
+    _TIMEOUT_SECONDS = {"document": 120.0, "query": 10.0}
 
     async def _embed(self, texts: list[str], task: str) -> list[list[float]]:
         attempts = self._ATTEMPTS.get(task, 1)
         for attempt in range(1, attempts + 1):
             try:
-                return await registry.embedding_client().embed(texts, task=task)
+                return await registry.embedding_client().embed(
+                    texts, task=task, timeout=self._TIMEOUT_SECONDS.get(task, 60.0)
+                )
             except ProviderNotConfigured:
                 raise
             except ProviderError as exc:

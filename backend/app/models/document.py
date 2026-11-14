@@ -20,6 +20,7 @@ from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Computed,
     Boolean,
     Column,
     DateTime,
@@ -30,7 +31,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
@@ -152,6 +153,16 @@ class Chunk(Base):
     embedding_model = Column(String(255), nullable=True)
     embedding_dimensions = Column(Integer, nullable=True)
     embedding_task = Column(String(50), nullable=True)
+    # Maintained by PostgreSQL (generated column); never written by the app.
+    search_vector = Column(
+        TSVECTOR,
+        Computed(
+            "setweight(to_tsvector('english', coalesce(section_title, '')), 'A') || "
+            "setweight(to_tsvector('english', coalesce(content, '')), 'B')",
+            persisted=True,
+        ),
+        nullable=True,
+    )
 
     # Edit support
     is_edited = Column(Boolean, default=False, nullable=False)
@@ -195,13 +206,8 @@ class Chunk(Base):
             "embedding_dimensions",
         ),
 
-        # Text search
-        Index(
-            "idx_content_fts",
-            "content",
-            postgresql_using="gin",
-            postgresql_ops={"content": "gin_trgm_ops"},
-        ),
+        # Full-text search over the stored, weighted search_vector
+        Index("idx_chunks_search_vector", "search_vector", postgresql_using="gin"),
 
         # Document chunk ordering lookup
         Index(
@@ -211,11 +217,13 @@ class Chunk(Base):
         ),
 
         # Vector similarity retrieval
+        # HNSW: no training data, recall holds as the table grows (see
+        # migration 20261115_retrieval for why IVFFlat was replaced).
         Index(
-            "idx_embedding_cosine",
+            "idx_chunks_embedding_hnsw",
             "embedding",
-            postgresql_using="ivfflat",
-            postgresql_with={"lists": 100},
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
 

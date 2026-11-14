@@ -31,12 +31,19 @@ def test_numeric_citations_must_reference_available_sources():
 
 
 def test_retrieval_sql_requires_organization_scope():
+    from uuid import uuid4
+
+    from app.services.retrieval.vector_search import _filters
+
+    org = uuid4()
+    where, params = _filters(org, None, None, None, None)
+    assert "d.organization_id = :organization_id" in where and params["organization_id"] == org
+    # Every retrieval query builds its WHERE clause from the shared filter;
+    # neighbour lookups are scoped explicitly.
     vector = _source("app/services/retrieval/vector_search.py")
     keyword = _source("app/services/retrieval/keyword_search.py")
-    assert "d.organization_id = :organization_id" in vector
-    assert "d.organization_id = :organization_id" in keyword
-    assert '"organization_id": str(organization_id)' in vector
-    assert '"organization_id": str(organization_id)' in keyword
+    assert "_filters(organization_id" in vector and "_filters(organization_id" in keyword
+    assert "d.organization_id = :organization_id" in vector.split("def get_neighbors_batch")[1]
 
 
 def test_search_and_chat_routes_require_organization_context():
@@ -111,7 +118,7 @@ def test_retrieval_limits_focused_context_before_generation():
     pipeline = _source("app/services/retrieval/pipeline.py")
     assert "focused_context_chunks" in pipeline
     assert "context_chunk_limit" in pipeline
-    assert "top_n=context_chunk_limit" in pipeline
+    assert "chunk_cap=context_chunk_limit" in pipeline and "token_budget=context_token_budget" in pipeline
     hybrid = _source("app/services/retrieval/hybrid_search.py")
     assert "use_semantic: bool = True" in hybrid
     assert "use_keyword: bool = True" in hybrid
