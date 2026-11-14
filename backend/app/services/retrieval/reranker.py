@@ -33,10 +33,19 @@ class RerankingService:
 
     @staticmethod
     def _document_text(chunk: dict[str, Any]) -> str:
-        # The section title carries meaning the chunk body often lacks.
+        """What the cross-encoder reads: provenance, then the passage.
+
+        Questions often name their source ("in the pricing module"); without
+        the document title the reranker cannot use that. The section heading
+        carries meaning the passage body often omits.
+        """
+        title = (chunk.get("document_name") or "").rsplit(".", 1)[0].replace("_", " ").strip()
         section = chunk.get("section_title")
+        header = " | ".join(
+            part for part in (f"Document: {title}" if title else "", f"Section: {section}" if section else "") if part
+        )
         content = chunk.get("content", "")
-        return f"{section}\n{content}" if section else content
+        return f"{header}\n{content}" if header else content
 
     async def rerank(
         self,

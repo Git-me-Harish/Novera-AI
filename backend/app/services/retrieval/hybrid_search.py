@@ -1,57 +1,59 @@
-"""
-Hybrid search combining semantic (vector) and keyword (BM25) search.
-Implements Reciprocal Rank Fusion for result merging.
+"""Hybrid retrieval: dense + sparse, fused with weighted Reciprocal Rank Fusion.
 
-FIX NOTES:
-- When vector_search fails and returns [], the DB session may be in an
-  aborted-transaction state (asyncpg raises InFailedSQLTransactionError on
-  any subsequent query in the same transaction). We now explicitly rollback
-  the session between the semantic and keyword search steps so keyword search
-  always runs on a clean transaction.
-- Added a helper _safe_rollback() to avoid swallowing secondary errors.
+The query embedding (a network call) and the keyword query (a database
+call) run concurrently; the vector query waits for both, so one database
+session is never used by two statements at once. Each search isolates its
+own failure in a SAVEPOINT: if the embedding provider is down, keyword
+results still come back, and nothing the request wrote earlier is undone.
 """
-from typing import List, Dict, Any, Optional
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.services.retrieval.vector_search import vector_search_service
-from app.services.retrieval.keyword_search import keyword_search_service
+from app.core.rag_trace import get_current_trace, hash_value
 from app.services.embedding.embedding_service import embedding_service
-from app.core.rag_trace import hash_value
+from app.services.retrieval.keyword_search import keyword_search_service
+from app.services.retrieval.vector_search import vector_search_service
+
+RRF_K = 60
+BOOST_FACTOR = 1.3
+EXPAND_TOP = 5
+
+
+def _stage(name: str, started: float, **fields: Any) -> None:
+    """Record a stage's latency in the request's RAG trace (stages map)."""
+    trace = get_current_trace()
+    if trace:
+        trace.stage_end(name, started, **fields)
 
 
 class HybridSearchService:
-    """
-    Combines semantic and keyword search for optimal retrieval.
-    Uses Reciprocal Rank Fusion (RRF) to merge results.
-    """
-
-    def __init__(self):
-        self.alpha = settings.hybrid_alpha      # 0.7 = 70% semantic weight
+    def __init__(self) -> None:
+        self.alpha = settings.hybrid_alpha  # weight of the dense ranking
         self.top_k = settings.retrieval_top_k
-        self.rrf_k = 60                         # RRF constant
+        self.rrf_k = RRF_K
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    async def _safe_rollback(self, db: AsyncSession, context: str = "") -> None:
-        """
-        Attempt a session rollback without raising.
-        Ensures the next query in the same session starts on a clean transaction.
-        """
+    async def _embed(self, query: str, query_embedding: Optional[List[float]]) -> Optional[List[float]]:
+        if query_embedding is not None:
+            return query_embedding
+        started = time.perf_counter()
         try:
-            await db.rollback()
-            logger.debug(f"Session rolled back cleanly [{context}]")
-        except Exception as e:
-            logger.warning(f"Rollback attempt failed [{context}]: {e}")
-
-    # ------------------------------------------------------------------
-    # Main search
-    # ------------------------------------------------------------------
+            vector = await embedding_service.embed_query(query)
+            _stage("query_embedding", started)
+            return vector
+        except Exception as exc:
+            logger.error(f"Query embedding failed ({type(exc).__name__}); keyword results only")
+            trace = get_current_trace()
+            if trace:
+                trace.event("semantic_degraded", status="degraded", reason=type(exc).__name__)
+            return None
 
     async def search(
         self,
@@ -67,158 +69,72 @@ class HybridSearchService:
         boost_documents: Optional[List[str]] = None,
         query_embedding: Optional[List[float]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Perform hybrid search with optional document scoping and boosting.
-
-        Execution order:
-          1. Semantic (vector) search   — rollback session on failure
-          2. Keyword (FTS) search       — rollback session on failure
-          3. RRF fusion + sort
-        """
         k = top_k or self.top_k
+        logger.info(f"Hybrid search: query_hash={hash_value(query)} k={k}")
 
-        logger.info(f"Hybrid search: query_hash={hash_value(query)}, chars={len(query)}, k={k}")
-        logger.info(f"  Filters: doc_type={doc_type}, department={department}")
-        logger.info(f"  Document filter: {document_filter}")
-        logger.info(f"  Boost documents: {boost_documents}")
+        async def keyword() -> List[Dict[str, Any]]:
+            if not use_keyword:
+                return []
+            started = time.perf_counter()
+            rows = await keyword_search_service.search_keywords(
+                query=query, db=db, organization_id=organization_id, top_k=k,
+                doc_type=doc_type, department=department, document_filter=document_filter,
+            )
+            _stage("keyword_search", started, results=len(rows))
+            return rows
 
-        results: Dict[str, Dict[str, Any]] = {}
+        async def embed() -> Optional[List[float]]:
+            return await self._embed(query, query_embedding) if use_semantic else None
 
-        # ------------------------------------------------------------------
-        # Step 1 — Semantic search
-        # ------------------------------------------------------------------
-        if use_semantic:
-            logger.info("Running semantic search...")
-            try:
-                query_embedding = query_embedding or await embedding_service.embed_query(query)
+        keyword_results, vector = await asyncio.gather(keyword(), embed())
 
-                semantic_results = await vector_search_service.search_similar_chunks(
-                    query_embedding=query_embedding,
-                    db=db,
-                    organization_id=organization_id,
-                    top_k=k * 2,
-                    doc_type=doc_type,
-                    department=department,
-                    document_filter=document_filter,
-                )
+        semantic_results: List[Dict[str, Any]] = []
+        if vector is not None:
+            started = time.perf_counter()
+            semantic_results = await vector_search_service.search_similar_chunks(
+                query_embedding=vector, db=db, organization_id=organization_id, top_k=k * 2,
+                doc_type=doc_type, department=department, document_filter=document_filter,
+            )
+            _stage("vector_search", started, results=len(semantic_results))
 
-                for idx, chunk in enumerate(semantic_results, 1):
-                    chunk_id = chunk['chunk_id']
-                    if chunk_id not in results:
-                        results[chunk_id] = chunk.copy()
-                    results[chunk_id]['semantic_rank'] = idx
-                    results[chunk_id]['semantic_score'] = chunk['similarity_score']
+        fused: Dict[str, Dict[str, Any]] = {}
+        for rank, chunk in enumerate(semantic_results, 1):
+            entry = fused.setdefault(chunk["chunk_id"], dict(chunk))
+            entry["semantic_rank"] = rank
+            entry["semantic_score"] = chunk["similarity_score"]
+        for rank, chunk in enumerate(keyword_results, 1):
+            entry = fused.setdefault(chunk["chunk_id"], dict(chunk))
+            entry["keyword_rank"] = rank
+            entry["keyword_score"] = chunk.get("keyword_score", 0.0)
 
-                logger.info(f"Semantic search returned {len(semantic_results)} results")
-
-            except Exception as e:
-                logger.error(f"Semantic search step failed: {e}", exc_info=True)
-                # -------------------------------------------------------
-                # KEY FIX: rollback before keyword search so the session
-                # isn't stuck in an aborted-transaction state.
-                # Without this, keyword search always gets
-                # InFailedSQLTransactionError regardless of its own SQL.
-                # -------------------------------------------------------
-                await self._safe_rollback(db, "post-semantic-failure")
-
-        # ------------------------------------------------------------------
-        # Step 2 — Keyword search
-        # ------------------------------------------------------------------
-        if use_keyword:
-            logger.info("Running keyword search...")
-            try:
-                keyword_results = await keyword_search_service.search_keywords(
-                    query=query,
-                    db=db,
-                    organization_id=organization_id,
-                    top_k=k,
-                    doc_type=doc_type,
-                    department=department,
-                    document_filter=document_filter,
-                )
-
-                for idx, chunk in enumerate(keyword_results, 1):
-                    chunk_id = chunk['chunk_id']
-                    if chunk_id not in results:
-                        results[chunk_id] = chunk.copy()
-                    results[chunk_id]['keyword_rank'] = idx
-                    results[chunk_id]['keyword_score'] = chunk.get('keyword_score', 0)
-
-                logger.info(f"Keyword search returned {len(keyword_results)} results")
-
-            except Exception as e:
-                logger.error(f"Keyword search step failed: {e}", exc_info=True)
-                await self._safe_rollback(db, "post-keyword-failure")
-
-        # ------------------------------------------------------------------
-        # Step 3 — RRF fusion + sort
-        # ------------------------------------------------------------------
-        logger.info("Fusing results...")
-        fused_results = self._reciprocal_rank_fusion(results, boost_documents)
-
-        sorted_results = sorted(
-            fused_results.values(),
-            key=lambda x: x['fused_score'],
-            reverse=True,
-        )[:k]
-
-        logger.info(f"Hybrid search completed: {len(sorted_results)} final results")
-        return sorted_results
-
-    # ------------------------------------------------------------------
-    # RRF fusion
-    # ------------------------------------------------------------------
-
-    def _reciprocal_rank_fusion(
-        self,
-        results: Dict[str, Dict[str, Any]],
-        boost_documents: Optional[List[str]] = None,
-    ) -> Dict[str, Dict[str, Any]]:
-        """
-        Apply Reciprocal Rank Fusion with soft document boosting.
-
-        RRF score = Σ weight_i / (rrf_k + rank_i)
-        Boost: multiply score by boost_factor for specified documents.
-        """
-        boost_factor = 1.3
-
-        for chunk_id, chunk in results.items():
-            rrf_score = 0.0
-
-            if 'semantic_rank' in chunk:
-                rrf_score += self.alpha * (1.0 / (self.rrf_k + chunk['semantic_rank']))
-
-            if 'keyword_rank' in chunk:
-                rrf_score += (1 - self.alpha) * (1.0 / (self.rrf_k + chunk['keyword_rank']))
-
-            if boost_documents:
-                doc_name = (
-                    chunk.get('document_name')
-                    or chunk.get('metadata', {}).get('document_title', '')
-                )
-                is_boosted = any(
-                    bd.lower() in doc_name.lower() or doc_name.lower() in bd.lower()
-                    for bd in boost_documents
-                )
-                if is_boosted:
-                    rrf_score *= boost_factor
-                    chunk['boosted'] = True
-                    logger.debug(f"Boosted chunk from {doc_name}: {rrf_score:.4f}")
-                else:
-                    chunk['boosted'] = False
-
-            chunk['fused_score'] = rrf_score
-            chunk['retrieval_method'] = []
-            if 'semantic_rank' in chunk:
-                chunk['retrieval_method'].append('semantic')
-            if 'keyword_rank' in chunk:
-                chunk['retrieval_method'].append('keyword')
-
+        self._reciprocal_rank_fusion(fused, boost_documents)
+        results = sorted(fused.values(), key=lambda c: c["fused_score"], reverse=True)[:k]
+        logger.info(
+            f"Hybrid search: {len(semantic_results)} dense + {len(keyword_results)} sparse -> {len(results)}"
+        )
         return results
 
-    # ------------------------------------------------------------------
-    # Context expansion
-    # ------------------------------------------------------------------
+    def _reciprocal_rank_fusion(
+        self, results: Dict[str, Dict[str, Any]], boost_documents: Optional[List[str]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """score = alpha / (k + dense_rank) + (1 - alpha) / (k + sparse_rank)."""
+        boosted_names = [b.casefold() for b in (boost_documents or []) if b]
+        for chunk in results.values():
+            score = 0.0
+            if "semantic_rank" in chunk:
+                score += self.alpha / (self.rrf_k + chunk["semantic_rank"])
+            if "keyword_rank" in chunk:
+                score += (1 - self.alpha) / (self.rrf_k + chunk["keyword_rank"])
+            if boosted_names:
+                name = (chunk.get("document_name") or "").casefold()
+                chunk["boosted"] = any(b == name or b in name for b in boosted_names)
+                if chunk["boosted"]:
+                    score *= BOOST_FACTOR
+            chunk["fused_score"] = score
+            chunk["retrieval_method"] = [
+                method for method, key in (("semantic", "semantic_rank"), ("keyword", "keyword_rank")) if key in chunk
+            ]
+        return results
 
     async def search_with_context_expansion(
         self,
@@ -235,97 +151,38 @@ class HybridSearchService:
         boost_documents: Optional[List[str]] = None,
         query_embedding: Optional[List[float]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Hybrid search with automatic neighboring-chunk context expansion.
+        """Hybrid results plus the same-section neighbours of the top hits.
 
-        Args:
-            query: Search query
-            db: Database session
-            top_k: Number of base results before expansion
-            expand_neighbors: Whether to pull n±1 neighbor chunks
-            document_filter: Restrict search to these document names
-            boost_documents: Soft-boost these document names in RRF
-
-        Returns:
-            List of chunks (original + expanded neighbors), de-duplicated
+        A section longer than one chunk continues in its neighbour; adding it
+        lets the reranker see the rest of the answer. Neighbours are fetched
+        for all top hits in a single query.
         """
-        initial_results = await self.search(
-            query=query,
-            db=db,
-            organization_id=organization_id,
-            top_k=top_k,
-            use_semantic=use_semantic,
-            use_keyword=use_keyword,
-            doc_type=doc_type,
-            department=department,
-            document_filter=document_filter,
-            boost_documents=boost_documents,
-            query_embedding=query_embedding,
+        results = await self.search(
+            query=query, db=db, organization_id=organization_id, top_k=top_k,
+            use_semantic=use_semantic, use_keyword=use_keyword, doc_type=doc_type,
+            department=department, document_filter=document_filter,
+            boost_documents=boost_documents, query_embedding=query_embedding,
         )
-
-        if not expand_neighbors:
-            return initial_results
-
-        expanded_results: List[Dict[str, Any]] = []
-        seen_chunk_ids: set = set()
-
-        for result in initial_results[:5]:
-            chunk_id_raw = result.get('chunk_id') or result.get('id')
-
-            if not chunk_id_raw:
-                logger.warning(f"Chunk missing ID, skipping expansion: {result}")
-                continue
-
-            try:
-                chunk_id = UUID(str(chunk_id_raw))
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Invalid chunk ID format: {chunk_id_raw} — {e}")
-                continue
-
-            neighbors = await vector_search_service.get_chunk_neighbors(
-                chunk_id=chunk_id,
-                db=db,
-                organization_id=organization_id,
-                n_before=1,
-                n_after=1,
-            )
-
-            for neighbor in neighbors:
-                nid = neighbor['chunk_id']
-                if nid in seen_chunk_ids:
+        if not expand_neighbors or not results:
+            return results
+        started = time.perf_counter()
+        top_ids = [r["chunk_id"] for r in results[:EXPAND_TOP]]
+        neighbours = await vector_search_service.get_neighbors_batch(top_ids, db, organization_id)
+        expanded: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for result in results:
+            if result["chunk_id"] not in seen:
+                expanded.append({**result, "is_expanded_context": False})
+                seen.add(result["chunk_id"])
+            for neighbour in neighbours.get(result["chunk_id"], []):
+                if neighbour["chunk_id"] in seen:
                     continue
-
-                neighbor['is_expanded_context'] = not neighbor['is_target']
-                neighbor['parent_chunk_id'] = (
-                    result['chunk_id'] if not neighbor['is_target'] else None
-                )
-
-                if neighbor['is_target']:
-                    neighbor.update({
-                        'fused_score':      result['fused_score'],
-                        'semantic_score':   result.get('semantic_score'),
-                        'keyword_score':    result.get('keyword_score'),
-                        'retrieval_method': result['retrieval_method'],
-                        'boosted':          result.get('boosted', False),
-                    })
-
-                expanded_results.append(neighbor)
-                seen_chunk_ids.add(nid)
-
-        # Append remaining results that weren't in the top-5 expansion set
-        for result in initial_results[5:]:
-            if result['chunk_id'] not in seen_chunk_ids:
-                result['is_expanded_context'] = False
-                expanded_results.append(result)
-                seen_chunk_ids.add(result['chunk_id'])
-
-        logger.info(
-            f"Context expansion: {len(initial_results)} → {len(expanded_results)} chunks"
-        )
-        return expanded_results
+                expanded.append({**neighbour, "is_expanded_context": True, "parent_chunk_id": result["chunk_id"]})
+                seen.add(neighbour["chunk_id"])
+        _stage("neighbour_expansion", started, added=len(expanded) - len(results))
+        return expanded
 
 
-# Global instance
 hybrid_search_service = HybridSearchService()
 
-__all__ = ['HybridSearchService', 'hybrid_search_service']
+__all__ = ["HybridSearchService", "hybrid_search_service"]

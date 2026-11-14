@@ -2,6 +2,8 @@
 Complete retrieval pipeline orchestrator.
 Coordinates query processing, hybrid search, reranking, and context assembly.
 """
+import re
+import time
 from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
@@ -22,20 +24,91 @@ if TYPE_CHECKING:
 _EXCERPT_CHARS = 600
 
 
-def _within_token_budget(chunks: List[Dict[str, Any]], budget: int) -> List[Dict[str, Any]]:
-    """Best-ranked chunks until the evidence budget is spent.
+# ── Evidence selection ──────────────────────────────────────────────────────
 
-    The top chunk is always kept, even when it alone exceeds the budget.
-    A chunk that does not fit is skipped, not truncated, so a smaller one
-    further down can still be used.
+# Rescue a lexical match only when the cross-encoder gives it at least a weak
+# signal and it contains most of the question's distinctive words; the old
+# rescue added the top keyword hit unconditionally, bypassing the floor.
+RESCUE_MIN_RERANK = 0.05
+RESCUE_MIN_TERM_COVERAGE = 0.6
+DUPLICATE_OVERLAP = 0.8
+_STOPWORDS = frozenset("""a an and are as at be by can do does for from has have how i in is it its of on or
+should that the this to was were what when where which who why will with""".split())
+
+
+def _terms(text: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if t not in _STOPWORDS and len(t) > 1}
+
+
+def _term_coverage(query: str, content: str) -> float:
+    wanted = _terms(query)
+    if not wanted:
+        return 0.0
+    have = _terms(content)
+    # Prefix match mirrors the keyword index ("repay" ~ "repayment").
+    hits = sum(1 for w in wanted if w in have or (len(w) >= 4 and any(h.startswith(w) for h in have)))
+    return hits / len(wanted)
+
+
+def _near_duplicate(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """Consecutive chunks overlap by design; two passages sharing most of
+    their words add tokens without adding evidence."""
+    ta, tb = _terms(a.get("content", "")), _terms(b.get("content", ""))
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / min(len(ta), len(tb)) >= DUPLICATE_OVERLAP
+
+
+def select_evidence(
+    scored: List[Dict[str, Any]],
+    *,
+    query: str,
+    degraded: bool,
+    chunk_cap: int,
+    token_budget: int,
+) -> List[Dict[str, Any]]:
+    """Choose the passages the generator sees, best first.
+
+    * Cross-encoder scores below MIN_RERANK_SCORE are dropped: weak evidence
+      invites plausible but unsupported answers.
+    * Without a reranker (outage, disabled), fused order is kept and a passage
+      needs a cosine similarity above the threshold or a top-3 keyword rank;
+      the rerank floor is meaningless on fused scores.
+    * Near-duplicates are skipped, then the chunk cap and token budget apply
+      (the best passage is always kept).
+    * One guarded keyword rescue may be appended.
     """
-    selected, used = [], 0
-    for chunk in chunks:
+    def relevant(chunk: Dict[str, Any]) -> bool:
+        if not degraded:
+            return float(chunk.get("rerank_score") or 0.0) >= settings.min_rerank_score
+        if int(chunk.get("keyword_rank") or 99) <= 3:
+            return True
+        return float(chunk.get("similarity_score") or chunk.get("semantic_score") or 0.0) >= settings.similarity_threshold
+
+    selected: List[Dict[str, Any]] = []
+    used = 0
+    for chunk in scored:
+        if len(selected) >= chunk_cap or not relevant(chunk):
+            continue
+        if any(_near_duplicate(chunk, kept) for kept in selected):
+            continue
         tokens = int(chunk.get("token_count") or 0)
-        if selected and used + tokens > budget:
+        if selected and used + tokens > token_budget:
             continue
         selected.append(chunk)
         used += tokens
+
+    if not degraded:
+        rescue = next((c for c in scored if c.get("keyword_rank") == 1), None)
+        if (
+            rescue is not None
+            and all(c.get("chunk_id") != rescue.get("chunk_id") for c in selected)
+            and float(rescue.get("rerank_score") or 0.0) >= RESCUE_MIN_RERANK
+            and _term_coverage(query, rescue.get("content", "")) >= RESCUE_MIN_TERM_COVERAGE
+            and len(selected) < chunk_cap
+            and used + int(rescue.get("token_count") or 0) <= token_budget
+        ):
+            selected.append({**rescue, "retrieval_rescue": "keyword_exact_match"})
     return selected
 
 
@@ -184,7 +257,8 @@ class RetrievalPipeline:
                     doc_type=doc_type,
                     department=department,
                     document_filter=None,
-                    boost_documents=[]  # No boosting in global search
+                    boost_documents=[],  # No boosting in global search
+                    query_embedding=query_embedding,
                 )
                 
                 logger.info(f"  Global search: {len(global_results)} chunks")
@@ -212,14 +286,11 @@ class RetrievalPipeline:
                 search_results = merged_results
                 logger.info(f"  Merged results: {len(search_results)} total chunks")
 
-        # Step 6: Rerank results
+        # Step 6: Rerank every candidate, then select evidence.
         pre_rerank_chunk_ids = [str(chunk.get("chunk_id")) for chunk in search_results]
-        reranked_results = []
 
-        # Focused factual questions usually have one evidence-bearing chunk;
-        # sending every neighboring hit increases prompt cost and invites the
-        # generator to answer adjacent questions. Broader procedural and
-        # analytical questions retain a larger evidence budget.
+        # Focused factual questions usually have one evidence-bearing passage;
+        # broader procedural/analytical questions get a larger budget.
         broad_intents = {"procedural", "analytical", "compliance"}
         broad = processed_query["complexity"] == "complex" or processed_query["intent"] in broad_intents
         context_chunk_limit = settings.complex_context_chunks if broad else settings.focused_context_chunks
@@ -227,98 +298,32 @@ class RetrievalPipeline:
         if top_k:
             context_chunk_limit = min(context_chunk_limit, top_k)
 
-        # Decide if reranking is needed
-        should_rerank = (
-            self.rerank_enabled and
-            len(search_results) > 1 and
-            len(search_results) >= 3
-        )
-
-        # Step 6: Rerank results
+        should_rerank = self.rerank_enabled and len(search_results) >= 2
+        rerank_started = time.perf_counter()
         if should_rerank:
-            logger.info("Step 4: Reranking results...")
-            try:
-                reranked_results = await reranking_service.rerank(
-                    query=query,
-                    chunks=search_results,
-                    top_n=context_chunk_limit,
-                )
-                stats = reranking_service.calculate_score_statistics(reranked_results)
-                logger.info(
-                    f"  Rerank scores: min={stats['min_score']:.3f}, "
-                    f"max={stats['max_score']:.3f}, avg={stats['avg_score']:.3f}"
-                )
-            except Exception as e:
-                logger.error(f"Reranking failed: {e} — using original order")
-                reranked_results = [
-                    {**chunk, "rerank_degraded": True}
-                    for chunk in search_results[:context_chunk_limit]
-                ]
+            # Scoring all candidates costs the same single rerank call and
+            # gives every later decision (floor, rescue, confidence) a score.
+            scored = await reranking_service.rerank(query=query, chunks=search_results, top_n=len(search_results))
         else:
-            logger.info("Step 4: Skipping reranking (disabled or insufficient results)")
-            reranked_results = search_results[:context_chunk_limit]
+            scored = [{**chunk, "rerank_degraded": True} for chunk in search_results]
+        rerank_degraded = not scored or any(chunk.get("rerank_degraded") for chunk in scored)
+        trace = get_current_trace()
+        if trace:
+            trace.stage_end("rerank", rerank_started,
+                            status="degraded" if rerank_degraded else "ok", candidates=len(search_results))
 
-        # Exact domain terms are a recall safety net. A cross-encoder can
-        # occasionally score a chunk containing the requested named concept
-        # below generic explanatory text. Preserve the strongest sparse hit in
-        # the final evidence budget so hybrid retrieval cannot discard an exact
-        # lexical match before generation.
-        keyword_rescue = max(
-            (chunk for chunk in search_results if float(chunk.get("keyword_score", 0.0) or 0.0) > 0),
-            key=lambda chunk: float(chunk.get("keyword_score", 0.0) or 0.0),
-            default=None,
+        reranked_results = select_evidence(
+            scored,
+            query=query,
+            degraded=rerank_degraded,
+            chunk_cap=context_chunk_limit,
+            token_budget=context_token_budget,
         )
-        if keyword_rescue and not any(
-            chunk.get("chunk_id") == keyword_rescue.get("chunk_id")
-            for chunk in reranked_results
-        ):
-            if len(reranked_results) >= context_chunk_limit:
-                reranked_results[-1] = keyword_rescue
-            else:
-                reranked_results.append(keyword_rescue)
-            keyword_rescue["retrieval_rescue"] = "keyword_exact_match"
-            logger.info(
-                "Preserved strongest keyword match in context: %s",
-                keyword_rescue.get("chunk_id"),
-            )
-
-        # Do not send weakly relevant evidence to generation. A low-scoring
-        # context can make the model produce a plausible but unsupported answer
-        # instead of taking the required abstention path.
-        # The floor is calibrated for cross-encoder scores only. RRF fused
-        # scores are ~0.01, so applying it to them after a reranker outage
-        # silently filtered every chunk and the system abstained on all
-        # questions. When reranking is degraded, fall back to the cosine
-        # similarity floor and record the degradation.
-        rerank_degraded = any(chunk.get("rerank_degraded") for chunk in reranked_results) or (
-            not should_rerank
+        retrieval_confidence = (
+            None if rerank_degraded or not scored else float(scored[0].get("rerank_score") or 0.0)
         )
-
-        def _passes_floor(chunk: Dict[str, Any]) -> bool:
-            if chunk.get("retrieval_rescue") == "keyword_exact_match":
-                return True
-            if not rerank_degraded:
-                return float(chunk.get("rerank_score") or 0.0) >= settings.min_rerank_score
-            if chunk.get("keyword_score"):
-                return True
-            return float(chunk.get("similarity_score") or chunk.get("semantic_score") or 0.0) >= (
-                settings.similarity_threshold
-            )
-
-        before_relevance_filter = len(reranked_results)
-        reranked_results = [chunk for chunk in reranked_results if _passes_floor(chunk)]
-        reranked_results = _within_token_budget(reranked_results, context_token_budget)
         if rerank_degraded and should_rerank:
-            logger.warning("Reranker degraded — using similarity floor instead of rerank floor")
-            trace = get_current_trace()
-            if trace:
-                trace.event("rerank_degraded", status="degraded")
-        if before_relevance_filter != len(reranked_results):
-            logger.info(
-                f"Relevance floor filtered {before_relevance_filter} -> "
-                f"{len(reranked_results)} chunks "
-                f"(minimum rerank score {settings.min_rerank_score:.3f})",
-            )
+            logger.warning("Reranker degraded: selecting by similarity and keyword rank")
 
         logger.info(f"  After reranking: {len(reranked_results)} chunks")
         
@@ -380,6 +385,10 @@ class RetrievalPipeline:
                 'pre_rerank_chunk_ids': pre_rerank_chunk_ids,
                 'rerank_degraded': rerank_degraded,
                 'score_summary': score_summary,
+                # Top cross-encoder score over all candidates: how strongly the
+                # corpus supports this question at all (None when degraded).
+                'retrieval_confidence': retrieval_confidence,
+                'keyword_rescued': any(c.get("retrieval_rescue") for c in reranked_results),
             }
         }
     
@@ -637,15 +646,19 @@ class RetrievalPipeline:
             top_k=top_k or settings.retrieval_top_k
         )
         
-        # Rerank
-        if self.rerank_enabled and search_results:
-            reranked_results = await reranking_service.rerank(
-                query=query,
-                chunks=search_results,
-                top_n=top_k or settings.rerank_top_k
-            )
+        # Same evidence rules as the main path: rerank everything, then floor,
+        # de-duplicate and budget.
+        if self.rerank_enabled and len(search_results) >= 2:
+            scored = await reranking_service.rerank(query=query, chunks=search_results, top_n=len(search_results))
         else:
-            reranked_results = search_results
+            scored = [{**chunk, "rerank_degraded": True} for chunk in search_results]
+        reranked_results = select_evidence(
+            scored,
+            query=query,
+            degraded=not scored or any(chunk.get("rerank_degraded") for chunk in scored),
+            chunk_cap=top_k or settings.complex_context_chunks,
+            token_budget=settings.complex_context_tokens,
+        )
         
         # Assemble context
         final_context = self._assemble_context(
