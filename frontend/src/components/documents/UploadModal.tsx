@@ -1,11 +1,12 @@
-import { useState, useCallback } from 'react';
-import { X, Upload, File, Loader2, CheckCircle, AlertCircle, Plus } from 'lucide-react';
-import api from '../../services/api';
+import { useCallback, useId, useRef, useState, type DragEvent } from 'react';
+import { AlertCircle, CheckCircle2, File as FileIcon, Upload, X } from 'lucide-react';
+import api, { errorMessage } from '../../services/api';
+import { Button, Field, IconButton, Input, Modal, Notice, cn } from '../../ui';
 
-interface UploadModalProps {
-  onClose: () => void;
-  onSuccess: () => void;
-}
+/** Mirrors the backend defaults (ALLOWED_EXTENSIONS, MAX_UPLOAD_SIZE_MB, 20 per batch). */
+const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.doc', '.txt', '.xlsx', '.xls'];
+const MAX_SIZE_MB = 50;
+const MAX_FILES = 20;
 
 interface FileEntry {
   file: File;
@@ -16,311 +17,230 @@ interface FileEntry {
 interface UploadResult {
   filename: string;
   status: string;
-  message: string;
-  document_id?: string;
+  message?: string;
   error?: string;
 }
 
-const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.doc', '.txt', '.xlsx', '.xls'];
-const MAX_SIZE_BYTES = 50 * 1024 * 1024;
-
-function validateFile(file: File): string | null {
-  if (file.size > MAX_SIZE_BYTES) return 'File exceeds 50MB limit';
-  const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-  if (!ALLOWED_EXTENSIONS.includes(ext))
-    return `${ext} not supported. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}`;
-  return null;
+function validate(file: File): string | undefined {
+  const dot = file.name.lastIndexOf('.');
+  const ext = dot >= 0 ? file.name.slice(dot).toLowerCase() : '';
+  if (!ALLOWED_EXTENSIONS.includes(ext)) return `${ext || 'This file type'} is not supported`;
+  if (file.size > MAX_SIZE_MB * 1024 * 1024) return `Larger than ${MAX_SIZE_MB} MB`;
+  if (file.size === 0) return 'The file is empty';
+  return undefined;
 }
 
-export default function UploadModal({ onClose, onSuccess }: UploadModalProps) {
+const size = (bytes: number) =>
+  bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+
+export default function UploadModal({
+  onClose,
+  onSuccess,
+  knownTypes = [],
+}: {
+  onClose: () => void;
+  onSuccess: () => void;
+  /** Document types already in use, offered as suggestions. */
+  knownTypes?: string[];
+}) {
   const [files, setFiles] = useState<FileEntry[]>([]);
-  const [docType, setDocType] = useState('finance');
+  const [docType, setDocType] = useState('');
   const [department, setDepartment] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<UploadResult[] | null>(null);
-  const [globalError, setGlobalError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
+  const listId = useId();
 
-  const addFiles = useCallback((incoming: FileList | File[]) => {
-    const arr = Array.from(incoming);
-    const entries: FileEntry[] = arr.map((f) => ({
-      file: f,
-      id: `${f.name}-${f.size}-${Date.now()}-${Math.random()}`,
-      error: validateFile(f) ?? undefined,
-    }));
-    setFiles((prev) => {
-      const existingNames = new Set(prev.map((e) => e.file.name));
-      const unique = entries.filter((e) => !existingNames.has(e.file.name));
-      return [...prev, ...unique];
-    });
-    setGlobalError(null);
+  const add = useCallback((incoming: FileList | File[]) => {
     setResults(null);
+    setError(null);
+    setFiles((prev) => {
+      const names = new Set(prev.map((e) => e.file.name));
+      const fresh = Array.from(incoming)
+        .filter((f) => !names.has(f.name))
+        .map((f) => ({ file: f, id: `${f.name}-${f.size}-${f.lastModified}`, error: validate(f) }));
+      return [...prev, ...fresh];
+    });
   }, []);
 
-  const removeFile = (id: string) =>
-    setFiles((prev) => prev.filter((e) => e.id !== id));
+  const valid = files.filter((e) => !e.error);
+  const tooMany = valid.length > MAX_FILES;
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files?.length) addFiles(e.target.files);
+  const onDrop = (event: DragEvent) => {
+    event.preventDefault();
+    setDragging(false);
+    if (!uploading && event.dataTransfer.files?.length) add(event.dataTransfer.files);
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files);
-  };
-
-  const validFiles = files.filter((e) => !e.error);
-  const hasErrors = files.some((e) => e.error);
-
-  const handleUpload = async () => {
-    if (validFiles.length === 0) return;
-
+  const upload = async () => {
+    if (!valid.length || tooMany || !docType.trim()) return;
     setUploading(true);
-    setGlobalError(null);
+    setProgress(0);
+    setError(null);
     setResults(null);
-
     try {
-      const raw = validFiles.map((e) => e.file);
-
-      let response: any;
-      if (raw.length === 1) {
-        const single = await api.uploadDocument(raw[0], docType, department || undefined);
-        response = {
-          total: 1,
-          succeeded: single.status !== 'failed' ? 1 : 0,
-          failed: single.status === 'failed' ? 1 : 0,
-          duplicates: single.status === 'duplicate' ? 1 : 0,
-          results: [single],
-        };
-      } else {
-        response = await api.uploadDocuments(raw, docType, department || undefined);
-      }
-
-      setResults(response.results ?? []);
-
-      const allDone =
-        response.failed === 0 &&
-        (response.succeeded > 0 || response.duplicates > 0);
-
-      if (allDone) {
-        setTimeout(() => onSuccess(), 2000);
-      }
-    } catch (err: any) {
-      setGlobalError(err.response?.data?.detail || 'Upload failed. Please try again.');
+      const raw = valid.map((e) => e.file);
+      const type = docType.trim().toLowerCase();
+      const dept = department.trim() || undefined;
+      const response = raw.length === 1
+        ? { results: [await api.uploadDocument(raw[0], type, dept, setProgress)] }
+        : await api.uploadDocuments(raw, type, dept, setProgress);
+      const list: UploadResult[] = response.results ?? [];
+      setResults(list);
+      setFiles([]);
+      if (list.some((r) => r.status === 'processing')) onSuccess();
+    } catch (err) {
+      setError(errorMessage(err, 'Upload failed. Please try again.'));
     } finally {
       setUploading(false);
     }
   };
 
-  const statusIcon = (status: string) => {
-    if (status === 'processing') return <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />;
-    if (status === 'duplicate') return <AlertCircle className="w-4 h-4 text-yellow-500 flex-shrink-0" />;
-    return <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />;
-  };
-
-  const statusColor = (status: string) => {
-    if (status === 'processing') return 'text-green-700';
-    if (status === 'duplicate') return 'text-yellow-700';
-    return 'text-red-700';
-  };
+  const accepted = results?.filter((r) => r.status === 'processing').length ?? 0;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      <div className="flex items-center justify-center min-h-screen px-3 sm:px-4 pt-4 pb-20 text-center sm:p-0">
-        <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={onClose} />
-
-        <div className="relative inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg w-full mx-3 sm:mx-0">
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200">
-            <h3 className="text-base sm:text-lg font-semibold text-gray-900">Upload Documents</h3>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-gray-500 transition-colors p-2 -mr-2"
-              disabled={uploading}
-              aria-label="Close"
+    <Modal
+      open
+      onClose={onClose}
+      dismissible={!uploading}
+      size="lg"
+      title="Upload documents"
+      description="Files are parsed, chunked and indexed for your organization. Large files take a few minutes."
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={uploading}>{results ? 'Done' : 'Cancel'}</Button>
+          {!results && (
+            <Button
+              onClick={upload}
+              loading={uploading}
+              disabled={!valid.length || tooMany || !docType.trim()}
+              leading={<Upload className="h-4 w-4" />}
             >
-              <X className="w-5 h-5" />
-            </button>
+              {valid.length > 1 ? `Upload ${valid.length} files` : 'Upload'}
+            </Button>
+          )}
+        </>
+      }
+    >
+      <div className="space-y-5">
+        {results ? (
+          <div className="space-y-3">
+            <Notice tone={accepted === results.length ? 'success' : 'warning'}>
+              {accepted} of {results.length} file{results.length === 1 ? '' : 's'} accepted. Indexing continues in the background.
+            </Notice>
+            <ul className="divide-y divide-hairline rounded-sm border border-hairline">
+              {results.map((r, i) => (
+                <li key={`${r.filename}-${i}`} className="flex items-start gap-3 px-4 py-3">
+                  {r.status === 'processing'
+                    ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-label="Accepted" />
+                    : <AlertCircle className={cn('mt-0.5 h-4 w-4 shrink-0', r.status === 'duplicate' ? 'text-warning' : 'text-error')} aria-label={r.status} />}
+                  <div className="min-w-0">
+                    <p className="truncate text-small font-semibold text-ink">{r.filename}</p>
+                    <p className="text-caption text-ink-muted">{r.message || r.error || r.status}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <Button variant="secondary" size="sm" onClick={() => setResults(null)}>Upload more</Button>
           </div>
-
-          {/* Body */}
-          <div className="px-4 sm:px-6 py-4 space-y-4">
-            {/* Drop Zone */}
+        ) : (
+          <>
             <div
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
-              className={`border-2 border-dashed rounded-lg p-4 sm:p-6 text-center transition-colors ${
-                files.length > 0
-                  ? 'border-primary-300 bg-primary-50'
-                  : 'border-gray-300 hover:border-primary-400 bg-gray-50'
-              }`}
-            >
-              <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-              <p className="text-sm text-gray-600 mb-2">
-                Drag and drop files here, or
-              </p>
-              <label className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-gray-300 rounded-lg text-xs sm:text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors">
-                <Plus className="w-3.5 h-3.5" />
-                Add Files
-                <input
-                  type="file"
-                  multiple
-                  onChange={handleInputChange}
-                  accept=".pdf,.docx,.doc,.txt,.xlsx,.xls"
-                  className="sr-only"
-                  disabled={uploading}
-                />
-              </label>
-              <p className="text-xs text-gray-400 mt-2">
-                PDF, DOCX, TXT, XLSX — max 50MB each — up to 20 files
-              </p>
-            </div>
-
-            {/* File List */}
-            {files.length > 0 && (
-              <div className="space-y-2 max-h-48 overflow-y-auto">
-                {files.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${
-                      entry.error
-                        ? 'border-red-200 bg-red-50'
-                        : 'border-gray-200 bg-gray-50'
-                    }`}
-                  >
-                    <File className={`w-4 h-4 flex-shrink-0 ${entry.error ? 'text-red-400' : 'text-primary-500'}`} />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-800 truncate">{entry.file.name}</p>
-                      {entry.error ? (
-                        <p className="text-xs text-red-600">{entry.error}</p>
-                      ) : (
-                        <p className="text-xs text-gray-500">
-                          {(entry.file.size / 1024 / 1024).toFixed(2)} MB
-                        </p>
-                      )}
-                    </div>
-                    {!uploading && (
-                      <button
-                        onClick={() => removeFile(entry.id)}
-                        className="text-gray-400 hover:text-red-500 transition-colors p-1"
-                        aria-label="Remove"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Summary line */}
-            {files.length > 0 && (
-              <p className="text-xs text-gray-500">
-                {validFiles.length} valid file{validFiles.length !== 1 ? 's' : ''}
-                {hasErrors ? ` · ${files.length - validFiles.length} invalid (will be skipped)` : ''}
-              </p>
-            )}
-
-            {/* Upload indicator */}
-            {uploading && (
-              <div className="flex items-center gap-2 text-sm text-gray-600">
-                <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                Uploading {validFiles.length} file{validFiles.length !== 1 ? 's' : ''}...
-              </div>
-            )}
-
-            {/* Results */}
-            {results && (
-              <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                {results.map((r, i) => (
-                  <div key={i} className="flex items-start gap-2 text-sm">
-                    {statusIcon(r.status)}
-                    <div className="flex-1 min-w-0">
-                      <span className="font-medium text-gray-800 truncate block">{r.filename}</span>
-                      <span className={`text-xs ${statusColor(r.status)}`}>{r.message}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Global error */}
-            {globalError && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-                <p className="text-xs sm:text-sm text-red-800">{globalError}</p>
-              </div>
-            )}
-
-            {/* Form fields */}
-            <div className="space-y-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Document Type *
-                </label>
-                <select
-                  value={docType}
-                  onChange={(e) => setDocType(e.target.value)}
-                  disabled={uploading}
-                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
-                >
-                  <option value="finance">Finance</option>
-                  <option value="hrms">HRMS</option>
-                  <option value="policy">Policy</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Department (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={department}
-                  onChange={(e) => setDepartment(e.target.value)}
-                  placeholder="e.g., Finance, HR, Operations"
-                  disabled={uploading}
-                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Footer */}
-          <div className="px-4 sm:px-6 py-3 sm:py-4 bg-gray-50 border-t border-gray-200 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2">
-            <button
-              onClick={onClose}
-              disabled={uploading}
-              className="w-full sm:w-auto px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
-            >
-              {results ? 'Close' : 'Cancel'}
-            </button>
-            <button
-              onClick={handleUpload}
-              disabled={validFiles.length === 0 || uploading}
-              className="w-full sm:w-auto px-4 py-2.5 text-sm font-medium text-white bg-gradient-to-r from-primary-500 to-primary-600 rounded-lg hover:from-primary-600 hover:to-primary-700 disabled:opacity-50 transition-all shadow-sm"
-            >
-              {uploading ? (
-                <span className="flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Uploading...
-                </span>
-              ) : (
-                <span className="flex items-center gap-2">
-                  <Upload className="w-4 h-4" />
-                  {validFiles.length > 1
-                    ? `Upload ${validFiles.length} Files`
-                    : 'Upload'}
-                </span>
+              onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={onDrop}
+              className={cn(
+                'flex flex-col items-center rounded-md border border-dashed px-6 py-8 text-center transition-colors',
+                dragging ? 'border-focus bg-focus/[0.06]' : 'border-field-border bg-canvas-soft'
               )}
-            </button>
-          </div>
-        </div>
+            >
+              <Upload className="mb-3 h-6 w-6 text-ink-muted" aria-hidden />
+              <p className="text-body text-ink">Drop files here, or</p>
+              <Button variant="secondary" size="sm" className="mt-3" onClick={() => picker.current?.click()} disabled={uploading}>
+                Choose files
+              </Button>
+              <input
+                ref={picker}
+                type="file"
+                multiple
+                accept={ALLOWED_EXTENSIONS.join(',')}
+                className="sr-only"
+                tabIndex={-1}
+                aria-hidden
+                onChange={(event) => {
+                  if (event.target.files?.length) add(event.target.files);
+                  event.target.value = '';
+                }}
+              />
+              <p className="mt-3 text-caption text-ink-muted">
+                PDF, Word, Excel or text · up to {MAX_SIZE_MB} MB each · {MAX_FILES} files per upload
+              </p>
+            </div>
+
+            {files.length > 0 && (
+              <div>
+                <ul className="max-h-56 divide-y divide-hairline overflow-y-auto rounded-sm border border-hairline">
+                  {files.map((entry) => (
+                    <li key={entry.id} className="flex items-center gap-3 px-4 py-2.5">
+                      <FileIcon className={cn('h-4 w-4 shrink-0', entry.error ? 'text-error' : 'text-ink-muted')} aria-hidden />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-small font-semibold text-ink">{entry.file.name}</p>
+                        <p className={cn('text-caption', entry.error ? 'text-error' : 'text-ink-muted')}>
+                          {entry.error ?? size(entry.file.size)}
+                        </p>
+                      </div>
+                      {!uploading && (
+                        <IconButton label={`Remove ${entry.file.name}`} size="sm" onClick={() => setFiles((prev) => prev.filter((e) => e.id !== entry.id))}>
+                          <X className="h-4 w-4" />
+                        </IconButton>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <p className={cn('mt-2 text-caption', tooMany ? 'text-error' : 'text-ink-muted')}>
+                  {tooMany
+                    ? `Choose at most ${MAX_FILES} files per upload.`
+                    : `${valid.length} ready${files.length > valid.length ? ` · ${files.length - valid.length} will be skipped` : ''}`}
+                </p>
+              </div>
+            )}
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Document type" hint="Used to filter documents, for example “policy” or “handbook”.">
+                <Input value={docType} onChange={(e) => setDocType(e.target.value)} list={listId} maxLength={50} disabled={uploading} required />
+              </Field>
+              <datalist id={listId}>
+                {knownTypes.map((t) => <option key={t} value={t} />)}
+              </datalist>
+              <Field label="Department" optional>
+                <Input value={department} onChange={(e) => setDepartment(e.target.value)} maxLength={100} disabled={uploading} />
+              </Field>
+            </div>
+
+            {uploading && (
+              <div>
+                <div
+                  role="progressbar"
+                  aria-label="Upload progress"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(progress * 100)}
+                  className="h-1.5 overflow-hidden rounded-full bg-canvas-tint"
+                >
+                  <div className="h-full bg-primary transition-[width] duration-200" style={{ width: `${Math.round(progress * 100)}%` }} />
+                </div>
+                <p className="mt-2 text-caption text-ink-muted">
+                  {progress < 1 ? `Uploading… ${Math.round(progress * 100)}%` : 'Upload complete, checking files…'}
+                </p>
+              </div>
+            )}
+            {error && <Notice tone="error">{error}</Notice>}
+          </>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }
