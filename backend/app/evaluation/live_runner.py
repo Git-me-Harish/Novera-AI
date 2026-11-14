@@ -18,7 +18,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
-from app.evaluation.metrics import evidence_matches
+from app.evaluation.metrics import evidence_cover, evidence_matches
 from app.evaluation.runner import load_jsonl
 from app.evaluation.schemas import GoldenExample
 from app.services.embedding.embedding_service import embedding_service
@@ -49,12 +49,9 @@ def _safe_retrieved_chunk(
     if example is not None and example.evidence:
         # Matched here, while the text is in memory, so artifacts can stay
         # content-free and labels survive re-chunking.
-        result["evidence_matches"] = evidence_matches(
-            example,
-            document_id=result["document_id"],
-            document_name=result["document_name"],
-            content=content,
-        )
+        identity = {"document_id": result["document_id"], "document_name": result["document_name"]}
+        result["evidence_matches"] = evidence_matches(example, content=content, **identity)
+        result["evidence_cover"] = evidence_cover(example, content=content, **identity)
     if include_content:
         result["content"] = content
     return result
@@ -78,9 +75,9 @@ async def _pre_rerank_items(db, example: GoldenExample, chunk_ids: list[str]) ->
     for item in items:
         row = by_id.get(item["chunk_id"])
         if row is not None:
-            item["evidence_matches"] = evidence_matches(
-                example, document_id=str(row.document_id), document_name=row.filename, content=row.content
-            )
+            identity = {"document_id": str(row.document_id), "document_name": row.filename}
+            item["evidence_matches"] = evidence_matches(example, content=row.content, **identity)
+            item["evidence_cover"] = evidence_cover(example, content=row.content, **identity)
     return items
 
 
@@ -146,6 +143,8 @@ async def collect_predictions(
                 "min_rerank_score": settings.min_rerank_score,
                 "focused_context_chunks": settings.focused_context_chunks,
                 "complex_context_chunks": settings.complex_context_chunks,
+                "focused_context_tokens": settings.focused_context_tokens,
+                "complex_context_tokens": settings.complex_context_tokens,
                 "rerank_model": f"{settings.rerank_provider}:{settings.rerank_model}",
                 "generation_model": f"{settings.llm_provider}:{settings.llm_model}",
                 "llm_max_concurrency": settings.llm_max_concurrency,

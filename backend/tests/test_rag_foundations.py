@@ -225,3 +225,19 @@ def test_anchor_quotes_the_sentences_that_state_the_answer():
                "Branch managers review attendance every month.")
     quote = best_quote(content, ["The processing fee is 1% of the loan amount."])
     assert "processing fee is 1%" in quote and "attendance" not in quote
+
+
+async def test_ingestion_embeddings_retry_transient_failures(monkeypatch):
+    """A timeout mid-ingestion used to fail the whole document."""
+    from app.services.embedding import embedding_service as module
+
+    waits = []
+
+    async def no_wait(seconds):
+        waits.append(seconds)
+
+    fake = _FakeEmbedder(fail_first=2)
+    monkeypatch.setattr(registry, "embedding_client", lambda: fake)
+    monkeypatch.setattr(module.asyncio, "sleep", no_wait)
+    vectors = await embedding_service.generate_embeddings_batch(["a", "b"])
+    assert len(vectors) == 2 and fake.calls == 3 and len(waits) == 2

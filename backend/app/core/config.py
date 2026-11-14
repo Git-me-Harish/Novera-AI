@@ -67,6 +67,11 @@ class Settings(BaseSettings):
 
     # Redis:
     redis_url: str = "redis://localhost:6379/0"
+    # Used when REDIS_URL carries no password (docker-compose). Keeping it out
+    # of the URL means characters like "@" need no URL-encoding: an unencoded
+    # "@" made the URL unparseable, so Redis was silently replaced by the
+    # in-process fallback. A password inside REDIS_URL still takes precedence.
+    redis_password: Optional[str] = None
     redis_cache_ttl: int = 3600
     embedding_cache_ttl_seconds: int = Field(default=3600, ge=30, le=86400)
     semantic_cache_enabled: bool = True
@@ -164,7 +169,12 @@ class Settings(BaseSettings):
 
     # Document Processing:
     max_upload_size_mb: int = 50
-    allowed_extensions: str = "pdf,docx,doc,txt,xlsx,xls"
+    allowed_extensions: str = "pdf,docx,doc,pptx,xlsx,xls,csv,md,markdown,html,htm,txt"
+    # Scanned PDF pages are read with Tesseract (installed in the Docker
+    # image). Languages use Tesseract codes joined by "+", e.g. "eng+hin".
+    ocr_enabled: bool = True
+    ocr_languages: str = "eng"
+    ocr_dpi: int = Field(default=300, ge=150, le=600)
     upload_dir: str = "./data/uploads"
     processed_dir: str = "./data/processed"
 
@@ -190,8 +200,14 @@ class Settings(BaseSettings):
     global_search_top_k: int = Field(default=20)
     scoped_search_top_k: int = Field(default=12)
     min_rerank_score: float = Field(default=0.2, ge=0.0, le=1.0)
-    focused_context_chunks: int = Field(default=3, ge=1, le=20)
-    complex_context_chunks: int = Field(default=5, ge=1, le=30)
+    # Evidence budget per answer, in tokens: chunk sizes follow document
+    # structure (a Q&A, a procedure), so a count of chunks is not a stable
+    # amount of evidence. The *_chunks values cap how many passages (and
+    # citation numbers) one answer can draw on.
+    focused_context_tokens: int = Field(default=2000, ge=300, le=16000)
+    complex_context_tokens: int = Field(default=3500, ge=300, le=32000)
+    focused_context_chunks: int = Field(default=6, ge=1, le=20)
+    complex_context_chunks: int = Field(default=10, ge=1, le=30)
 
     enable_dynamic_scope: bool = Field(default=True)
     min_relevance_for_scoped_search: float = Field(default=0.5)
