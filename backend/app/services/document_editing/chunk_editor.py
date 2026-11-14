@@ -256,25 +256,30 @@ class ChunkEditorService:
         Returns:
             List of edit history records
         """
+        from app.models.user import User
+
         result = await db.execute(
-            select(ChunkEditHistory)
+            select(ChunkEditHistory, User.full_name, User.email)
+            .outerjoin(User, User.id == ChunkEditHistory.edited_by)
             .where(ChunkEditHistory.chunk_id == chunk_id)
             .order_by(ChunkEditHistory.edited_at.desc())
             .limit(limit)
         )
-        history = result.scalars().all()
-        
+        rows = result.all()
+
         return [
             {
                 'id': str(h.id),
                 'edited_at': h.edited_at.isoformat(),
                 'edited_by': str(h.edited_by),
+                # Readable editor; a deleted account leaves only the id.
+                'edited_by_name': full_name or email,
                 'old_content': h.old_content,
                 'new_content': h.new_content,
                 'change_summary': h.change_summary,
                 'metadata': h.edit_metadata
             }
-            for h in history
+            for h, full_name, email in rows
         ]
     
     async def get_document_edit_stats(

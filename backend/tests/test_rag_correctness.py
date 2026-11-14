@@ -285,3 +285,16 @@ async def test_rejected_input_in_stream_mode_is_iterable(monkeypatch):
     )
     events = [event async for event in stream]
     assert [e["type"] for e in events] == ["metadata", "content", "done"]
+
+
+def test_sources_carry_the_cited_passage_for_verification():
+    from app.services.retrieval.pipeline import retrieval_pipeline
+
+    long_text = "word " * 400
+    assembled = retrieval_pipeline._assemble_context(
+        [_chunk("a", rerank_score=0.9, document_id="doc-1", content=long_text)],
+        {"intent": "factual", "entities": {}},
+    )
+    source = assembled["sources"][0]
+    assert source["document_id"] == "doc-1"
+    assert source["excerpt"].endswith("…") and len(source["excerpt"]) <= 601
