@@ -68,6 +68,78 @@ export type ConversationListView = 'all' | 'pinned' | 'archived' | 'deleted';
 /** @deprecated kept for older components; use ConversationDetail. */
 export type Conversation = ConversationDetail;
 
+
+/* ── Organization membership & administration ─────────────────────────── */
+
+export type RegistrationMode = 'invite_only' | 'self_serve' | 'disabled';
+export type InvitableRole = 'user' | 'admin' | 'org_admin';
+
+export interface Invitation {
+  id: string;
+  email: string;
+  role: InvitableRole;
+  status: 'pending' | 'accepted' | 'revoked' | 'expired';
+  created_at: string;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  invited_by: string | null;
+}
+
+export interface CreatedInvitation extends Invitation {
+  email_sent: boolean;
+  /** Shown once; only a hash is stored server-side. */
+  invite_url: string;
+}
+
+export interface InvitationPreview {
+  email: string;
+  role: InvitableRole;
+  organization: string;
+  expires_at: string;
+}
+
+export interface QuotaEntry {
+  limit: number | null;
+  used: number | null;
+  remaining: number | null;
+  percent: number | null;
+}
+
+export interface OrganizationUsage {
+  organization_id: string;
+  status: 'active' | 'suspended';
+  quotas: {
+    users: QuotaEntry;
+    documents: QuotaEntry;
+    storage_bytes: QuotaEntry;
+    pending_invitations: number;
+  };
+  rate_limits: {
+    chat_per_minute: number;
+    upload_per_minute: number;
+    api_per_minute: number;
+    chat_messages_per_day: number;
+  };
+}
+
+export interface AuditEvent {
+  id: string;
+  created_at: string;
+  organization_id: string | null;
+  actor_user_id: string | null;
+  actor_email: string | null;
+  actor_role: string | null;
+  action: string;
+  outcome: 'success' | 'failure' | 'denied';
+  target_type: string | null;
+  target_id: string | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  request_id: string | null;
+  details: Record<string, unknown>;
+}
+
 /* ── Domain types ───────────────────────────────────────────────────────── */
 
 export interface ChatMessage {
@@ -475,15 +547,16 @@ class APIService {
     email: string,
     username: string,
     password: string,
-    fullName?: string
+    fullName?: string,
+    organizationName?: string
   ): Promise<any> {
     try {
-      
       const response = await client.post('/auth/register', {
         email,
         username,
         password,
         full_name: fullName,
+        organization_name: organizationName,
       });
       
       return response.data;
@@ -658,9 +731,8 @@ class APIService {
   }
 
   async resetUserPassword(userId: string, newPassword: string): Promise<void> {
-    await client.post(`/admin/users/${userId}/reset-password`, null, {
-      params: { new_password: newPassword },
-    });
+    // In the body: query strings are written to access logs.
+    await client.post(`/admin/users/${userId}/reset-password`, { new_password: newPassword });
   }
 
   async getAllDocuments(params?: {
@@ -868,6 +940,66 @@ class APIService {
       passes_aa: ratio >= 4.5,
       passes_aaa: ratio >= 7
     };
+  }
+
+
+  // ── Organization membership & administration ──────────────────────────────
+
+  async getRegistrationMode(): Promise<RegistrationMode> {
+    const response = await client.get<{ mode: RegistrationMode }>('/auth/registration-mode');
+    return response.data.mode;
+  }
+
+  async previewInvitation(token: string): Promise<InvitationPreview> {
+    const response = await client.get<InvitationPreview>(`/auth/invitations/${encodeURIComponent(token)}`);
+    return response.data;
+  }
+
+  async acceptInvitation(data: { token: string; username: string; password: string; full_name?: string }) {
+    const response = await client.post('/auth/invitations/accept', data);
+    return response.data;
+  }
+
+  async listInvitations(status?: Invitation['status']): Promise<Invitation[]> {
+    const response = await client.get<{ items: Invitation[] }>('/organization/invitations', {
+      params: { status },
+    });
+    return response.data.items;
+  }
+
+  async createInvitation(email: string, role: InvitableRole = 'user'): Promise<CreatedInvitation> {
+    const response = await client.post<CreatedInvitation>('/organization/invitations', { email, role });
+    return response.data;
+  }
+
+  async revokeInvitation(invitationId: string): Promise<Invitation> {
+    const response = await client.delete<Invitation>(`/organization/invitations/${invitationId}`);
+    return response.data;
+  }
+
+  async resendInvitation(invitationId: string): Promise<CreatedInvitation> {
+    const response = await client.post<CreatedInvitation>(`/organization/invitations/${invitationId}/resend`);
+    return response.data;
+  }
+
+  async getOrganizationUsage(): Promise<OrganizationUsage> {
+    const response = await client.get<OrganizationUsage>('/organization/usage');
+    return response.data;
+  }
+
+  async getAuditLog(params: {
+    action?: string;
+    actor_user_id?: string;
+    outcome?: 'success' | 'failure' | 'denied';
+    since?: string;
+    until?: string;
+    limit?: number;
+    cursor?: string | null;
+  } = {}): Promise<{ items: AuditEvent[]; next_cursor: string | null }> {
+    const response = await client.get('/organization/audit-log', {
+      params: { ...params, cursor: params.cursor || undefined },
+    });
+    return response.data;
   }
 
   // ── Chat history ──────────────────────────────────────────────────────────

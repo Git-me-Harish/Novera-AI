@@ -35,7 +35,7 @@ from app.db.session import init_db, close_db
 from app.api.endpoints import (
     health, documents, auth, chat, search,
     admin, document_editor, customization, organization, ai_settings,
-    conversations,
+    conversations, tenant_admin,
 )
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
@@ -198,6 +198,7 @@ for _router, _tag in [
     (admin.router,           "Admin"),
     (document_editor.router, "Document Editor"),
     (ai_settings.router,     "AI Settings"),
+    (tenant_admin.router,    "Organization Admin"),
 ]:
     app.include_router(_router, prefix=_pfx, tags=[_tag])
 
@@ -274,10 +275,18 @@ async def spa_fallback(request: Request, full_path: str):
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     if exc.status_code >= 500:
         logger.error(f"HTTP {exc.status_code} on {request.method} {request.url.path}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"error": exc.detail, "status_code": exc.status_code},
-    )
+    # `detail` is always a display string (FastAPI's standard field, which the
+    # frontend reads); structured details such as {"code": "quota_exceeded",
+    # ...} are lifted to the top level for programmatic handling. Returning
+    # only `error` meant the UI could never show the server's message.
+    content: dict = {"status_code": exc.status_code}
+    if isinstance(exc.detail, dict):
+        message = str(exc.detail.get("message") or exc.detail.get("code") or "Request failed")
+        content.update(exc.detail)
+    else:
+        message = str(exc.detail)
+    content.update(detail=message, error=message)
+    return JSONResponse(status_code=exc.status_code, content=content, headers=getattr(exc, "headers", None))
 
 
 @app.exception_handler(RequestValidationError)

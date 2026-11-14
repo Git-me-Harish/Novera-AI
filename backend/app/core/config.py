@@ -210,6 +210,25 @@ class Settings(BaseSettings):
     enable_query_reformulation: bool = Field(default=True)
     enable_context_ui: bool = Field(default=True)
 
+    # Tenancy:
+    # invite_only: org admins invite people (default, safe for shared tenants)
+    # self_serve:  sign-up creates a NEW organization owned by the new user
+    # disabled:    no sign-up; super admins provision everything
+    # Sign-up never places a stranger inside an existing organization.
+    registration_mode: str = Field(default="invite_only", pattern="^(invite_only|self_serve|disabled)$")
+    invitation_expire_days: int = Field(default=7, ge=1, le=90)
+    audit_retention_days: int = Field(default=365, ge=30, le=3650)
+    # Per-organization request limits (per minute unless noted); an
+    # organization can be given different values by a super admin.
+    org_rate_limit_chat_per_minute: int = Field(default=600, ge=1)
+    org_rate_limit_upload_per_minute: int = Field(default=60, ge=1)
+    org_rate_limit_api_per_minute: int = Field(default=3000, ge=1)
+    org_chat_messages_per_day: int = Field(default=0, ge=0)  # 0 = unlimited
+    # Number of reverse proxies in front of the API. X-Forwarded-For is only
+    # trusted for that many hops; 0 means use the socket peer address, so a
+    # client cannot evade IP rate limits by sending its own header.
+    trusted_proxy_hops: int = Field(default=0, ge=0, le=5)
+
     # Chat history:
     conversation_auto_title: bool = True
     # Soft-deleted conversations can be restored for this long, then purged.

@@ -4,7 +4,7 @@ Super admin only - manages organizations, assignments, and statistics.
 """
 from typing import List, Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from pydantic import BaseModel, Field
@@ -18,6 +18,9 @@ from app.models.document import Document
 from app.models.customization import OrganizationCustomization
 from pydantic import BaseModel, Field, validator
 from app.api.dependencies.auth import get_current_user
+from app.services.tenancy import audit, lifecycle
+from app.services.tenancy.audit import Action
+from app.services.tenancy.limits import OrgLimitOverrides, effective_limits, invalidate as invalidate_limits
 
 router = APIRouter()
 
@@ -53,35 +56,37 @@ class CreateOrganizationRequest(BaseModel):
         """
         if not v:
             raise ValueError('Organization name is required')
-        
+
         # Convert to lowercase and strip whitespace
         sanitized = v.lower().strip()
-        
+
         # Replace spaces with hyphens
         sanitized = sanitized.replace(' ', '-')
-        
+
         # Remove any characters that aren't lowercase letters, numbers, hyphens, or underscores
         import re
         sanitized = re.sub(r'[^a-z0-9_-]', '', sanitized)
-        
+
         # Remove consecutive hyphens/underscores
         sanitized = re.sub(r'[-_]+', '-', sanitized)
-        
+
         # Strip leading/trailing hyphens/underscores
         sanitized = sanitized.strip('-_')
-        
+
         if not sanitized:
             raise ValueError('Organization name must contain at least one alphanumeric character')
-        
+
         if len(sanitized) < 2:
             raise ValueError('Organization name must be at least 2 characters long')
-        
+
         return sanitized
 
 class UpdateOrganizationRequest(BaseModel):
     display_name: Optional[str] = Field(None, min_length=2, max_length=255)
     description: Optional[str] = Field(None, max_length=1000)
+    # Prefer the suspend/reactivate endpoints, which record a reason.
     is_active: Optional[bool] = None
+    # Send null to remove a limit.
     max_users: Optional[int] = Field(None, ge=1)
     max_documents: Optional[int] = Field(None, ge=1)
     max_storage_gb: Optional[int] = Field(None, ge=1)
@@ -114,6 +119,7 @@ class OrganizationListResponse(BaseModel):
 @router.post("/super-admin/organizations", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_organization(
     request: CreateOrganizationRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     super_admin: User = Depends(get_current_super_admin)
 ):
@@ -129,7 +135,7 @@ async def create_organization(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Organization with name '{request.name}' already exists"
         )
-    
+
     try:
         organization = Organization(
             name=request.name,
@@ -142,11 +148,15 @@ async def create_organization(
             settings=request.settings or {},
             created_by=super_admin.id
         )
-        
+
         db.add(organization)
+        await db.flush()
+        audit.record(db, Action.ORG_CREATED, actor=super_admin, organization_id=organization.id,
+                     target_type="organization", target_id=organization.id,
+                     details={"name": organization.name}, request=http_request)
         await db.commit()
         await db.refresh(organization)
-        
+
         # Create default customization for the organization
         customization = OrganizationCustomization(
             organization_id=organization.id,
@@ -156,14 +166,14 @@ async def create_organization(
         )
         db.add(customization)
         await db.commit()
-        
+
         logger.info(f"Super admin {super_admin.email} created organization: {organization.name}")
-        
+
         return {
             "message": "Organization created successfully",
             "organization": organization.to_dict()
         }
-        
+
     except Exception as e:
         await db.rollback()
         logger.error(f"Organization creation failed: {str(e)}")
@@ -182,44 +192,44 @@ async def list_organizations(
     super_admin: User = Depends(get_current_super_admin)
 ):
     query = select(Organization)
-    
+
     if is_active is not None:
         query = query.where(Organization.is_active == is_active)
-    
+
     if search:
         search_pattern = f"%{search}%"
         query = query.where(
             (Organization.name.ilike(search_pattern)) |
             (Organization.display_name.ilike(search_pattern))
         )
-    
+
     count_query = select(func.count()).select_from(query.subquery())
     total_result = await db.execute(count_query)
     total = total_result.scalar()
-    
+
     query = query.order_by(Organization.created_at.desc()).offset(skip).limit(limit)
     result = await db.execute(query)
     organizations = result.scalars().all()
-    
+
     org_list = []
     for org in organizations:
         user_count_result = await db.execute(
             select(func.count()).select_from(User).where(User.organization_id == org.id)
         )
         user_count = user_count_result.scalar()
-        
+
         admin_count_result = await db.execute(
             select(func.count()).select_from(User).where(
                 and_(User.organization_id == org.id, User.role == "org_admin")
             )
         )
         admin_count = admin_count_result.scalar()
-        
+
         doc_count_result = await db.execute(
             select(func.count()).select_from(Document).where(Document.organization_id == org.id)
         )
         doc_count = doc_count_result.scalar()
-        
+
         storage_result = await db.execute(
             select(func.sum(Document.file_size_bytes)).select_from(Document).where(
                 Document.organization_id == org.id
@@ -227,7 +237,7 @@ async def list_organizations(
         )
         storage_bytes = storage_result.scalar() or 0
         storage_mb = storage_bytes / (1024 * 1024)
-        
+
         org_list.append(
             OrganizationResponse(
                 id=str(org.id),
@@ -247,7 +257,7 @@ async def list_organizations(
                 admin_count=admin_count
             )
         )
-    
+
     return OrganizationListResponse(
         total=total,
         organizations=org_list
@@ -264,30 +274,30 @@ async def get_organization_details(
         select(Organization).where(Organization.id == organization_id)
     )
     org = result.scalar_one_or_none()
-    
+
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
-    
+
     user_count_result = await db.execute(
         select(func.count()).select_from(User).where(User.organization_id == org.id)
     )
     user_count = user_count_result.scalar()
-    
+
     admin_count_result = await db.execute(
         select(func.count()).select_from(User).where(
             and_(User.organization_id == org.id, User.role == "org_admin")
         )
     )
     admin_count = admin_count_result.scalar()
-    
+
     doc_count_result = await db.execute(
         select(func.count()).select_from(Document).where(Document.organization_id == org.id)
     )
     doc_count = doc_count_result.scalar()
-    
+
     storage_result = await db.execute(
         select(func.sum(Document.file_size_bytes)).select_from(Document).where(
             Document.organization_id == org.id
@@ -295,20 +305,20 @@ async def get_organization_details(
     )
     storage_bytes = storage_result.scalar() or 0
     storage_mb = storage_bytes / (1024 * 1024)
-    
+
     recent_users_result = await db.execute(
         select(User).where(User.organization_id == org.id)
         .order_by(User.created_at.desc()).limit(5)
     )
     recent_users = recent_users_result.scalars().all()
-    
+
     admins_result = await db.execute(
         select(User).where(
             and_(User.organization_id == org.id, User.role == "org_admin")
         ).order_by(User.created_at.desc())
     )
     admins = admins_result.scalars().all()
-    
+
     return {
         "organization": org.to_dict(),
         "statistics": {
@@ -347,6 +357,7 @@ async def get_organization_details(
 async def update_organization(
     organization_id: UUID,
     request: UpdateOrganizationRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     super_admin: User = Depends(get_current_super_admin)
 ):
@@ -354,75 +365,166 @@ async def update_organization(
         select(Organization).where(Organization.id == organization_id)
     )
     org = result.scalar_one_or_none()
-    
+
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
-    
-    update_data = request.dict(exclude_unset=True)
-    
+
+    update_data = request.model_dump(exclude_unset=True)
+    is_active = update_data.pop("is_active", None)
+    new_settings = update_data.pop("settings", None)
+    changed: dict = {}
+
     for field, value in update_data.items():
-        if value is not None:
+        if field in ("display_name", "description") and value is None:
+            continue
+        # None on a limit means "unlimited"; it used to be silently ignored,
+        # so a limit could never be removed once set.
+        if getattr(org, field) != value:
+            changed[field] = {"from": getattr(org, field), "to": value}
             setattr(org, field, value)
-    
+    if new_settings is not None:
+        protected = {"ai", "limits"} & set(new_settings)
+        if protected:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Use the dedicated endpoints to change: {', '.join(sorted(protected))}",
+            )
+        # Merge: replacing the dict wiped the org's AI configuration and limits.
+        org.settings = {**(org.settings or {}), **new_settings}
+        changed["settings"] = sorted(new_settings)
+
     org.updated_at = datetime.now(timezone.utc)
-    
+    if changed:
+        action = (Action.ORG_LIMITS_CHANGED
+                  if set(changed) & {"max_users", "max_documents", "max_storage_gb"} else Action.ORG_UPDATED)
+        audit.record(db, action, actor=super_admin, organization_id=org.id,
+                     target_type="organization", target_id=org.id, details=changed, request=http_request)
     await db.commit()
+
+    if is_active is not None and is_active != org.is_active:
+        try:
+            if is_active:
+                await lifecycle.reactivate(db, org, actor=super_admin, request=http_request)
+            else:
+                await lifecycle.suspend(db, org, actor=super_admin,
+                                        reason="Deactivated from organization settings", request=http_request)
+        except lifecycle.LifecycleError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     await db.refresh(org)
-    
+
     logger.info(f"Super admin {super_admin.email} updated organization {org.name}")
-    
+
     return {
         "message": "Organization updated successfully",
         "organization": org.to_dict()
     }
 
 
-@router.delete("/super-admin/organizations/{organization_id}")
-async def delete_organization(
+async def _org_or_404(db: AsyncSession, organization_id: UUID) -> Organization:
+    org = (await db.execute(select(Organization).where(Organization.id == organization_id))).scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    return org
+
+
+class SuspendRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
+class DeleteOrganizationRequest(BaseModel):
+    # Must equal the organization's name: deletion is irreversible.
+    confirm_name: str = Field(..., min_length=1, max_length=255)
+
+
+@router.post("/super-admin/organizations/{organization_id}/suspend", response_model=dict)
+async def suspend_organization(
+    organization_id: UUID,
+    body: SuspendRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+    super_admin: User = Depends(get_current_super_admin),
+):
+    """Lock every member out immediately; all data is kept."""
+    org = await _org_or_404(db, organization_id)
+    try:
+        await lifecycle.suspend(db, org, actor=super_admin, reason=body.reason, request=http_request)
+    except lifecycle.LifecycleError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return {"message": "Organization suspended", "organization": org.to_dict()}
+
+
+@router.post("/super-admin/organizations/{organization_id}/reactivate", response_model=dict)
+async def reactivate_organization(
+    organization_id: UUID,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+    super_admin: User = Depends(get_current_super_admin),
+):
+    org = await _org_or_404(db, organization_id)
+    try:
+        await lifecycle.reactivate(db, org, actor=super_admin, request=http_request)
+    except lifecycle.LifecycleError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return {"message": "Organization reactivated", "organization": org.to_dict()}
+
+
+@router.get("/super-admin/organizations/{organization_id}/limits", response_model=dict)
+async def get_organization_limits(
     organization_id: UUID,
     db: AsyncSession = Depends(get_db),
-    super_admin: User = Depends(get_current_super_admin)
+    super_admin: User = Depends(get_current_super_admin),
 ):
-    result = await db.execute(
-        select(Organization).where(Organization.id == organization_id)
-    )
-    org = result.scalar_one_or_none()
-    
-    if not org:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organization not found"
-        )
-    
-    if org.name == "default":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete default organization"
-        )
-    
-    user_count_result = await db.execute(
-        select(func.count()).select_from(User).where(User.organization_id == org.id)
-    )
-    user_count = user_count_result.scalar()
-    
-    if user_count > 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot delete organization with {user_count} users. Please reassign or delete users first."
-        )
-    
-    await db.delete(org)
+    org = await _org_or_404(db, organization_id)
+    return {"effective": effective_limits(org), "overrides": (org.settings or {}).get("limits") or {}}
+
+
+@router.put("/super-admin/organizations/{organization_id}/limits", response_model=dict)
+async def set_organization_limits(
+    organization_id: UUID,
+    body: OrgLimitOverrides,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+    super_admin: User = Depends(get_current_super_admin),
+):
+    """Override request limits for one organization; null restores the default."""
+    org = await _org_or_404(db, organization_id)
+    overrides = {k: v for k, v in body.model_dump().items() if v is not None}
+    before = (org.settings or {}).get("limits") or {}
+    org.settings = {**(org.settings or {}), "limits": overrides}
+    audit.record(db, Action.ORG_LIMITS_CHANGED, actor=super_admin, organization_id=org.id,
+                 target_type="organization", target_id=org.id,
+                 details={"rate_limits": {"from": before, "to": overrides}}, request=http_request)
     await db.commit()
-    
-    logger.info(f"Super admin {super_admin.email} deleted organization {org.name}")
-    
-    return {
-        "message": "Organization deleted successfully",
-        "organization_id": str(organization_id)
-    }
+    invalidate_limits(org.id)
+    return {"effective": effective_limits(org), "overrides": overrides}
+
+
+@router.delete("/super-admin/organizations/{organization_id}", response_model=dict)
+async def delete_organization(
+    organization_id: UUID,
+    body: DeleteOrganizationRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+    super_admin: User = Depends(get_current_super_admin),
+):
+    """Permanently delete a suspended organization and everything it owns.
+
+    Removes users, documents, chunks, conversations, invitations, its audit
+    rows and the stored files. The deletion itself stays in the platform
+    audit log.
+    """
+    org = await _org_or_404(db, organization_id)
+    try:
+        removed = await lifecycle.delete_permanently(
+            db, org, actor=super_admin, confirm_name=body.confirm_name, request=http_request
+        )
+    except lifecycle.LifecycleError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+    return {"message": "Organization permanently deleted", "organization_id": str(organization_id),
+            "removed": removed}
 
 
 @router.get("/super-admin/organizations/{organization_id}/users")
@@ -439,29 +541,29 @@ async def get_organization_users(
         select(Organization).where(Organization.id == organization_id)
     )
     org = result.scalar_one_or_none()
-    
+
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
-    
+
     query = select(User).where(User.organization_id == organization_id)
-    
+
     if role:
         query = query.where(User.role == role)
-    
+
     if is_active is not None:
         query = query.where(User.is_active == is_active)
-    
+
     count_query = select(func.count()).select_from(query.subquery())
     total_result = await db.execute(count_query)
     total = total_result.scalar()
-    
+
     query = query.order_by(User.created_at.desc()).offset(skip).limit(limit)
     users_result = await db.execute(query)
     users = users_result.scalars().all()
-    
+
     return {
         "total": total,
         "organization": org.to_dict(),
@@ -472,6 +574,7 @@ async def get_organization_users(
 @router.post("/super-admin/organizations/{organization_id}/assign-admin")
 async def assign_organization_admin(
     organization_id: UUID,
+    http_request: Request,
     user_id: UUID = Query(...),
     db: AsyncSession = Depends(get_db),
     super_admin: User = Depends(get_current_super_admin)
@@ -480,44 +583,47 @@ async def assign_organization_admin(
         select(Organization).where(Organization.id == organization_id)
     )
     org = org_result.scalar_one_or_none()
-    
+
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
-    
+
     user_result = await db.execute(
         select(User).where(User.id == user_id)
     )
     user = user_result.scalar_one_or_none()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     if user.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User does not belong to this organization"
         )
-    
+
     if user.role == "super_admin":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot change role of super admin"
         )
-    
+
+    audit.record(db, Action.USER_ROLE_CHANGED, actor=super_admin, organization_id=organization_id,
+                 target_type="user", target_id=user.id, details={"from": user.role, "to": "org_admin"},
+                 request=http_request)
     user.role = "org_admin"
     user.updated_at = datetime.now(timezone.utc)
-    
+
     await db.commit()
     await db.refresh(user)
-    
+
     logger.info(f"Super admin {super_admin.email} assigned {user.email} as admin of {org.name}")
-    
+
     return {
         "message": f"User {user.email} is now an admin of {org.display_name}",
         "user": user.to_dict()
@@ -527,6 +633,7 @@ async def assign_organization_admin(
 @router.post("/super-admin/organizations/{organization_id}/revoke-admin")
 async def revoke_organization_admin(
     organization_id: UUID,
+    http_request: Request,
     user_id: UUID = Query(...),
     db: AsyncSession = Depends(get_db),
     super_admin: User = Depends(get_current_super_admin)
@@ -535,33 +642,36 @@ async def revoke_organization_admin(
         select(User).where(User.id == user_id)
     )
     user = user_result.scalar_one_or_none()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
+
     if user.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User does not belong to this organization"
         )
-    
+
     if user.role != "org_admin":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User is not an organization admin"
         )
-    
+
+    audit.record(db, Action.USER_ROLE_CHANGED, actor=super_admin, organization_id=organization_id,
+                 target_type="user", target_id=user.id, details={"from": user.role, "to": "user"},
+                 request=http_request)
     user.role = "user"
     user.updated_at = datetime.now(timezone.utc)
-    
+
     await db.commit()
     await db.refresh(user)
-    
+
     logger.info(f"Super admin {super_admin.email} revoked admin role from {user.email}")
-    
+
     return {
         "message": f"Admin role revoked from {user.email}",
         "user": user.to_dict()
@@ -575,22 +685,22 @@ async def get_super_admin_statistics(
 ):
     org_count_result = await db.execute(select(func.count()).select_from(Organization))
     total_orgs = org_count_result.scalar()
-    
+
     active_org_result = await db.execute(
         select(func.count()).select_from(Organization).where(Organization.is_active == True)
     )
     active_orgs = active_org_result.scalar()
-    
+
     user_count_result = await db.execute(select(func.count()).select_from(User))
     total_users = user_count_result.scalar()
-    
+
     doc_count_result = await db.execute(select(func.count()).select_from(Document))
     total_docs = doc_count_result.scalar()
-    
+
     storage_result = await db.execute(select(func.sum(Document.file_size_bytes)).select_from(Document))
     total_storage_bytes = storage_result.scalar() or 0
     total_storage_mb = total_storage_bytes / (1024 * 1024)
-    
+
     return {
         "total_organizations": total_orgs,
         "active_organizations": active_orgs,

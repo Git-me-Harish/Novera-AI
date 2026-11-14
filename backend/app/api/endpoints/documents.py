@@ -24,7 +24,7 @@ from uuid import UUID
 
 from fastapi import (
     APIRouter, Depends, File, HTTPException,
-    Query, UploadFile, status,
+    Query, Request, UploadFile, status,
 )
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -35,6 +35,9 @@ from app.api.dependencies.auth import get_current_active_user, get_current_admin
 from app.db.session import get_db
 from app.models.document import Chunk, Document
 from app.models.user import User
+from app.services.tenancy import audit
+from app.services.tenancy.audit import Action
+from app.services.tenancy.quotas import QuotaExceeded, ensure_document_capacity
 from app.services.document_processing.job_queue import document_job_queue
 from app.services.document_processing.identity import stable_document_id
 from app.utils.file_utils import FileValidator, file_handler
@@ -100,6 +103,7 @@ class ProcessingStatusResponse(BaseModel):
 
 @router.post("/documents/upload", response_model=DocumentUploadResponse)
 async def upload_document(
+    http_request: Request,
     file: UploadFile = File(...),
     doc_type: str = Query(...),
     department: Optional[str] = Query(None),
@@ -148,7 +152,19 @@ async def upload_document(
 
     except Exception as e:
         logger.error(f"Error during file upload: {e}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Upload failed")
+
+    # Document-count and storage quotas, checked under the organization row
+    # lock and released by the commit that inserts the document.
+    try:
+        await ensure_document_capacity(db, current_user.organization_id, additional_bytes=file_size)
+    except QuotaExceeded as exc:
+        actor = audit.snapshot(current_user)
+        await db.rollback()
+        file_handler.delete_file(file_path)
+        await audit.record_independent(Action.QUOTA_EXCEEDED, actor=actor, outcome="denied",
+                                       details=exc.as_detail(), request=http_request)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=exc.as_detail())
 
     try:
         document = Document(
@@ -171,14 +187,18 @@ async def upload_document(
             },
         )
         db.add(document)
+        audit.record(db, Action.DOCUMENT_UPLOADED, actor=current_user, target_type="document",
+                     target_id=document_id, details={"filename": file.filename, "bytes": file_size},
+                     request=http_request)
         await db.commit()
         await db.refresh(document)
         logger.info(f"Document record created: {document.id} for org {current_user.organization_id}")
 
     except Exception as e:
         logger.error(f"Database error: {e}")
+        await db.rollback()
         file_handler.delete_file(file_path)
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        raise HTTPException(status_code=500, detail="Could not save the document")
 
     try:
         await document_job_queue.enqueue(document.id)
@@ -203,6 +223,7 @@ async def upload_document(
 
 @router.post("/documents/upload-multiple", response_model=MultiUploadResponse)
 async def upload_multiple_documents(
+    http_request: Request,
     files: List[UploadFile] = File(...),
     doc_type: str = Query(...),
     department: Optional[str] = Query(None),
@@ -210,7 +231,10 @@ async def upload_multiple_documents(
     current_user: User = Depends(get_current_admin_user),
 ):
     """Upload up to 20 documents in a single request. Admin only."""
-    if not current_user.organization_id:
+    # Snapshot identity once: a rollback after one failed file expires the ORM
+    # user, and reading it again on the next file would fail the whole batch.
+    actor = audit.snapshot(current_user)
+    if not actor.organization_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User must belong to an organization to upload documents",
@@ -238,11 +262,11 @@ async def upload_multiple_documents(
                 continue
 
             file_path, file_hash, file_size = await file_handler.save_upload_file(
-                file, str(current_user.id)
+                file, str(actor.id)
             )
 
             document_id = stable_document_id(
-                current_user.organization_id,
+                actor.organization_id,
                 file_hash,
             )
 
@@ -250,7 +274,7 @@ async def upload_multiple_documents(
                 await db.execute(
                     select(Document).where(
                         Document.file_hash == file_hash,
-                        Document.organization_id == current_user.organization_id,
+                        Document.organization_id == actor.organization_id,
                     )
                 )
             ).scalar_one_or_none()
@@ -267,6 +291,23 @@ async def upload_multiple_documents(
                 duplicates += 1
                 continue
 
+            try:
+                await ensure_document_capacity(db, actor.organization_id, additional_bytes=file_size)
+            except QuotaExceeded as exc:
+                await db.rollback()
+                file_handler.delete_file(file_path)
+                await audit.record_independent(Action.QUOTA_EXCEEDED, actor=actor, outcome="denied",
+                                               details=exc.as_detail(), request=http_request)
+                results.append(MultiUploadResult(
+                    filename=file.filename or "unknown",
+                    status="failed",
+                    message=str(exc),
+                    file_size_mb=round(file_size / (1024 * 1024), 2),
+                    error="quota_exceeded",
+                ))
+                failed += 1
+                continue
+
             document = Document(
                 id=document_id,
                 filename=file.filename,
@@ -277,16 +318,19 @@ async def upload_multiple_documents(
                 doc_type=doc_type,
                 department=department,
                 status="pending",
-                uploaded_by=current_user.id,
-                organization_id=current_user.organization_id,
+                uploaded_by=actor.id,
+                organization_id=actor.organization_id,
                 doc_metadata={
                     "mime_type": FileValidator.get_mime_type(file.filename),
                     "upload_source": "api_multi",
-                    "uploaded_by_email": current_user.email,
-                    "organization_id": str(current_user.organization_id),
+                    "uploaded_by_email": actor.email,
+                    "organization_id": str(actor.organization_id),
                 },
             )
             db.add(document)
+            audit.record(db, Action.DOCUMENT_UPLOADED, actor=actor, target_type="document",
+                         target_id=document_id, details={"filename": file.filename, "bytes": file_size},
+                         request=http_request)
             await db.commit()
             await db.refresh(document)
 
@@ -319,11 +363,13 @@ async def upload_multiple_documents(
 
         except Exception as e:
             logger.error(f"Error processing file {file.filename}: {e}")
+            # Release the session (and any quota lock) before the next file.
+            await db.rollback()
             results.append(MultiUploadResult(
                 filename=file.filename or "unknown",
                 status="failed",
                 message="Upload failed due to server error",
-                error=str(e),
+                error="server_error",
             ))
             failed += 1
 
@@ -430,6 +476,7 @@ async def get_document_status(
 @router.delete("/documents/{document_id}")
 async def delete_document(
     document_id: UUID,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_admin_user),
 ):
@@ -448,10 +495,15 @@ async def delete_document(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found or access denied")
 
-    file_handler.delete_file(Path(document.file_path))
+    file_path = Path(document.file_path)
     await db.execute(delete(Chunk).where(Chunk.document_id == document_id))
+    audit.record(db, Action.DOCUMENT_DELETED, actor=current_user, organization_id=document.organization_id,
+                 target_type="document", target_id=document_id, details={"filename": document.filename},
+                 request=http_request)
     await db.delete(document)
     await db.commit()
+    # Only after the commit: a failed commit must not leave a row without its file.
+    file_handler.delete_file(file_path)
 
     logger.info(
         f"Document deleted by {current_user.email} (org: {current_user.organization_id}): {document_id}"
