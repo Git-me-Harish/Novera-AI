@@ -27,6 +27,7 @@ from .metrics import (
     reciprocal_rank,
     relevant_ids,
     relevant_keys,
+    mark_evidence_completion,
 )
 from .judge import (
     JUDGE_VERSION,
@@ -76,8 +77,8 @@ def evaluate_case(
     prediction: dict[str, Any],
     judgment: Judgment | None = None,
 ) -> EvaluationCaseResult:
-    retrieved = prediction.get("retrieved", []) or []
-    pre_rerank = prediction.get("pre_rerank_retrieved", []) or []
+    retrieved = mark_evidence_completion(example, prediction.get("retrieved", []) or [])
+    pre_rerank = mark_evidence_completion(example, prediction.get("pre_rerank_retrieved", []) or [])
     answer = str(prediction.get("answer", "") or "")
     relevant = relevant_keys(example)
     found_relevant = relevant_ids(example, retrieved)
