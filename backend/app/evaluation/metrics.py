@@ -52,6 +52,64 @@ def evidence_matches(example, *, document_id: str, document_name: str, content: 
     return matches
 
 
+def _quote_tokens(quote: str) -> list[str]:
+    seen, out = set(), []
+    for token in _tokens(quote):
+        if token not in seen:
+            seen.add(token)
+            out.append(token)
+    return out
+
+
+def evidence_cover(example, *, document_id: str, document_name: str, content: str) -> dict[str, list[int]]:
+    """Which words of each evidence quote this chunk contains, as positions.
+
+    Stored instead of the text so artifacts stay content-free; lets the
+    evaluator count evidence split across several retrieved chunks.
+    """
+    cover: dict[str, list[int]] = {}
+    chunk_tokens = _set(content)
+    for index, evidence in enumerate(getattr(example, "evidence", None) or []):
+        same_document = (
+            (evidence.document_id and evidence.document_id == document_id)
+            or (evidence.document and evidence.document.casefold() == (document_name or "").casefold())
+        )
+        if not same_document:
+            continue
+        hits = [i for i, token in enumerate(_quote_tokens(evidence.quote)) if token in chunk_tokens]
+        if hits:
+            cover[str(index)] = hits
+    return cover
+
+
+def mark_evidence_completion(example, retrieved: Sequence[dict]) -> list[dict]:
+    """Annotate each item with the evidence it completes, cumulatively.
+
+    Evidence counts as retrieved at the first rank where the chunks so far
+    together contain at least EVIDENCE_COVERAGE of its quote. Rank metrics
+    (recall@k, MRR, nDCG) then work unchanged, and no longer depend on how
+    the document happened to be cut into chunks.
+    """
+    evidence = getattr(example, "evidence", None) or []
+    if not evidence or not any("evidence_cover" in item for item in retrieved):
+        return list(retrieved)
+    sizes = {str(i): len(_quote_tokens(e.quote)) for i, e in enumerate(evidence)}
+    covered: dict[str, set[int]] = {key: set() for key in sizes}
+    done: set[str] = set()
+    out = []
+    for item in retrieved:
+        completed = []
+        for key, positions in (item.get("evidence_cover") or {}).items():
+            if key in done or key not in covered:
+                continue
+            covered[key].update(positions)
+            if sizes[key] and len(covered[key]) / sizes[key] >= EVIDENCE_COVERAGE:
+                done.add(key)
+                completed.append(int(key))
+        out.append({**item, "evidence_matches": sorted(set(item.get("evidence_matches") or []) | set(completed))})
+    return out
+
+
 def _matched_ids(item: dict, relevant: set[str]) -> set[str]:
     keys = {
         str(item[key])

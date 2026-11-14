@@ -93,8 +93,11 @@ class RedisManager:
 
         try:
             import redis.asyncio as aioredis
+            from app.core.config import settings as _settings
+
             client = aioredis.from_url(
                 url,
+                password=_settings.redis_password or None,
                 encoding="utf-8",
                 decode_responses=True,
                 socket_connect_timeout=3,

@@ -82,7 +82,7 @@ class DocumentViewerService:
     def is_previewable(self, filename: str) -> bool:
         """Check if document type supports preview."""
         ext = Path(filename).suffix.lower()
-        previewable_types = ['.pdf', '.txt', '.md', '.json', '.csv']
+        previewable_types = ['.pdf', '.txt', '.md', '.markdown', '.json', '.csv']
         return ext in previewable_types
     
     def get_preview_type(self, filename: str) -> str:
@@ -91,7 +91,7 @@ class DocumentViewerService:
         
         if ext == '.pdf':
             return 'pdf'
-        elif ext in ['.txt', '.md', '.csv', '.json']:
+        elif ext in ['.txt', '.md', '.markdown', '.csv', '.json']:
             return 'text'
         elif ext in ['.docx', '.doc']:
             return 'docx'
@@ -125,7 +125,7 @@ class DocumentViewerService:
         file_path = Path(doc_info['file_path'])
         ext = file_path.suffix.lower()
         
-        if ext not in ['.txt', '.md', '.csv', '.json']:
+        if ext not in ['.txt', '.md', '.markdown', '.csv', '.json']:
             return None
         
         try:
