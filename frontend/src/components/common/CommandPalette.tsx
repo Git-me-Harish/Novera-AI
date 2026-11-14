@@ -1,379 +1,202 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Search, 
-  MessageSquare, 
-  FileText, 
-  History, 
-  Upload, 
+import {
+  Activity,
+  Bot,
+  FileText,
+  History,
+  LayoutDashboard,
+  MessageSquare,
+  Palette,
+  Plus,
+  ScrollText,
+  Search,
   User,
-  Settings,
-  BarChart3,
-  X,
-  Command,
-  ArrowRight,
+  Users,
 } from 'lucide-react';
-import api, { type ConversationSummary } from '../../services/api';
+import api, { type ConversationSummary, type Document } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
+import { cn } from '../../ui';
 
-interface CommandItem {
+interface Command {
   id: string;
+  group: 'Actions' | 'Conversations' | 'Documents';
   label: string;
-  description?: string;
-  icon: any;
-  action: () => void;
-  category: 'actions' | 'documents' | 'conversations' | 'navigation' | 'recent';
-  keywords?: string[];
+  detail?: string;
+  icon: ReactNode;
+  run: () => void;
 }
 
-interface CommandPaletteProps {
-  isOpen: boolean;
-  onClose: () => void;
-}
-
-export default function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
+/**
+ * Ctrl/Cmd+K command palette (WAI-ARIA combobox + listbox). Actions are
+ * filtered locally; conversations are searched on the server (titles and
+ * message text); documents are filtered by name.
+ */
+export default function CommandPalette({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
-  const [search, setSearch] = useState('');
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [documents, setDocuments] = useState<any[]>([]);
+  const [query, setQuery] = useState('');
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [active, setActive] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
 
-  // Load data when palette opens
   useEffect(() => {
-    if (isOpen) {
-      loadData();
-      inputRef.current?.focus();
-      setSearch('');
-      setSelectedIndex(0);
-    }
+    if (!isOpen) return;
+    opener.current = document.activeElement as HTMLElement | null;
+    setQuery('');
+    setActive(0);
+    window.setTimeout(() => input.current?.focus(), 0);
+    api.getDocuments({ limit: 100 }).then((r) => setDocuments(r.documents)).catch(() => setDocuments([]));
+    return () => opener.current?.focus?.();
   }, [isOpen]);
 
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const [docs, convs] = await Promise.all([
-        api.getDocuments({ limit: 10 }),
-        api.getConversations(10)
-      ]);
-      setDocuments(docs.documents || []);
-      setConversations(convs || []);
-    } catch (error) {
-      console.error('Failed to load command palette data:', error);
-    } finally {
-      setLoading(false);
-    }
+  // Server-side conversation search, debounced; ignores stale responses.
+  useEffect(() => {
+    if (!isOpen) return;
+    let stale = false;
+    const timer = window.setTimeout(() => {
+      api.listConversations({ q: query, limit: 6 })
+        .then((page) => !stale && setConversations(page.items))
+        .catch(() => !stale && setConversations([]));
+    }, query ? 200 : 0);
+    return () => {
+      stale = true;
+      window.clearTimeout(timer);
+    };
+  }, [isOpen, query]);
+
+  const go = (path: string) => () => {
+    onClose();
+    navigate(path);
   };
 
-  // Define actions
-  const actions: CommandItem[] = [
-    {
-      id: 'new-chat',
-      label: 'Start New Chat',
-      description: 'Begin a new conversation',
-      icon: MessageSquare,
-      action: () => {
-        navigate('/chat');
-        onClose();
-      },
-      category: 'actions',
-      keywords: ['new', 'chat', 'conversation', 'start']
-    },
-    {
-      id: 'upload-doc',
-      label: 'Upload Document',
-      description: 'Upload a new document',
-      icon: Upload,
-      action: () => {
-        navigate('/documents');
-        onClose();
-        // Trigger upload modal after navigation
-        setTimeout(() => {
-          const uploadBtn = document.querySelector('[data-upload-trigger]');
-          if (uploadBtn instanceof HTMLElement) uploadBtn.click();
-        }, 100);
-      },
-      category: 'actions',
-      keywords: ['upload', 'document', 'file', 'add']
-    },
-    {
-      id: 'view-profile',
-      label: 'View Profile',
-      description: 'Go to your profile settings',
-      icon: User,
-      action: () => {
-        navigate('/profile');
-        onClose();
-      },
-      category: 'navigation',
-      keywords: ['profile', 'settings', 'account']
-    },
-  ];
+  const commands = useMemo<Command[]>(() => {
+    const q = query.trim().toLowerCase();
+    const actions: Command[] = [
+      { id: 'new', group: 'Actions' as const, label: 'New chat', icon: <Plus className="h-4 w-4" />, run: go('/chat') },
+      { id: 'convs', group: 'Actions' as const, label: 'All conversations', icon: <History className="h-4 w-4" />, run: go('/conversations') },
+      { id: 'docs', group: 'Actions' as const, label: 'Documents', icon: <FileText className="h-4 w-4" />, run: go('/documents') },
+      { id: 'profile', group: 'Actions' as const, label: 'Profile & security', icon: <User className="h-4 w-4" />, run: go('/profile') },
+      ...(isAdmin
+        ? [
+            { id: 'admin', group: 'Actions' as const, label: 'Administration overview', icon: <LayoutDashboard className="h-4 w-4" />, run: go('/admin') },
+            { id: 'members', group: 'Actions' as const, label: 'Members & invitations', icon: <Users className="h-4 w-4" />, run: go('/admin/members') },
+            { id: 'usage', group: 'Actions' as const, label: 'Usage & limits', icon: <Activity className="h-4 w-4" />, run: go('/admin/usage') },
+            { id: 'audit', group: 'Actions' as const, label: 'Audit log', icon: <ScrollText className="h-4 w-4" />, run: go('/admin/audit') },
+            { id: 'ai', group: 'Actions' as const, label: 'AI models', icon: <Bot className="h-4 w-4" />, run: go('/admin/ai') },
+            { id: 'brand', group: 'Actions' as const, label: 'Branding', icon: <Palette className="h-4 w-4" />, run: go('/admin/branding') },
+          ]
+        : []),
+    ].filter((c) => !q || c.label.toLowerCase().includes(q));
 
-  // Add admin actions
-  if (isAdmin) {
-    actions.push(
-      {
-        id: 'admin-dashboard',
-        label: 'Admin Dashboard',
-        description: 'View system statistics',
-        icon: BarChart3,
-        action: () => {
-          navigate('/admin');
-          onClose();
-        },
-        category: 'navigation',
-        keywords: ['admin', 'dashboard', 'stats']
-      },
-      {
-        id: 'manage-users',
-        label: 'Manage Users',
-        description: 'User management',
-        icon: User,
-        action: () => {
-          navigate('/admin/users');
-          onClose();
-        },
-        category: 'navigation',
-        keywords: ['users', 'admin', 'manage']
-      },
-      {
-        id: 'customization',
-        label: 'Customization',
-        description: 'Customize branding',
-        icon: Settings,
-        action: () => {
-          navigate('/admin/customization');
-          onClose();
-        },
-        category: 'navigation',
-        keywords: ['customize', 'branding', 'theme']
-      }
-    );
-  }
+    const convs: Command[] = conversations.map((c) => ({
+      id: `c-${c.id}`,
+      group: 'Conversations',
+      label: c.title,
+      detail: `${c.message_count} messages`,
+      icon: <MessageSquare className="h-4 w-4" />,
+      run: go(`/chat/${c.id}`),
+    }));
 
-  // Convert documents to command items
-  const documentItems: CommandItem[] = documents.map(doc => ({
-    id: `doc-${doc.id}`,
-    label: doc.filename,
-    description: `${doc.doc_type} - ${doc.total_pages} pages`,
-    icon: FileText,
-    action: () => {
-      navigate(`/documents/${doc.id}/edit`);
-      onClose();
-    },
-    category: 'documents',
-    keywords: [doc.filename, doc.doc_type, doc.department].filter(Boolean)
-  }));
+    const docs: Command[] = documents
+      .filter((d) => !q || d.filename.toLowerCase().includes(q))
+      .slice(0, 6)
+      .map((d) => ({
+        id: `d-${d.id}`,
+        group: 'Documents',
+        label: d.filename,
+        detail: d.status,
+        icon: <FileText className="h-4 w-4" />,
+        run: go(`/documents/${d.id}/edit`),
+      }));
+    return [...actions, ...convs, ...docs];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, conversations, documents, isAdmin]);
 
-  // Convert conversations to command items
-  const conversationItems: CommandItem[] = conversations.map(conv => {
-    return {
-      id: `conv-${conv.id}`,
-      label: conv.title,
-      description: `${conv.message_count} message${conv.message_count === 1 ? '' : 's'}`,
-      icon: History,
-      action: () => {
-        navigate(`/chat/${conv.id}`);
-        onClose();
-      },
-      category: 'conversations',
-      keywords: [conv.title, conv.preview ?? ''].filter(Boolean)
-    };
-  });
-
-  // Combine all items
-  const allItems = [...actions, ...documentItems, ...conversationItems];
-
-  // Filter items based on search
-  const filteredItems = search.trim() === '' 
-    ? allItems 
-    : allItems.filter(item => {
-        const searchLower = search.toLowerCase();
-        return (
-          item.label.toLowerCase().includes(searchLower) ||
-          item.description?.toLowerCase().includes(searchLower) ||
-          item.keywords?.some(k => k.toLowerCase().includes(searchLower))
-        );
-      });
-
-  // Group items by category
-  const groupedItems = filteredItems.reduce((acc, item) => {
-    if (!acc[item.category]) acc[item.category] = [];
-    acc[item.category].push(item);
-    return acc;
-  }, {} as Record<string, CommandItem[]>);
-
-  // Keyboard navigation
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isOpen) return;
-
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedIndex(prev => Math.min(prev + 1, filteredItems.length - 1));
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedIndex(prev => Math.max(prev - 1, 0));
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        filteredItems[selectedIndex]?.action();
-      } else if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, selectedIndex, filteredItems, onClose]);
-
-  // Scroll selected item into view
-  useEffect(() => {
-    if (listRef.current) {
-      const selectedElement = listRef.current.querySelector(`[data-index="${selectedIndex}"]`);
-      selectedElement?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
-  }, [selectedIndex]);
+  useEffect(() => setActive(0), [query]);
 
   if (!isOpen) return null;
 
-  const categoryLabels = {
-    actions: 'Actions',
-    navigation: 'Navigation',
-    documents: 'Documents',
-    conversations: 'Recent Conversations',
-    recent: 'Recent'
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActive((i) => Math.min(i + 1, commands.length - 1));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActive((i) => Math.max(i - 1, 0));
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      commands[active]?.run();
+    }
   };
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[10vh] px-4">
-      {/* Backdrop */}
-      <div 
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm animate-fadeIn"
-        onClick={onClose}
-      />
+  const groups = ['Actions', 'Conversations', 'Documents'] as const;
 
-      {/* Palette */}
-      <div className="relative w-full max-w-2xl bg-white rounded-xl shadow-2xl overflow-hidden animate-slideUp">
-        {/* Search Input */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200">
-          <Search className="w-5 h-5 text-gray-400 flex-shrink-0" />
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh]">
+      <div className="absolute inset-0 bg-ink-deep/50 animate-fade-in" onClick={onClose} aria-hidden />
+      <div role="dialog" aria-modal="true" aria-label="Command palette"
+        className="relative w-full max-w-xl overflow-hidden rounded-md border border-hairline bg-canvas animate-rise-in">
+        <div className="flex items-center gap-3 border-b border-hairline px-4">
+          <Search className="h-4 w-4 text-ink-muted" aria-hidden />
           <input
-            ref={inputRef}
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setSelectedIndex(0);
-            }}
-            placeholder="Search for actions, documents, conversations..."
-            className="flex-1 bg-transparent border-none outline-none text-gray-900 placeholder-gray-400 text-sm sm:text-base"
+            ref={input}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Search conversations, documents and actions"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="command-results"
+            aria-activedescendant={commands[active] ? `cmd-${commands[active].id}` : undefined}
+            aria-autocomplete="list"
+            className="h-14 flex-1 bg-transparent text-body text-ink placeholder:text-ink-muted/80 focus:outline-none"
           />
-          <div className="flex items-center gap-2">
-            <kbd className="hidden sm:inline-block px-2 py-1 text-xs font-semibold text-gray-600 bg-gray-100 border border-gray-200 rounded">
-              ESC
-            </kbd>
-            <button
-              onClick={onClose}
-              className="p-1 hover:bg-gray-100 rounded lg:hidden"
-            >
-              <X className="w-4 h-4 text-gray-500" />
-            </button>
-          </div>
+          <kbd className="rounded-xs border border-hairline px-1.5 py-0.5 font-mono text-caption text-ink-muted">Esc</kbd>
         </div>
-
-        {/* Results */}
-        <div 
-          ref={listRef}
-          className="max-h-[60vh] overflow-y-auto scroll-smooth-touch"
-        >
-          {loading ? (
-            <div className="p-8 text-center">
-              <div className="inline-block w-6 h-6 border-2 border-gray-300 border-t-primary-500 rounded-full animate-spin" />
-            </div>
-          ) : filteredItems.length === 0 ? (
-            <div className="p-8 text-center">
-              <p className="text-sm text-gray-500">No results found for "{search}"</p>
-            </div>
-          ) : (
-            <div className="py-2">
-              {Object.entries(groupedItems).map(([category, items]) => (
-                <div key={category} className="mb-4 last:mb-0">
-                  <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    {categoryLabels[category as keyof typeof categoryLabels]}
-                  </div>
-                  {items.map((item) => {
-                    const globalIndex = filteredItems.indexOf(item);
-                    const isSelected = globalIndex === selectedIndex;
-                    
+        <ul id="command-results" role="listbox" aria-label="Results" className="max-h-[50vh] overflow-y-auto py-2">
+          {commands.length === 0 && <li className="px-4 py-8 text-center text-small text-ink-muted">No results for “{query}”</li>}
+          {groups.map((group) => {
+            const items = commands.filter((c) => c.group === group);
+            if (!items.length) return null;
+            return (
+              <li key={group} role="presentation">
+                <p className="px-4 pb-1 pt-3 text-caption font-semibold text-ink-muted">{group}</p>
+                <ul role="group" aria-label={group}>
+                  {items.map((command) => {
+                    const index = commands.indexOf(command);
                     return (
-                      <button
-                        key={item.id}
-                        data-index={globalIndex}
-                        onClick={item.action}
-                        className={`w-full flex items-center gap-3 px-4 py-3 transition-colors ${
-                          isSelected 
-                            ? 'bg-primary-50 border-l-2 border-primary-500' 
-                            : 'hover:bg-gray-50 border-l-2 border-transparent'
-                        }`}
-                      >
-                        <div className={`p-2 rounded-lg ${
-                          isSelected ? 'bg-primary-100' : 'bg-gray-100'
-                        }`}>
-                          <item.icon className={`w-4 h-4 ${
-                            isSelected ? 'text-primary-600' : 'text-gray-600'
-                          }`} />
-                        </div>
-                        <div className="flex-1 text-left min-w-0">
-                          <p className={`text-sm font-medium truncate ${
-                            isSelected ? 'text-primary-900' : 'text-gray-900'
-                          }`}>
-                            {item.label}
-                          </p>
-                          {item.description && (
-                            <p className="text-xs text-gray-500 truncate">
-                              {item.description}
-                            </p>
-                          )}
-                        </div>
-                        {isSelected && (
-                          <ArrowRight className="w-4 h-4 text-primary-500 flex-shrink-0" />
+                      <li
+                        key={command.id}
+                        id={`cmd-${command.id}`}
+                        role="option"
+                        aria-selected={index === active}
+                        onMouseEnter={() => setActive(index)}
+                        onClick={command.run}
+                        className={cn(
+                          'mx-2 flex cursor-pointer items-center gap-3 rounded-xs px-3 py-2 text-small',
+                          index === active ? 'bg-canvas-tint text-ink' : 'text-ink'
                         )}
-                      </button>
+                      >
+                        <span className="text-ink-muted" aria-hidden>{command.icon}</span>
+                        <span className="flex-1 truncate">{command.label}</span>
+                        {command.detail && <span className="text-caption text-ink-muted">{command.detail}</span>}
+                      </li>
                     );
                   })}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="hidden sm:flex items-center justify-between px-4 py-2 border-t border-gray-200 bg-gray-50 text-xs text-gray-500">
-          <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1">
-              <kbd className="px-2 py-1 bg-white border border-gray-200 rounded">↑</kbd>
-              <kbd className="px-2 py-1 bg-white border border-gray-200 rounded">↓</kbd>
-              Navigate
-            </span>
-            <span className="flex items-center gap-1">
-              <kbd className="px-2 py-1 bg-white border border-gray-200 rounded">↵</kbd>
-              Select
-            </span>
-            <span className="flex items-center gap-1">
-              <kbd className="px-2 py-1 bg-white border border-gray-200 rounded">ESC</kbd>
-              Close
-            </span>
-          </div>
-          <div className="flex items-center gap-1 text-gray-400">
-            <Command className="w-3 h-3" />
-            <span>Tip: Press Ctrl+K anytime</span>
-          </div>
-        </div>
+                </ul>
+              </li>
+            );
+          })}
+        </ul>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

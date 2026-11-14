@@ -1,41 +1,64 @@
-import { FileText, ExternalLink } from 'lucide-react';
-import { Source } from '../../services/api';
+import { forwardRef } from 'react';
+import { FileText } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import type { Source } from '../../services/api';
+import { cn } from '../../ui';
 
-interface SourceCardProps {
+/**
+ * A retrieved passage the answer relied on (context card). Numbered exactly
+ * as the answer cites it, so "[2]" and card 2 are the same evidence.
+ */
+export const SourceCard = forwardRef<HTMLLIElement, {
   source: Source;
-}
-
-export default function SourceCard({ source }: SourceCardProps) {
+  number: number;
+  cited: boolean;
+  active?: boolean;
+  canOpen?: boolean;
+}>(function SourceCard({ source, number, cited, active, canOpen }, ref) {
+  const location = [source.page ? `Page ${source.page}` : null, source.section].filter(Boolean).join(' · ');
   return (
-    <div className="bg-white rounded-lg p-2.5 sm:p-3 border border-gray-200 hover:border-primary-300 transition-colors">
-      <div className="flex items-start gap-2">
-        <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-        <div className="flex-1 min-w-0">
-          <p className="text-xs sm:text-sm font-medium text-gray-900 truncate" title={source.document}>
-            {source.document}
+    <li
+      ref={ref}
+      id={`source-${source.chunk_id}`}
+      className={cn(
+        'rounded-md border bg-canvas p-4 transition-colors',
+        active ? 'border-ink' : 'border-hairline',
+        !cited && 'opacity-80'
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className={cn(
+            'mt-0.5 flex h-6 min-w-[24px] items-center justify-center rounded-xs text-caption font-semibold',
+            active ? 'bg-primary text-on-primary' : 'bg-canvas-tint text-ink'
+          )}
+          aria-hidden
+        >
+          {number}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-1.5 text-label font-semibold text-ink">
+            <FileText className="h-3.5 w-3.5 shrink-0 text-ink-muted" aria-hidden />
+            <span className="truncate">{source.document}</span>
           </p>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1">
-            {source.page && (
-              <span className="text-xs text-gray-500">Page {source.page}</span>
-            )}
-            {source.section && (
-              <>
-                <span className="text-xs text-gray-300 hidden xs:inline">•</span>
-                <span className="text-xs text-gray-500 truncate max-w-[150px]" title={source.section}>
-                  {source.section}
-                </span>
-              </>
+          {location && <p className="mt-0.5 text-caption text-ink-muted">{location}</p>}
+          {source.excerpt && (
+            <blockquote className="mt-2 line-clamp-6 border-l-2 border-hairline pl-3 text-small text-ink-muted">
+              {source.excerpt}
+            </blockquote>
+          )}
+          <div className="mt-2 flex items-center gap-3 text-caption">
+            {!cited && <span className="text-ink-muted">Retrieved, not cited</span>}
+            {canOpen && source.document_id && (
+              <Link to={`/documents/${source.document_id}/edit`} className="text-link hover:underline">
+                Open document
+              </Link>
             )}
           </div>
         </div>
-        <button
-          className="text-gray-400 hover:text-primary-600 transition-colors p-1 flex-shrink-0 min-touch-target"
-          title="View source"
-          aria-label="View source details"
-        >
-          <ExternalLink className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-        </button>
       </div>
-    </div>
+    </li>
   );
-}
+});
+
+export default SourceCard;

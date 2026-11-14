@@ -1,352 +1,361 @@
-import { ReactNode, useEffect } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { 
-  MessageSquare, 
-  FileText, 
-  History, 
-  User, 
-  LogOut, 
-  Menu, 
-  X,
-  Shield,
-  Users,
+import { useEffect, useState, type ReactNode } from 'react';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import {
+  Activity,
+  Bot,
+  ChevronsLeft,
+  ChevronsRight,
+  FileText,
+  History,
   LayoutDashboard,
-  Palette,
+  LogOut,
+  Menu as MenuIcon,
+  MessageSquare,
+  Monitor,
   Moon,
-  Sun
+  Palette,
+  Pin,
+  Plus,
+  ScrollText,
+  Sun,
+  User as UserIcon,
+  Users,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useConversation } from '../contexts/ConversationContext';
-import { useCustomization } from '../contexts/CustomizationContext';
-import TokenMeter from './chat/TokenMeter';
-import { getFullAssetUrl as getFullImageUrl } from '../utils/apiBase';
+import { useTheme, type ThemePreference } from '../contexts/ThemeContext';
+import { Wordmark } from './brand/Wordmark';
+import CommandPalette from './common/CommandPalette';
+import { useCommandPalette } from '../hooks/useCommandPalette';
+import { Button, IconButton, Menu, cn } from '../ui';
 
-interface LayoutProps {
-  children: ReactNode;
-  sidebarOpen: boolean;
-  setSidebarOpen: (open: boolean) => void;
+interface NavEntry {
+  to: string;
+  label: string;
+  icon: typeof MessageSquare;
+  end?: boolean;
 }
 
-export default function Layout({ children, sidebarOpen, setSidebarOpen }: LayoutProps) {
+const WORKSPACE_NAV: NavEntry[] = [
+  { to: '/chat', label: 'Chat', icon: MessageSquare },
+  { to: '/conversations', label: 'Conversations', icon: History },
+  { to: '/documents', label: 'Documents', icon: FileText },
+];
+
+const ADMIN_NAV: NavEntry[] = [
+  { to: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/admin/members', label: 'Members', icon: Users },
+  { to: '/admin/usage', label: 'Usage & limits', icon: Activity },
+  { to: '/admin/audit', label: 'Audit log', icon: ScrollText },
+  { to: '/admin/ai', label: 'AI models', icon: Bot },
+  { to: '/admin/branding', label: 'Branding', icon: Palette },
+];
+
+const THEME_OPTIONS: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
+  { value: 'system', label: 'Match system', icon: Monitor },
+  { value: 'light', label: 'Light', icon: Sun },
+  { value: 'dark', label: 'Dark', icon: Moon },
+];
+
+const COLLAPSE_KEY = 'novera:sidebar-collapsed';
+
+/**
+ * App shell. Desktop: a collapsible sidebar (workspace navigation, pinned
+ * and recent conversations, admin section, account menu). Below the laptop
+ * breakpoint it becomes a drawer behind a 56px top bar.
+ */
+export default function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
-  const navigate = useNavigate();
-  const { user, logout, isAdmin } = useAuth();
-  const { currentConversationId } = useConversation();
-  const { customization, darkMode, toggleDarkMode } = useCustomization();
-
-  useEffect(() => {
-    if (window.innerWidth < 1024) {
-      setSidebarOpen(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const palette = useCommandPalette();
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(COLLAPSE_KEY) === '1';
+    } catch {
+      return false;
     }
-  }, [location.pathname, setSidebarOpen]);
+  });
+
+  useEffect(() => setDrawerOpen(false), [location.pathname]);
 
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (window.innerWidth >= 1024) return;
-      
-      const sidebar = document.getElementById('mobile-sidebar');
-      const menuButton = document.getElementById('mobile-menu-button');
-      
-      if (
-        sidebarOpen &&
-        sidebar &&
-        !sidebar.contains(event.target as Node) &&
-        menuButton &&
-        !menuButton.contains(event.target as Node)
-      ) {
-        setSidebarOpen(false);
+    if (!drawerOpen) return;
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && setDrawerOpen(false);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [drawerOpen]);
+
+  const toggleCollapsed = () => {
+    setCollapsed((value) => {
+      try {
+        localStorage.setItem(COLLAPSE_KEY, value ? '0' : '1');
+      } catch {
+        /* preference not persisted */
       }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [sidebarOpen, setSidebarOpen]);
-
-  useEffect(() => {
-    if (window.innerWidth < 1024) {
-      if (sidebarOpen) {
-        document.body.style.overflow = 'hidden';
-      } else {
-        document.body.style.overflow = 'unset';
-      }
-    }
-    return () => {
-      document.body.style.overflow = 'unset';
-    };
-  }, [sidebarOpen]);
-
-  const handleLogout = async () => {
-    await logout();
-    navigate('/login');
+      return !value;
+    });
   };
-
-  const isActive = (path: string) => {
-    return location.pathname === path || location.pathname.startsWith(path + '/');
-  };
-
-  const navItems = [
-    { path: '/chat', icon: MessageSquare, label: 'Chat' },
-    { path: '/conversations', icon: History, label: 'Conversations' },
-  ];
-
-  const adminNavItems = [
-    { path: '/admin', icon: LayoutDashboard, label: 'Dashboard' },
-    { path: '/documents', icon: FileText, label: 'Documents' },
-    { path: '/admin/users', icon: Users, label: 'User Management' },
-    { path: '/admin/customization', icon: Palette, label: 'Customization' },
-  ];
-
-  const showTokenMeter = currentConversationId && (
-    location.pathname.startsWith('/chat') || 
-    location.pathname.startsWith('/conversations')
-  );
-
-  const appName = customization?.branding?.app_name || 'Novera';
-  const logoUrl = customization?.branding?.logo_url ? getFullImageUrl(customization.branding.logo_url) : null;
 
   return (
-    <div className="flex h-screen bg-theme overflow-hidden">
-      {/* Mobile Overlay */}
-      {sidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 lg:hidden transition-opacity duration-300"
-          onClick={() => setSidebarOpen(false)}
-          aria-hidden="true"
-        />
-      )}
-      {/* Sidebar */}
-      <aside
-        id="mobile-sidebar"
-        className={`
-          fixed lg:static inset-y-0 left-0 z-50
-          w-64 border-r border-theme
-          transform transition-theme duration-300 ease-in-out
-          flex flex-col
-          bg-sidebar
-          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-        `}
+    <div className="flex h-[100dvh] bg-canvas-warm text-ink">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[60] focus:rounded-xs focus:bg-primary focus:px-4 focus:py-2 focus:text-on-primary"
       >
-        {/* Logo */}
-        <div className="h-14 sm:h-16 flex items-center justify-between px-4 sm:px-6 border-b border-theme flex-shrink-0">
-          <div className="flex items-center space-x-2 min-w-0">
-            {logoUrl ? (
-              <img 
-                src={logoUrl} 
-                alt={appName}
-                className="h-6 sm:h-8 w-auto object-contain max-w-[100px] sm:max-w-[120px]"
-                onError={(e) => {
-                  console.error('Failed to load logo:', logoUrl);
-                  const parent = e.currentTarget.parentElement;
-                  if (parent) {
-                    e.currentTarget.style.display = 'none';
-                    if (!parent.querySelector('.logo-fallback')) {
-                      const fallback = document.createElement('div');
-                      fallback.className = 'logo-fallback w-6 h-6 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center';
-                      fallback.style.background = `linear-gradient(to bottom right, ${customization?.colors?.primary || '#0ea5e9'}, ${customization?.colors?.secondary || '#d946ef'})`;
-                      fallback.innerHTML = `<span class="text-white font-bold text-sm sm:text-base">${appName.charAt(0)}</span>`;
-                      parent.insertBefore(fallback, e.currentTarget);
-                    }
-                  }
-                }}
-              />
-            ) : (
-              <div 
-                className="w-6 h-6 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                style={{
-                  background: `linear-gradient(to bottom right, ${customization?.colors?.primary || '#0ea5e9'}, ${customization?.colors?.secondary || '#d946ef'})`
-                }}
-              >
-                <span className="text-white font-bold text-sm sm:text-base">{appName.charAt(0)}</span>
-              </div>
-            )}
-            <span className="font-semibold text-sm sm:text-base truncate text-theme-primary">
-              {appName}
-            </span>
-          </div>
+        Skip to content
+      </a>
 
-          <button
-            onClick={() => setSidebarOpen(false)}
-            className="lg:hidden p-2 -mr-2 rounded-lg hover:bg-theme-secondary transition-colors min-touch-target"
-            aria-label="Close sidebar"
-          >
-            <X className="w-5 h-5 text-theme-secondary" />
-          </button>
-        </div>
-        {/* Navigation */}
-        <nav className="flex-1 px-3 sm:px-4 py-4 sm:py-6 space-y-1 overflow-y-auto scroll-smooth-touch">
-          {/* Main Navigation */}
-          <div className="mb-6">
-            <p className="px-3 text-xs font-semibold uppercase tracking-wider mb-2 text-theme-secondary">
-              Main
-            </p>
-            {navItems.map((item) => (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={`
-                  nav-link-theme flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-theme
-                  min-touch-target
-                  ${isActive(item.path) ? 'active' : ''}
-                `}
-              >
-                <item.icon className="w-5 h-5 flex-shrink-0" />
-                <span className="font-medium text-sm sm:text-base">{item.label}</span>
-              </Link>
-            ))}
-          </div>
-          {/* Admin Navigation */}
-          {isAdmin && (
-            <div className="mb-6">
-              <p className="px-3 text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-1 text-theme-secondary">
-                <Shield className="w-3 h-3" />
-                Admin
-              </p>
-              {adminNavItems.map((item) => (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  className={`
-                    nav-link-theme flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-theme
-                    min-touch-target
-                    ${isActive(item.path) ? 'active' : ''}
-                  `}
-                >
-                  <item.icon className="w-5 h-5 flex-shrink-0" />
-                  <span className="font-medium text-sm sm:text-base">{item.label}</span>
-                </Link>
-              ))}
-            </div>
-          )}
-          {/* Account Navigation */}
-          <div>
-            <p className="px-3 text-xs font-semibold uppercase tracking-wider mb-2 text-theme-secondary">
-              Account
-            </p>
-            <Link
-              to="/profile"
-              className={`
-                nav-link-theme flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-theme
-                min-touch-target
-                ${isActive('/profile') ? 'active' : ''}
-              `}
-            >
-              <User className="w-5 h-5 flex-shrink-0" />
-              <span className="font-medium text-sm sm:text-base">Profile</span>
-            </Link>
-          </div>
-        </nav>
-        {/* Token Meter */}
-        {showTokenMeter && (
-          <div className="px-3 sm:px-4 pb-3 border-t border-theme pt-3 flex-shrink-0">
-            <TokenMeter 
-              conversationId={currentConversationId} 
-              isVisible={true}
-            />
-          </div>
+      {/* Desktop sidebar */}
+      <aside
+        className={cn(
+          'hidden shrink-0 border-r border-hairline bg-canvas transition-[width] duration-200 lg:flex lg:flex-col',
+          collapsed ? 'w-16' : 'w-[272px]'
         )}
-        {/* User Info & Logout */}
-        <div className="border-t border-theme p-3 sm:p-4 flex-shrink-0">
-          <div className="flex items-center space-x-3 mb-3">
-            <div 
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center flex-shrink-0"
-              style={{
-                background: `linear-gradient(to bottom right, ${customization?.colors?.primary || '#0ea5e9'}, ${customization?.colors?.secondary || '#d946ef'})`
-              }}
-            >
-              <span className="text-white font-bold text-xs sm:text-sm">
-                {user?.username?.charAt(0).toUpperCase()}
-              </span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs sm:text-sm font-medium truncate text-theme-primary">
-                {user?.full_name || user?.username}
-              </p>
-              <p className="text-xs truncate text-theme-secondary">
-                {user?.email}
-              </p>
-              {isAdmin && (
-                <span 
-                  className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium mt-1"
-                  style={{
-                    backgroundColor: darkMode ? 'rgba(243, 232, 255, 0.2)' : '#f3e8ff',
-                    color: darkMode ? '#e9d5ff' : '#7e22ce'
-                  }}
-                >
-                  <Shield className="w-3 h-3 mr-1" />
-                  Admin
-                </span>
-              )}
-            </div>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="w-full flex items-center justify-center space-x-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 active:bg-red-100 dark:active:bg-red-900/30 rounded-lg transition-colors min-touch-target"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>Logout</span>
-          </button>
-        </div>
+        aria-label="Primary"
+      >
+        <Sidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
       </aside>
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* Top Bar */}
-        <header className="h-14 sm:h-16 bg-theme border-b border-theme flex items-center justify-between px-4 sm:px-6 flex-shrink-0">
-          <button
-            id="mobile-menu-button"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-2 -ml-2 rounded-lg hover:bg-theme-secondary active:bg-theme-tertiary transition-colors min-touch-target tap-highlight-transparent"
-            aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}
+      {/* Mobile drawer */}
+      {drawerOpen && (
+        <div className="fixed inset-0 z-40 lg:hidden">
+          <div className="absolute inset-0 bg-ink-deep/50 animate-fade-in" onClick={() => setDrawerOpen(false)} aria-hidden />
+          <aside
+            className="relative flex h-full w-[min(86vw,300px)] flex-col border-r border-hairline bg-canvas animate-rise-in"
+            aria-label="Primary"
+            role="dialog"
+            aria-modal="true"
           >
-            {sidebarOpen ? (
-              <X className="w-5 h-5 text-theme-secondary" />
-            ) : (
-              <Menu className="w-5 h-5 text-theme-secondary" />
-            )}
-          </button>
+            <Sidebar collapsed={false} onClose={() => setDrawerOpen(false)} />
+          </aside>
+        </div>
+      )}
 
-          <div className="flex items-center space-x-2 sm:space-x-4 min-w-0">
-            {/* Dark Mode Toggle */}
-            {customization?.dark_mode?.enabled && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={toggleDarkMode}
-                  className="p-2 rounded-lg hover:bg-theme-secondary transition-colors min-touch-target relative group"
-                  title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-                  aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-                >
-                  <div className="relative">
-                    {darkMode ? (
-                      <Sun className="w-5 h-5 text-yellow-500" />
-                    ) : (
-                      <Moon className="w-5 h-5 text-theme-secondary" />
-                    )}
-                    {/* Tooltip */}
-                    <span className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 text-xs bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-                      {darkMode ? 'Light mode' : 'Dark mode'}
-                    </span>
-                  </div>
-                </button>
-                {/* Optional: Show current mode text on desktop */}
-                <span className="hidden md:inline text-xs text-theme-secondary">
-                  {darkMode ? 'Dark' : 'Light'}
-                </span>
-              </div>
-            )}
-            <span className="text-xs sm:text-sm truncate text-theme-secondary">
-              <span className="hidden sm:inline">Welcome, </span>
-              <span className="font-medium text-theme-primary">
-                {user?.username}
-              </span>
-            </span>
-          </div>
-        </header>
-
-        {/* Page Content */}
-        <main className="flex-1 overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <MobileTopBar onOpen={() => setDrawerOpen(true)} />
+        <main id="main" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto focus:outline-none">
           {children}
         </main>
       </div>
+      {/* Signed-in only: on public pages it would call authenticated APIs. */}
+      <CommandPalette isOpen={palette.isOpen} onClose={palette.close} />
+    </div>
+  );
+}
+
+function MobileTopBar({ onOpen }: { onOpen: () => void }) {
+  const navigate = useNavigate();
+  return (
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-hairline bg-canvas px-2 lg:hidden">
+      <IconButton label="Open navigation" onClick={onOpen}>
+        <MenuIcon className="h-5 w-5" />
+      </IconButton>
+      <Link to="/chat" className="px-2" aria-label="Home">
+        <Wordmark />
+      </Link>
+      <IconButton label="New chat" onClick={() => navigate('/chat')}>
+        <Plus className="h-5 w-5" />
+      </IconButton>
+    </header>
+  );
+}
+
+function Sidebar({
+  collapsed,
+  onToggleCollapsed,
+  onClose,
+}: {
+  collapsed: boolean;
+  onToggleCollapsed?: () => void;
+  onClose?: () => void;
+}) {
+  const navigate = useNavigate();
+  const { isAdmin } = useAuth();
+  const { recent, currentConversationId } = useConversation();
+  const pinned = recent.filter((c) => c.is_pinned);
+  const latest = recent.filter((c) => !c.is_pinned).slice(0, 15);
+
+  return (
+    <>
+      <div className={cn('flex h-16 shrink-0 items-center border-b border-hairline', collapsed ? 'justify-center' : 'justify-between px-4')}>
+        {!collapsed && (
+          <Link to="/chat" aria-label="Home">
+            <Wordmark />
+          </Link>
+        )}
+        {onClose ? (
+          <IconButton label="Close navigation" onClick={onClose}>
+            <X className="h-5 w-5" />
+          </IconButton>
+        ) : (
+          <IconButton label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={onToggleCollapsed}>
+            {collapsed ? <ChevronsRight className="h-5 w-5" /> : <ChevronsLeft className="h-5 w-5" />}
+          </IconButton>
+        )}
+      </div>
+
+      <div className={cn('shrink-0', collapsed ? 'px-2 py-3' : 'px-3 py-3')}>
+        {collapsed ? (
+          <IconButton label="New chat" variant="tertiary" onClick={() => navigate('/chat')} className="w-full">
+            <Plus className="h-5 w-5" />
+          </IconButton>
+        ) : (
+          <Button block leading={<Plus className="h-4 w-4" />} onClick={() => navigate('/chat')}>
+            New chat
+          </Button>
+        )}
+      </div>
+
+      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3" aria-label="Workspace">
+        <NavList entries={WORKSPACE_NAV} collapsed={collapsed} />
+
+        {!collapsed && pinned.length > 0 && (
+          <ConversationGroup title="Pinned" items={pinned} currentId={currentConversationId} pinned />
+        )}
+        {!collapsed && latest.length > 0 && (
+          <ConversationGroup title="Recent" items={latest} currentId={currentConversationId} />
+        )}
+
+        {isAdmin && (
+          <div className="mt-5">
+            {!collapsed && <p className="px-3 pb-1.5 text-caption font-semibold text-ink-muted">Administration</p>}
+            {collapsed && <div className="mx-3 mb-2 border-t border-hairline" aria-hidden />}
+            <NavList entries={ADMIN_NAV} collapsed={collapsed} />
+          </div>
+        )}
+      </nav>
+
+      <AccountMenu collapsed={collapsed} />
+    </>
+  );
+}
+
+function NavList({ entries, collapsed }: { entries: NavEntry[]; collapsed: boolean }) {
+  return (
+    <ul className="space-y-0.5">
+      {entries.map(({ to, label, icon: Icon, end }) => (
+        <li key={to}>
+          <NavLink
+            to={to}
+            end={end}
+            title={collapsed ? label : undefined}
+            aria-label={collapsed ? label : undefined}
+            className={({ isActive }) =>
+              cn(
+                'relative flex items-center gap-3 rounded-md px-3 py-2 text-label transition-colors',
+                collapsed && 'justify-center px-0',
+                isActive ? 'bg-canvas-tint font-semibold text-ink' : 'text-ink-muted hover:bg-canvas-soft hover:text-ink'
+              )
+            }
+          >
+            {({ isActive }) => (
+              <>
+                {/* Design.md app-shell row: the active indicator is the action charcoal. */}
+                {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-primary" aria-hidden />}
+                <Icon className="h-[18px] w-[18px] shrink-0" aria-hidden />
+                {!collapsed && <span className="truncate">{label}</span>}
+              </>
+            )}
+          </NavLink>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ConversationGroup({
+  title,
+  items,
+  currentId,
+  pinned,
+}: {
+  title: string;
+  items: { id: string; title: string }[];
+  currentId: string | null;
+  pinned?: boolean;
+}) {
+  return (
+    <div className="mt-5">
+      <p className="px-3 pb-1.5 text-caption font-semibold text-ink-muted">{title}</p>
+      <ul className="space-y-0.5">
+        {items.map((conv) => (
+          <li key={conv.id}>
+            <Link
+              to={`/chat/${conv.id}`}
+              aria-current={conv.id === currentId ? 'page' : undefined}
+              className={cn(
+                'flex items-center gap-2 rounded-md px-3 py-1.5 text-small transition-colors',
+                conv.id === currentId ? 'bg-canvas-tint text-ink' : 'text-ink-muted hover:bg-canvas-soft hover:text-ink'
+              )}
+            >
+              {pinned && <Pin className="h-3.5 w-3.5 shrink-0" aria-hidden />}
+              <span className="truncate">{conv.title}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+      {!pinned && (
+        <Link to="/conversations" className="mt-1 block px-3 py-1.5 text-caption text-link hover:underline">
+          View all conversations
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function AccountMenu({ collapsed }: { collapsed: boolean }) {
+  const { user, logout } = useAuth();
+  const { preference, setPreference } = useTheme();
+  const navigate = useNavigate();
+  const name = user?.full_name || user?.username || user?.email || 'Account';
+  const initials = name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
+
+  return (
+    <div className={cn('shrink-0 border-t border-hairline', collapsed ? 'p-2' : 'p-3')}>
+      <Menu
+        label="Account"
+        align="start"
+        items={[
+          { label: 'Profile & security', icon: <UserIcon className="h-4 w-4" />, onSelect: () => navigate('/profile') },
+          ...THEME_OPTIONS.map(({ value, label, icon: Icon }) => ({
+            label,
+            checked: preference === value,
+            icon: <Icon className="h-4 w-4" />,
+            onSelect: () => setPreference(value),
+          })),
+          {
+            label: 'Sign out',
+            icon: <LogOut className="h-4 w-4" />,
+            danger: true,
+            onSelect: async () => {
+              await logout();
+              navigate('/login');
+            },
+          },
+        ]}
+        trigger={(props) => (
+          <button
+            {...props}
+            type="button"
+            className={cn(
+              'flex w-full items-center gap-3 rounded-md text-left transition-colors hover:bg-canvas-soft',
+              collapsed ? 'justify-center p-1.5' : 'px-2 py-2'
+            )}
+            aria-label={collapsed ? `Account: ${name}` : undefined}
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink text-caption font-semibold text-canvas" aria-hidden>
+              {initials}
+            </span>
+            {!collapsed && (
+              <span className="min-w-0">
+                <span className="block truncate text-label font-semibold text-ink">{name}</span>
+                <span className="block truncate text-caption text-ink-muted">{user?.email}</span>
+              </span>
+            )}
+          </button>
+        )}
+      />
     </div>
   );
 }
