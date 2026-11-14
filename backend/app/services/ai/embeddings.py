@@ -1,4 +1,4 @@
-"""Embedding adapters (OpenAI-compatible and Gemini)."""
+"""Embedding adapters (OpenAI-compatible, Gemini and native Cohere)."""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -96,10 +96,48 @@ class GeminiEmbeddings(EmbeddingClient):
         return [[float(v) for v in row["values"]] for row in data.get("embeddings") or []]
 
 
+class CohereEmbeddings(EmbeddingClient):
+    """Cohere /v2/embed.
+
+    Cohere vectors are asymmetric: documents and queries must be embedded
+    with their own ``input_type`` or retrieval quality drops noticeably.
+    embed-v4 accepts ``output_dimension`` (256/512/1024/1536); v3 models are
+    fixed-size and reject it. At most 96 texts per call.
+    """
+
+    MAX_BATCH = 96
+    _INPUT = {"query": "search_query", "document": "search_document"}
+
+    async def _embed_batch(self, texts, *, task, timeout):
+        from .catalog import default_base_url
+
+        payload: dict[str, Any] = {
+            "model": self.spec.model,
+            "texts": texts,
+            "input_type": self.spec.option(f"{task}_input_type", self._INPUT[task]),
+            "embedding_types": ["float"],
+            # Over-long chunks are cut at the end instead of failing the batch.
+            "truncate": self.spec.option("truncate", "END"),
+        }
+        # v3 models have a fixed size and reject output_dimension.
+        if self.spec.option("send_dimensions", "v3" not in self.spec.model):
+            payload["output_dimension"] = self.dimensions
+        base = (self.spec.base_url or default_base_url(self.spec.provider, "embedding")).rstrip("/")
+        data = await http.post_json(
+            self.label, f"{base}/embed", json=payload,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.spec.api_key or ''}"},
+            timeout=timeout,
+        )
+        vectors = (data.get("embeddings") or {}).get("float") or []
+        return [[float(v) for v in row] for row in vectors]
+
+
 def build_embedding_client(spec: ModelSpec, dimensions: int, batch_size: int = 64) -> EmbeddingClient:
     from .catalog import protocol_for
 
     protocol = protocol_for(spec.provider, capability="embedding")
     if protocol == "gemini":
         return GeminiEmbeddings(spec, dimensions, min(batch_size, 100))
+    if protocol == "cohere":
+        return CohereEmbeddings(spec, dimensions, min(batch_size, CohereEmbeddings.MAX_BATCH))
     return OpenAICompatibleEmbeddings(spec, dimensions, batch_size)

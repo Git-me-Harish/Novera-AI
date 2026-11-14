@@ -26,6 +26,7 @@ from .metrics import (
     recall_at_k,
     reciprocal_rank,
     relevant_ids,
+    relevant_keys,
 )
 from .judge import (
     JUDGE_VERSION,
@@ -78,7 +79,7 @@ def evaluate_case(
     retrieved = prediction.get("retrieved", []) or []
     pre_rerank = prediction.get("pre_rerank_retrieved", []) or []
     answer = str(prediction.get("answer", "") or "")
-    relevant = set(example.relevant_chunk_ids) | set(example.relevant_document_ids)
+    relevant = relevant_keys(example)
     found_relevant = relevant_ids(example, retrieved)
     sources = prediction.get("sources", []) or []
     source_count = int(prediction.get("source_count") or len(sources) or len(retrieved))

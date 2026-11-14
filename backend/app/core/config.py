@@ -3,17 +3,25 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
+from pathlib import Path
 from typing import List, Optional, Union
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# One configuration file for every entry point: the repository-root .env.
+# It used to be ".env" relative to the working directory, so starting the API
+# or a script from backend/ silently read a second, stale file. In containers
+# the file is absent and real environment variables apply (they always win).
+ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+
+
 class Settings(BaseSettings):
     """Application settings with validation and type safety."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ROOT_ENV_FILE,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -81,6 +89,11 @@ class Settings(BaseSettings):
     llm_fallback_models: str = ""
     # Cheaper model for titles/suggestions; empty = use llm_model.
     llm_utility_model: Optional[str] = None
+    # Gemini 2.5 "thinking" tokens count against the output budget and add
+    # seconds of latency. Grounded QA over supplied evidence does not need
+    # them: 0 turns thinking off where the model allows it (Flash); models
+    # that cannot disable it (Pro) use their minimum. -1 = provider default.
+    llm_thinking_budget: int = Field(default=0, ge=-1, le=32768)
 
     embedding_provider: Optional[str] = None
     embedding_model: Optional[str] = None

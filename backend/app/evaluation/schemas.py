@@ -8,6 +8,26 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+class Evidence(BaseModel):
+    """Where the answer is stated, anchored to text rather than to a chunk id.
+
+    Chunk ids change whenever a document is re-chunked (better table
+    extraction, new chunk sizes), which silently invalidated id-only labels.
+    A retrieved chunk is relevant when it belongs to the same document and
+    contains (most of) the quoted passage.
+    """
+
+    document_id: str = ""
+    document: str = Field(default="", max_length=500)
+    quote: str = Field(min_length=1, max_length=4000)
+    pages: list[int] = Field(default_factory=list)
+
+    @field_validator("quote", mode="before")
+    @classmethod
+    def normalize_quote(cls, value: Any) -> str:
+        return " ".join(str(value or "").split())
+
+
 class GoldenExample(BaseModel):
     """One evaluation question and its human-authored expectations."""
 
@@ -18,6 +38,8 @@ class GoldenExample(BaseModel):
     acceptable_answers: list[str] = Field(default_factory=list)
     relevant_document_ids: list[str] = Field(default_factory=list)
     relevant_chunk_ids: list[str] = Field(default_factory=list)
+    # Preferred over chunk ids when present; see Evidence.
+    evidence: list[Evidence] = Field(default_factory=list)
     must_cite: bool = True
     answer_type: Literal["factual", "numeric", "abstention", "list", "conversational"] = "factual"
     should_abstain: bool = False
@@ -47,9 +69,9 @@ class GoldenExample(BaseModel):
                 raise ValueError(
                     "non-abstention examples require expected_answer or acceptable_answers"
                 )
-            if not self.relevant_document_ids and not self.relevant_chunk_ids:
+            if not self.relevant_document_ids and not self.relevant_chunk_ids and not self.evidence:
                 raise ValueError(
-                    "non-abstention examples require relevant_document_ids or relevant_chunk_ids"
+                    "non-abstention examples require evidence, relevant_document_ids or relevant_chunk_ids"
                 )
         return self
 

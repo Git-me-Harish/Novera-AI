@@ -188,6 +188,24 @@ def gemini_model_id(model: str) -> str:
     return model.split("/", 1)[1] if model.startswith("models/") else model
 
 
+def gemini_thinking_budget(spec: ModelSpec) -> Optional[int]:
+    """thinkingBudget to send, or None to leave the model's default.
+
+    Only Gemini 2.5 models take a token budget. Flash and Flash-Lite accept 0
+    (off); Pro cannot turn thinking off, so 0 becomes its minimum (128).
+    """
+    from app.core.config import settings
+
+    budget = spec.option("thinking_budget", settings.llm_thinking_budget)
+    model = gemini_model_id(spec.model).lower()
+    if budget is None or int(budget) < 0 or "2.5" not in model:
+        return None
+    budget = int(budget)
+    if budget == 0 and "pro" in model:
+        return 128
+    return budget
+
+
 class GeminiChat(ChatClient):
     protocol = "gemini"
 
@@ -204,6 +222,12 @@ class GeminiChat(ChatClient):
             role = "model" if message.role == "assistant" else "user"
             contents.append({"role": role, "parts": [{"text": message.content}]})
         config: dict[str, Any] = {"temperature": temperature, "maxOutputTokens": max_tokens}
+        thinking = gemini_thinking_budget(self.spec)
+        if thinking is not None:
+            config["thinkingConfig"] = {"thinkingBudget": thinking}
+            # Thinking tokens share maxOutputTokens; reserve them so the
+            # visible answer keeps its full budget instead of being cut off.
+            config["maxOutputTokens"] = max_tokens + thinking
         if json_mode:
             config["responseMimeType"] = "application/json"
         payload: dict[str, Any] = {"contents": contents, "generationConfig": config}
@@ -216,7 +240,9 @@ class GeminiChat(ChatClient):
         meta = data.get("usageMetadata") or {}
         result_usage = Usage(
             prompt_tokens=int(meta.get("promptTokenCount") or 0),
-            completion_tokens=int(meta.get("candidatesTokenCount") or 0),
+            # Thinking tokens are billed as output; omitting them under-counted cost.
+            completion_tokens=int(meta.get("candidatesTokenCount") or 0)
+            + int(meta.get("thoughtsTokenCount") or 0),
             cached_tokens=int(meta.get("cachedContentTokenCount") or 0),
         )
         candidates = data.get("candidates") or []
