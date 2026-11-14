@@ -10,7 +10,16 @@ from sqlalchemy import select, and_
 from loguru import logger
 
 from app.models.document import Chunk, ChunkEditHistory, Document
-from app.services.embedding.embedding_service import embedding_service
+from app.services.embedding.embedding_service import chunk_embedding_text_for, embedding_service
+
+
+def _chunk_fields(chunk: Chunk) -> dict:
+    return {
+        "content": chunk.content,
+        "section_title": chunk.section_title,
+        "page_numbers": chunk.page_numbers,
+        "chunk_type": chunk.chunk_type,
+    }
 
 
 class ChunkEditorService:
@@ -99,7 +108,15 @@ class ChunkEditorService:
             
             # Generate new embedding
             logger.info(f"Generating new embedding for chunk {chunk_id}")
-            new_embedding = await embedding_service.generate_embedding(new_content)
+            # Same text shape as ingestion (provenance header + content); the
+            # raw text used before put edited chunks in a different distribution.
+            document = await db.get(Document, chunk.document_id)
+            new_embedding = await embedding_service.generate_embedding(
+                chunk_embedding_text_for(
+                    {**_chunk_fields(chunk), "content": new_content.strip()},
+                    document.filename if document else None,
+                )
+            )
             
             # Update chunk
             chunk.content = new_content.strip()
@@ -215,7 +232,10 @@ class ChunkEditorService:
             chunk.content_length = len(chunk.original_content)
             
             # Regenerate embedding for original content
-            new_embedding = await embedding_service.generate_embedding(chunk.original_content)
+            document = await db.get(Document, chunk.document_id)
+            new_embedding = await embedding_service.generate_embedding(
+                chunk_embedding_text_for(_chunk_fields(chunk), document.filename if document else None)
+            )
             chunk.embedding = new_embedding
             chunk.embedding_provider = embedding_service.provider
             chunk.embedding_model = embedding_service.model_name

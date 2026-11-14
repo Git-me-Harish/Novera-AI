@@ -20,25 +20,54 @@ def _set(text: str) -> set[str]:
     return set(_tokens(text))
 
 
-def relevant_ids(example, retrieved: Sequence[dict]) -> set[str]:
-    expected = set(example.relevant_chunk_ids) | set(example.relevant_document_ids)
-    found = set()
-    for item in retrieved:
-        candidates = {
-            str(item[key])
-            for key in ("chunk_id", "id", "document_id")
-            if item.get(key) is not None
-        }
-        found.update(candidates & expected)
-    return found
+EVIDENCE_COVERAGE = 0.8
+
+
+def relevant_keys(example) -> set[str]:
+    """What counts as relevant for an example.
+
+    Text-anchored evidence ("evidence:<i>") when the example has it; chunk and
+    document ids otherwise (legacy labels, valid only until re-chunking).
+    """
+    evidence = getattr(example, "evidence", None) or []
+    if evidence:
+        return {f"evidence:{index}" for index in range(len(evidence))}
+    return set(example.relevant_chunk_ids) | set(example.relevant_document_ids)
+
+
+def evidence_matches(example, *, document_id: str, document_name: str, content: str) -> list[int]:
+    """Indices of the example's evidence passages contained in this chunk."""
+    matches = []
+    chunk_tokens = _set(content)
+    for index, evidence in enumerate(getattr(example, "evidence", None) or []):
+        same_document = (
+            (evidence.document_id and evidence.document_id == document_id)
+            or (evidence.document and evidence.document.casefold() == (document_name or "").casefold())
+        )
+        quote_tokens = _set(evidence.quote)
+        if not same_document or not quote_tokens:
+            continue
+        if len(quote_tokens & chunk_tokens) / len(quote_tokens) >= EVIDENCE_COVERAGE:
+            matches.append(index)
+    return matches
 
 
 def _matched_ids(item: dict, relevant: set[str]) -> set[str]:
-    return {
+    keys = {
         str(item[key])
         for key in ("chunk_id", "id", "document_id")
-        if item.get(key) is not None and str(item[key]) in relevant
+        if item.get(key) is not None
     }
+    keys.update(f"evidence:{index}" for index in item.get("evidence_matches") or [])
+    return keys & relevant
+
+
+def relevant_ids(example, retrieved: Sequence[dict]) -> set[str]:
+    expected = relevant_keys(example)
+    found: set[str] = set()
+    for item in retrieved:
+        found.update(_matched_ids(item, expected))
+    return found
 
 
 def recall_at_k(retrieved: Sequence[dict], relevant: set[str], k: int) -> float:

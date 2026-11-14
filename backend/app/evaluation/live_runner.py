@@ -18,6 +18,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
+from app.evaluation.metrics import evidence_matches
 from app.evaluation.runner import load_jsonl
 from app.evaluation.schemas import GoldenExample
 from app.services.embedding.embedding_service import embedding_service
@@ -33,7 +34,9 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def _safe_retrieved_chunk(chunk: dict[str, Any], include_content: bool) -> dict[str, Any]:
+def _safe_retrieved_chunk(
+    chunk: dict[str, Any], include_content: bool, example: GoldenExample | None = None
+) -> dict[str, Any]:
     content = str(chunk.get("content", "") or "")
     result = {
         "chunk_id": str(chunk.get("chunk_id") or chunk.get("id") or ""),
@@ -43,9 +46,76 @@ def _safe_retrieved_chunk(chunk: dict[str, Any], include_content: bool) -> dict[
         "retrieval_method": chunk.get("retrieval_method", []),
         "content_sha256": _content_hash(content),
     }
+    if example is not None and example.evidence:
+        # Matched here, while the text is in memory, so artifacts can stay
+        # content-free and labels survive re-chunking.
+        result["evidence_matches"] = evidence_matches(
+            example,
+            document_id=result["document_id"],
+            document_name=result["document_name"],
+            content=content,
+        )
     if include_content:
         result["content"] = content
     return result
+
+
+async def _pre_rerank_items(db, example: GoldenExample, chunk_ids: list[str]) -> list[dict[str, Any]]:
+    """Pre-rerank candidates in order, evidence-matched like the final list."""
+    items: list[dict[str, Any]] = [{"chunk_id": chunk_id} for chunk_id in chunk_ids]
+    if not example.evidence or not chunk_ids:
+        return items
+    from sqlalchemy import select
+
+    from app.models.document import Chunk, Document
+
+    rows = (await db.execute(
+        select(Chunk.id, Chunk.document_id, Chunk.content, Document.filename)
+        .join(Document, Document.id == Chunk.document_id)
+        .where(Chunk.id.in_([UUID(c) for c in chunk_ids]))
+    )).all()
+    by_id = {str(row.id): row for row in rows}
+    for item in items:
+        row = by_id.get(item["chunk_id"])
+        if row is not None:
+            item["evidence_matches"] = evidence_matches(
+                example, document_id=str(row.document_id), document_name=row.filename, content=row.content
+            )
+    return items
+
+
+async def collect_retrieval(examples: list[GoldenExample]) -> list[dict[str, Any]]:
+    """Retrieval-only run: the production retrieval pipeline, no generation.
+
+    Measures recall/MRR/nDCG and reranker lift without calling the answering
+    model (useful when it is unavailable, and cheaper while tuning retrieval).
+    """
+    from app.services.retrieval.pipeline import retrieval_pipeline
+
+    predictions = []
+    for example in examples:
+        started = time.perf_counter()
+        prediction: dict[str, Any] = {"id": example.id, "retrieved": [], "answer": "", "mode": "retrieval_only"}
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await retrieval_pipeline.retrieve(
+                    query=example.question, db=db, organization_id=UUID(example.tenant)
+                )
+                metadata = result.get("retrieval_metadata", {}) or {}
+                prediction["retrieved"] = [
+                    _safe_retrieved_chunk(chunk, False, example) for chunk in result.get("chunks", [])
+                ]
+                prediction["pre_rerank_retrieved"] = await _pre_rerank_items(
+                    db, example, metadata.get("pre_rerank_chunk_ids", [])
+                )
+                prediction["retrieval_metadata"] = metadata
+                await db.rollback()
+        except Exception as exc:
+            prediction["error"] = type(exc).__name__
+        finally:
+            prediction["latency_ms"] = round((time.perf_counter() - started) * 1000, 3)
+            predictions.append(prediction)
+    return predictions
 
 
 async def collect_predictions(
@@ -107,16 +177,16 @@ async def collect_predictions(
             metadata = result.get("metadata", {})
             retrieval_metadata = metadata.get("retrieval_metadata", {}) or {}
             prediction["retrieved"] = [
-                _safe_retrieved_chunk(chunk, include_content)
+                _safe_retrieved_chunk(chunk, include_content, example)
                 for chunk in evidence.get("chunks", [])
             ]
             prediction["sources"] = result.get("sources", [])
             prediction["source_count"] = len(prediction["sources"])
             prediction["retrieval_metadata"] = retrieval_metadata
-            prediction["pre_rerank_retrieved"] = [
-                {"chunk_id": chunk_id}
-                for chunk_id in retrieval_metadata.get("pre_rerank_chunk_ids", [])
-            ]
+            async with AsyncSessionLocal() as db:
+                prediction["pre_rerank_retrieved"] = await _pre_rerank_items(
+                    db, example, retrieval_metadata.get("pre_rerank_chunk_ids", [])
+                )
             prediction["retrieval_latency_ms"] = evidence.get("retrieval_latency_ms", 0.0)
             prediction["generation_latency_ms"] = evidence.get("generation_latency_ms", 0.0)
             prediction["answer"] = result.get("answer", "")
@@ -147,10 +217,13 @@ async def collect_predictions(
 
 async def _cli_async(args: argparse.Namespace) -> int:
     examples = load_jsonl(args.dataset, GoldenExample)
-    predictions = await collect_predictions(
-        examples,
-        include_content=args.include_content,
-    )
+    if args.retrieval_only:
+        predictions = await collect_retrieval(examples)
+    else:
+        predictions = await collect_predictions(
+            examples,
+            include_content=args.include_content,
+        )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as handle:
@@ -168,6 +241,11 @@ def main() -> int:
         "--include-content",
         action="store_true",
         help="Include retrieved text in the protected artifact for faithfulness evaluation",
+    )
+    parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="Run retrieval without generation (no answering-model calls)",
     )
     return asyncio.run(_cli_async(parser.parse_args()))
 

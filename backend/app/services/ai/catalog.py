@@ -41,9 +41,9 @@ PROVIDERS: dict[str, ProviderInfo] = {p.id: p for p in [
     ProviderInfo("openrouter", "OpenRouter", "openai", None, None, "https://openrouter.ai/api/v1"),
     ProviderInfo("fireworks", "Fireworks AI", "openai", "openai", None,
                  "https://api.fireworks.ai/inference/v1"),
-    ProviderInfo("cohere", "Cohere", "openai", "openai", "cohere",
+    ProviderInfo("cohere", "Cohere", "openai", "cohere", "cohere",
                  "https://api.cohere.ai/compatibility/v1",
-                 note="Rerank uses https://api.cohere.com/v2"),
+                 note="Embeddings and rerank use the native https://api.cohere.com/v2 API"),
     ProviderInfo("jina", "Jina AI", None, "openai", "cohere", "https://api.jina.ai/v1"),
     ProviderInfo("voyage", "Voyage AI", None, "openai", "cohere", "https://api.voyageai.com/v1"),
     ProviderInfo("ollama", "Ollama (self-hosted)", "openai", "openai", None,
@@ -82,7 +82,9 @@ def protocol_for(provider: str, *, capability: str) -> str:
 
 def default_base_url(provider: str, capability: str = "chat") -> str | None:
     info = provider_info(provider)
-    if capability == "rerank" and info.id == "cohere":
+    if capability in ("rerank", "embedding") and info.id == "cohere":
+        # Native API: the compatibility endpoint cannot carry input_type,
+        # and Cohere embeddings are asymmetric (query vs document).
         return "https://api.cohere.com/v2"
     return info.default_base_url
 

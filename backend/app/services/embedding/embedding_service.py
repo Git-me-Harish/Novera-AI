@@ -21,6 +21,42 @@ from app.services.ai.catalog import provider_info
 from app.services.ai.types import ProviderError, ProviderNotConfigured
 
 
+def chunk_embedding_text(
+    content: str,
+    *,
+    document_title: Optional[str] = None,
+    section: Optional[str] = None,
+    page: Optional[int] = None,
+    chunk_type: Optional[str] = None,
+) -> str:
+    """The exact text a chunk is embedded as: a short provenance header plus
+    the content. Ingestion, chunk edits, reverts and re-embedding all use this,
+    so every vector of a corpus lives in the same text distribution."""
+    parts = []
+    if document_title:
+        parts.append(f"Document: {document_title}")
+    if section:
+        parts.append(f"Section: {section}")
+    if page:
+        parts.append(f"Page: {page}")
+    if chunk_type and chunk_type != "text":
+        parts.append(f"Type: {chunk_type}")
+    return (" | ".join(parts) + "\n\n" + content) if parts else content
+
+
+def chunk_embedding_text_for(chunk: Any, document_title: Optional[str]) -> str:
+    """chunk_embedding_text for a stored Chunk row (or a dict with the same keys)."""
+    get = chunk.get if isinstance(chunk, dict) else lambda key, default=None: getattr(chunk, key, default)
+    pages = get("page_numbers") or []
+    return chunk_embedding_text(
+        get("content") or "",
+        document_title=document_title,
+        section=get("section_title"),
+        page=pages[0] if pages else None,
+        chunk_type=get("chunk_type", "text"),
+    )
+
+
 class EmbeddingService:
     """Query and document embeddings in one consistent vector space."""
 
@@ -116,20 +152,14 @@ class EmbeddingService:
     def enhance_text_for_embedding(
         self, text: str, context: Optional[dict[str, Any]] = None
     ) -> str:
-        if not context:
-            return text
-        parts = []
-        if context.get("document_title"):
-            parts.append(f"Document: {context['document_title']}")
-        if context.get("section"):
-            parts.append(f"Section: {context['section']}")
-        if context.get("page"):
-            parts.append(f"Page: {context['page']}")
-        if context.get("chunk_type") and context["chunk_type"] != "text":
-            parts.append(f"Type: {context['chunk_type']}")
-        if parts:
-            return " | ".join(parts) + "\n\n" + text
-        return text
+        context = context or {}
+        return chunk_embedding_text(
+            text,
+            document_title=context.get("document_title"),
+            section=context.get("section"),
+            page=context.get("page"),
+            chunk_type=context.get("chunk_type"),
+        )
 
     async def embed_chunks_with_context(
         self, chunks: list[dict], document_title: Optional[str] = None
@@ -168,4 +198,4 @@ class EmbeddingService:
 # Singleton
 embedding_service = EmbeddingService()
 
-__all__ = ["EmbeddingService", "embedding_service"]
+__all__ = ["EmbeddingService", "embedding_service", "chunk_embedding_text", "chunk_embedding_text_for"]
