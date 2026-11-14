@@ -65,7 +65,7 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: psql postgresql://novera_ci:novera_ci@localhost:5432/novera_ci -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";"
       - run: alembic upgrade head
-      - run: python -m pytest tests/test_phase0_release_blockers.py tests/test_evaluation_foundation.py tests/test_rag_correctness.py tests/test_ai_providers.py tests/test_ai_settings_api.py tests/test_conversation_store.py tests/test_auth_token_flows.py tests/test_tenancy.py tests/test_document_editor_api.py tests/test_branding.py tests/test_rag_foundations.py -q
+      - run: python -m pytest tests/test_phase0_release_blockers.py tests/test_evaluation_foundation.py tests/test_rag_correctness.py tests/test_ai_providers.py tests/test_ai_settings_api.py tests/test_conversation_store.py tests/test_auth_token_flows.py tests/test_tenancy.py tests/test_document_editor_api.py tests/test_branding.py tests/test_rag_foundations.py tests/test_ingestion.py -q
 
   frontend:
     # vite build alone does not typecheck; the 23 API methods that pages called

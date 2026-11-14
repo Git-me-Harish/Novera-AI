@@ -9,6 +9,7 @@ never pads, truncates or falls back to a different model.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from typing import Any, Optional
 
@@ -90,17 +91,32 @@ class EmbeddingService:
         default = "Query: " if provider_info(spec.provider).id == "gemini" else ""
         return spec.option("query_prefix", default)
 
+    # Transient failures (rate limits, timeouts, 5xx) are retried with
+    # backoff. Ingestion can wait; a user's query gets one quick retry.
+    _ATTEMPTS = {"document": 5, "query": 2}
+    _MAX_WAIT_SECONDS = {"document": 60.0, "query": 2.0}
+
     async def _embed(self, texts: list[str], task: str) -> list[list[float]]:
-        try:
-            return await registry.embedding_client().embed(texts, task=task)
-        except ProviderNotConfigured:
-            raise
-        except ProviderError as exc:
-            raise RuntimeError(
-                f"Embedding provider unavailable for {self.provider}:{self.model_name} "
-                f"({'billing' if exc.billing else 'HTTP ' + str(exc.status)}); retry instead "
-                "of mixing embedding spaces"
-            ) from exc
+        attempts = self._ATTEMPTS.get(task, 1)
+        for attempt in range(1, attempts + 1):
+            try:
+                return await registry.embedding_client().embed(texts, task=task)
+            except ProviderNotConfigured:
+                raise
+            except ProviderError as exc:
+                if exc.retryable and not exc.billing and attempt < attempts:
+                    wait = min(self._MAX_WAIT_SECONDS[task], exc.retry_after or 2.0 ** attempt)
+                    logger.warning(
+                        f"Embedding call failed ({exc.status or 'network'}); retry {attempt}/{attempts - 1} in {wait:.0f}s"
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                raise RuntimeError(
+                    f"Embedding provider unavailable for {self.provider}:{self.model_name} "
+                    f"({'billing' if exc.billing else 'HTTP ' + str(exc.status)}); retry instead "
+                    "of mixing embedding spaces"
+                ) from exc
+        raise AssertionError("unreachable")
 
     # ── Public API ────────────────────────────────────────────────────────────
 

@@ -24,6 +24,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev \
     libgomp1 \
     curl \
+    # OCR for scanned PDF pages (PyMuPDF drives Tesseract). Add more
+    # languages with tesseract-ocr-<code> and OCR_LANGUAGES, e.g. "eng+hin".
+    tesseract-ocr tesseract-ocr-eng \
+    # Legacy .doc files are converted to .docx headlessly, then parsed with
+    # the same structure-preserving reader as .docx.
+    libreoffice-writer-nogui \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

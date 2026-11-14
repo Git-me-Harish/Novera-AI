@@ -12,11 +12,22 @@ from sqlalchemy import select
 from loguru import logger
 
 from app.models.document import Document, Chunk as ChunkModel
-from app.services.document_processing.text_extractor import text_extractor
+from app.services.document_processing.text_extractor import ExtractionError, text_extractor
 from app.services.document_processing.chunker import semantic_chunker
 from app.services.embedding.embedding_service import embedding_service
 from app.services.generation.title_generator import title_generator
 from app.services.document_processing.identity import stable_chunk_id
+
+
+GENERIC_PROCESSING_ERROR = "Processing failed. Try again later or contact your administrator."
+
+
+def user_facing_error(exc: Exception) -> str:
+    """What the uploader sees. File problems explain themselves; anything
+    else is an internal failure whose details stay in the server log."""
+    if isinstance(exc, ExtractionError):
+        return str(exc)[:500]
+    return GENERIC_PROCESSING_ERROR
 
 
 class DocumentProcessor:
@@ -114,9 +125,10 @@ class DocumentProcessor:
             
             # Update document with error
             try:
+                await db.rollback()
                 document = await self._get_document(document_id, db)
                 document.status = "failed"
-                document.processing_error = str(e)
+                document.processing_error = user_facing_error(e)
                 await db.commit()
             except Exception as db_error:
                 logger.error(f"Failed to update error status: {str(db_error)}")

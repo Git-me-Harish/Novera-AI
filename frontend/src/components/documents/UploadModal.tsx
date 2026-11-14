@@ -4,7 +4,7 @@ import api, { errorMessage } from '../../services/api';
 import { Button, Field, IconButton, Input, Modal, Notice, cn } from '../../ui';
 
 /** Mirrors the backend defaults (ALLOWED_EXTENSIONS, MAX_UPLOAD_SIZE_MB, 20 per batch). */
-const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.doc', '.txt', '.xlsx', '.xls'];
+const ALLOWED_EXTENSIONS = ['.pdf', '.docx', '.doc', '.pptx', '.xlsx', '.xls', '.csv', '.md', '.markdown', '.html', '.htm', '.txt'];
 const MAX_SIZE_MB = 50;
 const MAX_FILES = 20;
 
@@ -176,7 +176,7 @@ export default function UploadModal({
                 }}
               />
               <p className="mt-3 text-caption text-ink-muted">
-                PDF, Word, Excel or text · up to {MAX_SIZE_MB} MB each · {MAX_FILES} files per upload
+                PDF, Word, PowerPoint, Excel, CSV, Markdown, HTML or text · scanned PDFs are read with OCR · up to {MAX_SIZE_MB} MB each · {MAX_FILES} files per upload
               </p>
             </div>
 

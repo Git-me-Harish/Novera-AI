@@ -13,6 +13,8 @@ from loguru import logger
 from sqlalchemy import update
 
 from app.core.config import settings
+from app.services.document_processing.processor import user_facing_error
+from app.services.document_processing.text_extractor import ExtractionError
 from app.db.session import AsyncSessionLocal
 from app.models.document import Document
 from app.services.document_processing.job_queue import (
@@ -71,11 +73,17 @@ async def _process_message(client, message_id: str, fields: dict[str, str]) -> N
             await db.execute(
                 update(Document)
                 .where(Document.id == document_id)
-                .values(status="failed", processing_error=str(exc)[:500])
+                .values(status="failed", processing_error=user_facing_error(exc))
             )
             await db.commit()
 
         await client.incr(f"{METRICS_PREFIX}failed")
+        if isinstance(exc, ExtractionError):
+            # The file itself is unreadable (corrupt, encrypted, scanned with
+            # no OCR): retrying repeats expensive work and cannot succeed.
+            await client.xack(STREAM_KEY, CONSUMER_GROUP, message_id)
+            logger.warning("Document {} rejected: {}", document_id, exc)
+            return
         if attempt >= settings.document_queue_max_attempts:
             await client.xadd(
                 DEAD_LETTER_STREAM_KEY,
@@ -170,6 +178,7 @@ async def _purge_deleted_conversations() -> None:
 async def run() -> None:
     client = aioredis.from_url(
         settings.redis_url,
+        password=settings.redis_password or None,
         encoding="utf-8",
         decode_responses=True,
         socket_connect_timeout=5,
