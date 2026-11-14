@@ -22,6 +22,23 @@ if TYPE_CHECKING:
 _EXCERPT_CHARS = 600
 
 
+def _within_token_budget(chunks: List[Dict[str, Any]], budget: int) -> List[Dict[str, Any]]:
+    """Best-ranked chunks until the evidence budget is spent.
+
+    The top chunk is always kept, even when it alone exceeds the budget.
+    A chunk that does not fit is skipped, not truncated, so a smaller one
+    further down can still be used.
+    """
+    selected, used = [], 0
+    for chunk in chunks:
+        tokens = int(chunk.get("token_count") or 0)
+        if selected and used + tokens > budget:
+            continue
+        selected.append(chunk)
+        used += tokens
+    return selected
+
+
 def _excerpt(content: str) -> str:
     """First ~600 characters of a chunk, cut at a word boundary."""
     text = " ".join((content or "").split())
@@ -204,13 +221,11 @@ class RetrievalPipeline:
         # generator to answer adjacent questions. Broader procedural and
         # analytical questions retain a larger evidence budget.
         broad_intents = {"procedural", "analytical", "compliance"}
-        context_chunk_limit = (
-            settings.complex_context_chunks
-            if processed_query["complexity"] == "complex"
-            or processed_query["intent"] in broad_intents
-            else settings.focused_context_chunks
-        )
-        context_chunk_limit = min(context_chunk_limit, top_k or settings.rerank_top_k)
+        broad = processed_query["complexity"] == "complex" or processed_query["intent"] in broad_intents
+        context_chunk_limit = settings.complex_context_chunks if broad else settings.focused_context_chunks
+        context_token_budget = settings.complex_context_tokens if broad else settings.focused_context_tokens
+        if top_k:
+            context_chunk_limit = min(context_chunk_limit, top_k)
 
         # Decide if reranking is needed
         should_rerank = (
@@ -292,6 +307,7 @@ class RetrievalPipeline:
 
         before_relevance_filter = len(reranked_results)
         reranked_results = [chunk for chunk in reranked_results if _passes_floor(chunk)]
+        reranked_results = _within_token_budget(reranked_results, context_token_budget)
         if rerank_degraded and should_rerank:
             logger.warning("Reranker degraded — using similarity floor instead of rerank floor")
             trace = get_current_trace()
@@ -354,6 +370,7 @@ class RetrievalPipeline:
                 'min_rerank_score': settings.min_rerank_score,
                 'final_chunks': len(final_context['chunks']),
                 'context_chunk_limit': context_chunk_limit,
+                'context_token_budget': context_token_budget,
                 'intent': processed_query['intent'],
                 'complexity': processed_query['complexity'],
                 'used_scoped_search': use_scoped_search,
