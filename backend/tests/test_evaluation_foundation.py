@@ -165,7 +165,7 @@ async def test_embedding_provider_failure_fails_closed_without_local_fallback(mo
     from app.services.ai.types import ProviderError
 
     class FailingClient:
-        async def embed(self, texts, *, task):
+        async def embed(self, texts, *, task, timeout=None):
             raise ProviderError("provider unavailable", provider="test", retryable=True)
 
     monkeypatch.setattr(registry, "embedding_client", lambda: FailingClient())
