@@ -1,304 +1,128 @@
-import { useState, useMemo } from 'react';
-import { X, Download, FileText, FileJson, FileType, Check, Square, CheckSquare } from 'lucide-react';
-import { ChatMessage } from '../../services/api';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { useEffect, useMemo, useState } from 'react';
+import { Download } from 'lucide-react';
+import api, { errorMessage, type StoredMessage } from '../../services/api';
+import { Button, Modal, Notice, Skeleton, cn } from '../../ui';
 import { toast } from '../../utils/toast';
-import { apiBase } from '../../utils/apiBase';
 
-interface SelectiveExportModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  conversationId: string;
-  messages: ChatMessage[];
-}
+type Format = 'markdown' | 'pdf' | 'json';
+const FORMATS: { id: Format; label: string }[] = [
+  { id: 'markdown', label: 'Markdown' },
+  { id: 'pdf', label: 'PDF' },
+  { id: 'json', label: 'JSON' },
+];
 
-export default function SelectiveExportModal({
-  isOpen,
-  onClose,
-  conversationId,
-  messages
-}: SelectiveExportModalProps) {
-  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
-  const [exportFormat, setExportFormat] = useState<'pdf' | 'markdown' | 'json'>('markdown');
-  const [isExporting, setIsExporting] = useState(false);
+/**
+ * Export chosen messages. Loads the whole conversation itself (the chat view
+ * may hold only the newest page) and selects by stable sequence number.
+ */
+export default function SelectiveExportModal({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
+  const [messages, setMessages] = useState<StoredMessage[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [format, setFormat] = useState<Format>('markdown');
+  const [exporting, setExporting] = useState(false);
 
-  const handleSelectAll = () => {
-    if (selectedIndices.size === messages.length) {
-      setSelectedIndices(new Set());
-    } else {
-      setSelectedIndices(new Set(messages.map((_, idx) => idx)));
-    }
-  };
+  useEffect(() => {
+    let cancelled = false;
+    api.getConversation(conversationId, { limit: 1000 })
+      .then((c) => {
+        if (cancelled) return;
+        const visible = c.messages.filter((m) => m.role !== 'system');
+        setMessages(visible);
+        setSelected(new Set(visible.map((m) => m.sequence)));
+      })
+      .catch((err) => !cancelled && setError(errorMessage(err, 'Could not load the messages')));
+    return () => { cancelled = true; };
+  }, [conversationId]);
 
-  const toggleMessage = (index: number) => {
-    const newSelected = new Set(selectedIndices);
-    if (newSelected.has(index)) {
-      newSelected.delete(index);
-    } else {
-      newSelected.add(index);
-    }
-    setSelectedIndices(newSelected);
-  };
+  const all = messages?.length ?? 0;
+  const allSelected = all > 0 && selected.size === all;
+  const ordered = useMemo(() => [...selected].sort((a, b) => a - b), [selected]);
 
-  const selectedMessages = useMemo(() => {
-    return Array.from(selectedIndices)
-      .sort((a, b) => a - b)
-      .map(idx => messages[idx]);
-  }, [selectedIndices, messages]);
+  const toggle = (sequence: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(sequence)) next.delete(sequence); else next.add(sequence);
+      return next;
+    });
 
-  const handleExport = async () => {
-    if (selectedMessages.length === 0) {
-      toast.error('Please select at least one message to export');
-      return;
-    }
-
-    setIsExporting(true);
-
+  const exportNow = async () => {
+    setExporting(true);
     try {
-      const token = localStorage.getItem('access_token');
-
-      const response = await fetch(
-        `${apiBase}/api/v1/chat/conversations/${conversationId}/export-selected`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            message_indices: Array.from(selectedIndices).sort((a, b) => a - b),
-            format: exportFormat
-          })
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error('Export failed');
-      }
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `conversation_selective_${conversationId.slice(0, 8)}.${exportFormat}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-
-      toast.success(`Exported ${selectedMessages.length} messages as ${exportFormat.toUpperCase()}`);
+      await api.downloadSelectedMessages(conversationId, ordered, format);
+      toast.success(`Exported ${ordered.length} message${ordered.length === 1 ? '' : 's'}`);
       onClose();
-    } catch (error) {
-      console.error('Export error:', error);
-      toast.error('Failed to export. Please try again.');
+    } catch (err) {
+      toast.error(errorMessage(err, 'Export failed'));
     } finally {
-      setIsExporting(false);
+      setExporting(false);
     }
   };
-
-  if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-2 sm:p-4">
-      <div className="bg-white rounded-lg sm:rounded-xl shadow-2xl max-w-4xl w-full max-h-[95vh] sm:max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
-          <div>
-            <h2 className="text-base sm:text-xl font-bold text-gray-900">Select Messages to Export</h2>
-            <p className="text-xs sm:text-sm text-gray-500 mt-1">
-              {selectedIndices.size} of {messages.length} messages selected
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0 min-touch-target"
-            aria-label="Close"
-          >
-            <X className="w-5 h-5 text-gray-500" />
-          </button>
-        </div>
-
-        {/* Selection Controls */}
-        <div className="px-4 sm:px-6 py-2.5 sm:py-3 bg-gray-50 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 flex-shrink-0">
-          <button
-            onClick={handleSelectAll}
-            className="flex items-center justify-center sm:justify-start gap-2 px-3 py-2 text-xs sm:text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-lg transition-colors min-touch-target"
-          >
-            {selectedIndices.size === messages.length ? (
-              <>
-                <CheckSquare className="w-4 h-4" />
-                Deselect All
-              </>
-            ) : (
-              <>
-                <Square className="w-4 h-4" />
-                Select All
-              </>
-            )}
-          </button>
-
-          {/* Format Selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs sm:text-sm text-gray-600 font-medium">Format:</span>
-            <div className="flex gap-1.5 sm:gap-2 flex-1 sm:flex-none">
-              <button
-                onClick={() => setExportFormat('pdf')}
-                className={`flex-1 sm:flex-none px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition-colors min-touch-target ${
-                  exportFormat === 'pdf'
-                    ? 'bg-red-100 text-red-700 border border-red-300'
-                    : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-                }`}
-              >
-                <FileType className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1" />
-                PDF
-              </button>
-              <button
-                onClick={() => setExportFormat('markdown')}
-                className={`flex-1 sm:flex-none px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition-colors min-touch-target ${
-                  exportFormat === 'markdown'
-                    ? 'bg-blue-100 text-blue-700 border border-blue-300'
-                    : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-                }`}
-              >
-                <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1" />
-                MD
-              </button>
-              <button
-                onClick={() => setExportFormat('json')}
-                className={`flex-1 sm:flex-none px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm font-medium rounded-lg transition-colors min-touch-target ${
-                  exportFormat === 'json'
-                    ? 'bg-green-100 text-green-700 border border-green-300'
-                    : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-                }`}
-              >
-                <FileJson className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1" />
-                JSON
-              </button>
+    <Modal
+      open
+      onClose={onClose}
+      dismissible={!exporting}
+      size="lg"
+      title="Export messages"
+      description="Choose the messages and a format."
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={exporting}>Cancel</Button>
+          <Button leading={<Download className="h-4 w-4" />} loading={exporting} disabled={!selected.size} onClick={exportNow}>
+            Export {selected.size || ''}
+          </Button>
+        </>
+      }
+    >
+      {error ? (
+        <Notice tone="error">{error}</Notice>
+      ) : !messages ? (
+        <div className="space-y-2">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-14" />)}</div>
+      ) : (
+        <div className="space-y-4">
+          <fieldset>
+            <legend className="mb-2 text-small font-semibold text-ink">Format</legend>
+            <div className="inline-flex rounded-sm border border-field-border p-0.5">
+              {FORMATS.map((f) => (
+                <label key={f.id} className={cn(
+                  'cursor-pointer rounded-xs px-4 py-1.5 text-small font-semibold transition-colors has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-focus',
+                  format === f.id ? 'bg-primary text-on-primary' : 'text-ink-muted hover:text-ink'
+                )}>
+                  <input type="radio" name="export-format" value={f.id} checked={format === f.id} onChange={() => setFormat(f.id)} className="sr-only" />
+                  {f.label}
+                </label>
+              ))}
             </div>
+          </fieldset>
+
+          <div className="flex items-center justify-between">
+            <label className="inline-flex cursor-pointer items-center gap-2 text-small text-ink-muted">
+              <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={allSelected}
+                onChange={() => setSelected(allSelected ? new Set() : new Set(messages.map((m) => m.sequence)))} />
+              {allSelected ? 'All selected' : `${selected.size} of ${all} selected`}
+            </label>
           </div>
-        </div>
 
-        {/* Messages List */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6 space-y-2 sm:space-y-3 scroll-smooth-touch">
-          {messages.map((message, index) => {
-            const isSelected = selectedIndices.has(index);
-            const isUser = message.role === 'user';
-
-            return (
-              <div
-                key={index}
-                onClick={() => toggleMessage(index)}
-                className={`relative cursor-pointer rounded-lg border-2 transition-all ${
-                  isSelected
-                    ? 'border-blue-500 bg-blue-50 shadow-md'
-                    : 'border-gray-200 bg-white hover:border-blue-300 hover:shadow-sm'
-                }`}
-              >
-                {/* Checkbox */}
-                <div className="absolute top-2.5 sm:top-3 left-2.5 sm:left-3">
-                  <div
-                    className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
-                      isSelected
-                        ? 'bg-blue-600 border-blue-600'
-                        : 'bg-white border-gray-300'
-                    }`}
-                  >
-                    {isSelected && <Check className="w-3 h-3 text-white" />}
-                  </div>
-                </div>
-
-                {/* Message Content */}
-                <div className="pl-10 sm:pl-12 pr-3 sm:pr-4 py-2.5 sm:py-3">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span
-                      className={`text-xs sm:text-sm font-semibold ${
-                        isUser ? 'text-green-700' : 'text-purple-700'
-                      }`}
-                    >
-                      {isUser ? 'User' : 'AI Assistant'}
+          <ul className="max-h-[50vh] divide-y divide-hairline overflow-y-auto rounded-sm border border-hairline">
+            {messages.map((m) => (
+              <li key={m.id}>
+                <label className={cn('flex cursor-pointer items-start gap-3 px-4 py-3', selected.has(m.sequence) && 'bg-canvas-soft')}>
+                  <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[rgb(var(--primary))]"
+                    checked={selected.has(m.sequence)} onChange={() => toggle(m.sequence)} />
+                  <span className="min-w-0">
+                    <span className="block text-caption font-semibold text-ink-muted">
+                      {m.role === 'user' ? 'You' : 'Answer'} · {new Date(m.timestamp).toLocaleString()}
                     </span>
-                    {message.timestamp && (
-                      <span className="text-xs text-gray-500">
-                        {new Date(message.timestamp).toLocaleTimeString()}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Content Preview */}
-                  <div className="text-xs sm:text-sm text-gray-700">
-                    {isUser ? (
-                      <p className="line-clamp-3 whitespace-pre-wrap break-words">{message.content}</p>
-                    ) : (
-                      <div className="line-clamp-3">
-                        {message.content.length > 200 ? (
-                          <p className="whitespace-pre-wrap break-words">
-                            {message.content.substring(0, 200)}...
-                          </p>
-                        ) : (
-                          <div className="prose prose-sm max-w-none">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {message.content}
-                            </ReactMarkdown>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Sources indicator */}
-                  {!isUser && message.metadata?.sources && message.metadata.sources.length > 0 && (
-                    <div className="mt-2 text-xs text-gray-500">
-                      📚 {message.metadata.sources.length} source(s)
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                    <span className="mt-0.5 line-clamp-2 block text-small text-ink">{m.content}</span>
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
         </div>
-
-        {/* Footer */}
-        <div className="px-4 sm:px-6 py-3 sm:py-4 border-t border-gray-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gray-50 flex-shrink-0">
-          <p className="text-xs sm:text-sm text-gray-600 text-center sm:text-left">
-            {selectedMessages.length > 0 ? (
-              <>
-                Ready to export <span className="font-semibold">{selectedMessages.length}</span> message
-                {selectedMessages.length !== 1 ? 's' : ''}
-              </>
-            ) : (
-              'Select messages to export'
-            )}
-          </p>
-
-          <div className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-3">
-            <button
-              onClick={onClose}
-              disabled={isExporting}
-              className="w-full sm:w-auto px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 min-touch-target"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleExport}
-              disabled={selectedMessages.length === 0 || isExporting}
-              className="w-full sm:w-auto px-6 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 min-touch-target"
-            >
-              {isExporting ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Exporting...
-                </>
-              ) : (
-                <>
-                  <Download className="w-4 h-4" />
-                  Export {exportFormat.toUpperCase()}
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+      )}
+    </Modal>
   );
 }

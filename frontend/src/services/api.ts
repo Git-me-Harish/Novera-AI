@@ -1,5 +1,4 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
-import type { Customization, CustomizationUpdateRequest, ThemePreset } from '../types';
 import { apiBase } from '../utils/apiBase';
 
 const API_VERSION = '/api/v1';
@@ -140,6 +139,90 @@ export interface AuditEvent {
   details: Record<string, unknown>;
 }
 
+/* ── Branding ────────────────────────────────────────────────────────────── */
+
+export type BrandAssetKind = 'light' | 'dark' | 'favicon';
+
+/** The parts of the organization customization record the app uses. */
+export interface OrganizationBranding {
+  branding: {
+    app_name: string | null;
+    app_tagline: string | null;
+    logo_url: string | null;
+    logo_dark_url: string | null;
+    favicon_url: string | null;
+  };
+  advanced?: { custom_settings?: Record<string, unknown> & { brand?: { mark_color?: string | null; action_color?: string | null } } };
+}
+
+/* ── AI model settings (per organization) ───────────────────────────────── */
+
+export interface AIProvider {
+  id: string;
+  label: string;
+  capabilities: ('chat' | 'embedding' | 'rerank')[];
+  default_base_url: string | null;
+  requires_api_key: boolean;
+  requires_base_url: boolean;
+  note: string;
+}
+
+export interface AISettings {
+  organization_id: string;
+  chat: null | {
+    provider: string;
+    model: string;
+    base_url: string | null;
+    api_key_set: boolean;
+    api_key_hint: string | null;
+    uses_platform_credentials: boolean;
+  };
+  temperature: number | null;
+  max_response_tokens: number | null;
+  allow_platform_fallback: boolean;
+  /** The order models are tried in, e.g. ["anthropic:claude-x", "openai:gpt"]. */
+  effective_chat_models: string[];
+  platform_defaults: {
+    chat: string | null;
+    temperature: number;
+    max_response_tokens: number;
+    embedding: string | null;
+    embedding_dimensions: number;
+    rerank: string;
+  };
+}
+
+export interface AISettingsInput {
+  /** null = use the platform default model. */
+  chat: null | {
+    provider: string;
+    model: string;
+    base_url?: string | null;
+    /** undefined keeps the stored key, "" removes it, anything else replaces it. */
+    api_key?: string;
+  };
+  temperature: number | null;
+  max_response_tokens: number | null;
+  allow_platform_fallback: boolean;
+}
+
+export interface ModelProbe {
+  provider: string;
+  model?: string;
+  base_url?: string | null;
+  api_key?: string;
+}
+
+export type ProbeFailure = 'billing_or_credits' | 'rate_limited_or_unavailable' | 'unauthorized' | 'model_not_found' | 'rejected' | 'blocked_or_empty';
+
+export interface ModelTestResult {
+  ok: boolean;
+  reason: ProbeFailure | null;
+  status?: number;
+  latency_ms?: number;
+  model?: string;
+}
+
 /* ── Domain types ───────────────────────────────────────────────────────── */
 
 export interface ChatMessage {
@@ -165,9 +248,12 @@ export interface ChatRequest {
 
 export interface Source {
   document: string;
+  document_id?: string | null;
   page: number | null;
   section: string | null;
   chunk_id: string;
+  /** The cited passage (first ~600 characters of the chunk). */
+  excerpt?: string | null;
 }
 
 export interface ChatResponse {
@@ -310,6 +396,8 @@ export interface EditHistoryItem {
   id: string;
   edited_at: string;
   edited_by: string;
+  /** Editor's name or email; null when the account no longer exists. */
+  edited_by_name?: string | null;
   old_content: string;
   new_content: string;
   change_summary: string | null;
@@ -481,7 +569,8 @@ class APIService {
   async uploadDocument(
     file: File,
     docType: string,
-    department?: string
+    department?: string,
+    onProgress?: (fraction: number) => void
   ): Promise<any> {
     const formData = new FormData();
     formData.append('file', file);
@@ -494,6 +583,7 @@ class APIService {
         'Content-Type': 'multipart/form-data',
       },
       params,
+      onUploadProgress: (e) => e.total && onProgress?.(e.loaded / e.total),
     });
     return response.data;
   }
@@ -501,7 +591,8 @@ class APIService {
   async uploadDocuments(
     files: File[],
     docType: string,
-    department?: string
+    department?: string,
+    onProgress?: (fraction: number) => void
   ): Promise<any> {
     const formData = new FormData();
     files.forEach((file) => formData.append('files', file));
@@ -512,6 +603,7 @@ class APIService {
     const response = await client.post('/documents/upload-multiple', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       params,
+      onUploadProgress: (e) => e.total && onProgress?.(e.loaded / e.total),
     });
     return response.data;
   }
@@ -751,6 +843,15 @@ class APIService {
     return response.data;
   }
 
+  /** Rename a document or change its type/department (admin). */
+  async updateDocument(
+    documentId: string,
+    changes: { filename?: string; doc_type?: string; department?: string | null }
+  ): Promise<DocumentInfo> {
+    const response = await client.patch(`/documents/${documentId}`, changes);
+    return response.data;
+  }
+
   async getDocumentChunks(documentId: string): Promise<ChunkData[]> {
     const response = await client.get(`/documents/${documentId}/chunks`);
     return response.data;
@@ -804,72 +905,44 @@ class APIService {
     return response.data;
   }
 
-  // ============================================================================
+  // ── Branding (curated slots; see BrandContext) ──────────────────────────
 
-  // CUSTOMIZATION API
-
-  // ============================================================================
-
-  async getCurrentCustomization(): Promise<Customization> {
-    const response = await client.get('/customization/current');
+  /** Branding for the signed-in user's organization (public default when signed out). */
+  async getCurrentCustomization(): Promise<OrganizationBranding> {
+    const response = await client.get<OrganizationBranding>('/customization/current');
     return response.data;
   }
 
-  async getAdminCustomization(organizationName: string = 'default'): Promise<Customization> {
-    const response = await client.get('/admin/customization', {
-      params: { organization_name: organizationName }
-    });
+  async getBranding(): Promise<OrganizationBranding> {
+    const response = await client.get<OrganizationBranding>('/admin/customization');
     return response.data;
   }
 
-  async updateCustomization(
-    data: CustomizationUpdateRequest,
-    organizationName: string = 'default'
-  ): Promise<Customization> {
-    const response = await client.put('/admin/customization', data, {
-      params: { organization_name: organizationName }
-    });
+  /** Text and colour slots. `custom_settings` is replaced whole: pass the merged object. */
+  async updateBranding(data: {
+    app_name?: string;
+    app_tagline?: string;
+    custom_settings?: Record<string, unknown>;
+  }): Promise<OrganizationBranding> {
+    const response = await client.put<OrganizationBranding>('/admin/customization', data);
     return response.data;
   }
 
-  async uploadLogo(
-    file: File,
-    logoType: 'light' | 'dark' | 'favicon' = 'light',
-    organizationName: string = 'default'
-  ): Promise<any> {
+  async uploadBrandAsset(file: File, kind: BrandAssetKind): Promise<OrganizationBranding> {
     const formData = new FormData();
     formData.append('file', file);
-
-    const response = await client.post('/admin/customization/logo', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-      params: {
-        organization_name: organizationName,
-        logo_type: logoType
-      }
+    const response = await client.post<{ customization: OrganizationBranding }>('/admin/customization/logo', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      params: { logo_type: kind },
     });
-    return response.data;
+    return response.data.customization;
   }
 
-  async deleteLogo(
-    logoType: 'light' | 'dark' | 'favicon' = 'light',
-    organizationName: string = 'default'
-  ): Promise<void> {
-    await client.delete('/admin/customization/logo', {
-      params: {
-        logo_type: logoType,
-        organization_name: organizationName
-      }
-    });
+  async deleteBrandAsset(kind: BrandAssetKind): Promise<void> {
+    await client.delete('/admin/customization/logo', { params: { logo_type: kind } });
   }
 
-  async resetCustomization(organizationName: string = 'default'): Promise<any> {
-    const response = await client.post('/admin/customization/reset', null, {
-      params: { organization_name: organizationName }
-    });
-    return response.data;
-  }
+  // ── Chunk titles ──────────────────────────────────────────────────────────
 
   async generateChunkTitle(chunkId: string): Promise<any> {
     const response = await client.post(`/chunks/${chunkId}/generate-title`);
@@ -877,7 +950,8 @@ class APIService {
   }
 
   async generateAllTitles(documentId: string): Promise<any> {
-    const response = await client.post(`/documents/${documentId}/generate-all-titles`);
+    // One model call per chunk, synchronously: allow well past the default timeout.
+    const response = await client.post(`/documents/${documentId}/generate-all-titles`, null, { timeout: 600_000 });
     return response.data;
   }
 
@@ -887,61 +961,6 @@ class APIService {
     });
     return response.data;
   }
-
-  async getThemePresets(): Promise<ThemePreset[]> {
-    const response = await client.get('/admin/customization/presets');
-    return response.data;
-  }
-
-  async applyThemePreset(
-    presetName: string,
-    organizationName: string = 'default'
-  ): Promise<any> {
-    const response = await client.post('/admin/customization/apply-preset', null, {
-      params: {
-        preset_name: presetName,
-        organization_name: organizationName
-      }
-    });
-    return response.data;
-  }
-
-  async exportCustomization(organizationName: string = 'default'): Promise<Customization> {
-    const response = await client.get('/admin/customization/export', {
-      params: { organization_name: organizationName }
-    });
-    return response.data;
-  }
-
-  async validateColorContrast(
-    backgroundColor: string,
-    textColor: string
-  ): Promise<{ ratio: number; passes_aa: boolean; passes_aaa: boolean }> {
-    // Client-side WCAG contrast calculation
-    const getLuminance = (color: string): number => {
-      const hex = color.replace('#', '');
-      const r = parseInt(hex.substr(0, 2), 16) / 255;
-      const g = parseInt(hex.substr(2, 2), 16) / 255;
-      const b = parseInt(hex.substr(4, 2), 16) / 255;
-      
-      const [rs, gs, bs] = [r, g, b].map(c => 
-        c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
-      );
-      
-      return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
-    };
-
-    const l1 = getLuminance(backgroundColor);
-    const l2 = getLuminance(textColor);
-    const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-    
-    return {
-      ratio: Math.round(ratio * 100) / 100,
-      passes_aa: ratio >= 4.5,
-      passes_aaa: ratio >= 7
-    };
-  }
-
 
   // ── Organization membership & administration ──────────────────────────────
 
@@ -999,6 +1018,39 @@ class APIService {
     const response = await client.get('/organization/audit-log', {
       params: { ...params, cursor: params.cursor || undefined },
     });
+    return response.data;
+  }
+
+  // ── AI model settings ─────────────────────────────────────────────────────
+
+  async getAIProviders(): Promise<AIProvider[]> {
+    const response = await client.get<{ providers: AIProvider[] }>('/ai/providers');
+    return response.data.providers;
+  }
+
+  async getAISettings(): Promise<AISettings> {
+    const response = await client.get<AISettings>('/organization/ai-settings');
+    return response.data;
+  }
+
+  async updateAISettings(input: AISettingsInput): Promise<AISettings> {
+    const response = await client.put<AISettings>('/organization/ai-settings', input);
+    return response.data;
+  }
+
+  async resetAISettings(): Promise<AISettings> {
+    const response = await client.delete<AISettings>('/organization/ai-settings');
+    return response.data;
+  }
+
+  /** One tiny request to the model; reports a category, never provider text. */
+  async testAIModel(probe: ModelProbe): Promise<ModelTestResult> {
+    const response = await client.post<ModelTestResult>('/organization/ai-settings/test', probe, { timeout: 45_000 });
+    return response.data;
+  }
+
+  async listProviderModels(probe: ModelProbe): Promise<{ ok: boolean; models: string[]; reason?: ProbeFailure }> {
+    const response = await client.post('/organization/ai-settings/models', probe, { timeout: 30_000 });
     return response.data;
   }
 
@@ -1102,6 +1154,27 @@ class APIService {
   async downloadConversation(conversationId: string, format: 'markdown' | 'pdf' | 'json'): Promise<void> {
     const { blob, filename } = await this.exportConversationFile(conversationId, format);
     saveBlob(blob, filename);
+  }
+
+  /** Download chosen messages (by stable sequence number) of a conversation. */
+  async downloadSelectedMessages(
+    conversationId: string,
+    sequences: number[],
+    format: 'markdown' | 'pdf' | 'json'
+  ): Promise<void> {
+    const response = await client.post(
+      `/chat/conversations/${conversationId}/export-selected`,
+      { message_sequences: sequences, format },
+      { responseType: 'blob' }
+    );
+    const extension = format === 'markdown' ? 'md' : format;
+    const body = format === 'json'
+      ? new Blob([await (response.data as Blob).text()], { type: 'application/json' })
+      : (response.data as Blob);
+    saveBlob(body, downloadFilename(
+      response.headers['content-disposition'],
+      `conversation_${conversationId.slice(0, 8)}_selection.${extension}`
+    ));
   }
 
   /** @deprecated use downloadConversation; kept for existing callers. */

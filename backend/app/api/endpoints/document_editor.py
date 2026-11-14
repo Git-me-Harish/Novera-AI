@@ -3,12 +3,14 @@ Document editor API endpoints.
 Handles chunk viewing, editing, and document preview.
 Admin-only for editing, read-only for regular users.
 """
+from pathlib import Path
 from typing import List, Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from loguru import logger
 
 from app.db.session import get_db
@@ -16,9 +18,10 @@ from app.models.user import User
 from app.api.dependencies.auth import get_current_active_user, get_current_admin_user
 from app.services.document_editing.chunk_editor import chunk_editor_service
 from app.services.document_editing.document_viewer import document_viewer_service
-from app.services.document_processing.identity import stable_document_id
 from app.services.generation.title_generator import title_generator
-from app.models.document import Chunk as ChunkModel
+from app.services.tenancy import audit
+from app.services.tenancy.audit import Action
+from app.models.document import Chunk as ChunkModel, Document
 
 
 router = APIRouter()
@@ -96,10 +99,43 @@ class EditHistoryResponse(BaseModel):
     id: str
     edited_at: str
     edited_by: str
+    edited_by_name: Optional[str] = None
     old_content: str
     new_content: str
     change_summary: Optional[str]
     metadata: dict
+
+
+class DocumentMetadataUpdate(BaseModel):
+    """Editable document metadata. Omitted fields are left unchanged."""
+    filename: Optional[str] = Field(None, max_length=255)
+    doc_type: Optional[str] = Field(None, max_length=50)
+    department: Optional[str] = Field(None, max_length=100)
+
+    @field_validator("filename")
+    @classmethod
+    def _safe_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value or any(c in value for c in ("/", "\\", "\x00")):
+            raise ValueError("Name must not be empty or contain path separators")
+        return value
+
+    @field_validator("doc_type")
+    @classmethod
+    def _type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip().lower()
+        if not value:
+            raise ValueError("Document type must not be empty")
+        return value
+
+    @field_validator("department")
+    @classmethod
+    def _department(cls, value: Optional[str]) -> Optional[str]:
+        return (value.strip() or None) if isinstance(value, str) else value
 
 
 class DocumentEditStatsResponse(BaseModel):
@@ -133,6 +169,63 @@ async def get_document_info(
             detail="Document not found"
         )
     
+    return DocumentInfoResponse(
+        **doc_info,
+        preview_type=document_viewer_service.get_preview_type(doc_info['filename']),
+        is_previewable=document_viewer_service.is_previewable(doc_info['filename'])
+    )
+
+
+@router.patch("/documents/{document_id}", response_model=DocumentInfoResponse)
+async def update_document_metadata(
+    document_id: UUID,
+    payload: DocumentMetadataUpdate,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin_user),
+):
+    """Rename a document or change its type/department. ADMIN ONLY.
+
+    The name is what citations show; the stored file keeps its path and its
+    original upload name (used for downloads). Retrieval reads name, type and
+    department from this row, so changes apply to the next query without
+    re-indexing.
+    """
+    if not admin.organization_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is not assigned to an organization")
+    document = (
+        await db.execute(
+            select(Document).where(Document.id == document_id, Document.organization_id == admin.organization_id)
+        )
+    ).scalar_one_or_none()
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    changes = {}
+    if payload.filename is not None:
+        # The extension decides how the file is previewed; keep it.
+        extension = Path(document.filename).suffix
+        name = payload.filename
+        if extension and not name.lower().endswith(extension.lower()):
+            name = f"{name}{extension}"
+        if len(name) > 255:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Name is too long")
+        if name != document.filename:
+            changes["filename"] = {"from": document.filename, "to": name}
+            document.filename = name
+    if payload.doc_type is not None and payload.doc_type != document.doc_type:
+        changes["doc_type"] = {"from": document.doc_type, "to": payload.doc_type}
+        document.doc_type = payload.doc_type
+    if "department" in payload.model_fields_set and payload.department != document.department:
+        changes["department"] = {"from": document.department, "to": payload.department}
+        document.department = payload.department
+
+    if changes:
+        audit.record(db, Action.DOCUMENT_UPDATED, actor=admin, target_type="document",
+                     target_id=document_id, details=changes, request=http_request)
+        await db.commit()
+
+    doc_info = await document_viewer_service.get_document_info(document_id, db, admin.organization_id)
     return DocumentInfoResponse(
         **doc_info,
         preview_type=document_viewer_service.get_preview_type(doc_info['filename']),
@@ -234,6 +327,7 @@ async def download_document(
 async def edit_chunk(
     chunk_id: UUID,
     request: ChunkEditRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user)
 ):
@@ -256,7 +350,8 @@ async def edit_chunk(
             detail=error
         )
     
-    logger.info(f"Admin {admin.email} edited chunk {chunk_id}")
+    await audit.record_independent(Action.CHUNK_EDITED, actor=audit.snapshot(admin), target_type="chunk",
+                                   target_id=chunk_id, details={"document_id": chunk_data.get("document_id")}, request=http_request)
     
     return ChunkResponse(**chunk_data)
 
@@ -287,6 +382,7 @@ async def batch_edit_chunks(
 @router.post("/chunks/{chunk_id}/revert")
 async def revert_chunk(
     chunk_id: UUID,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user)
 ):
@@ -303,7 +399,8 @@ async def revert_chunk(
             detail=error
         )
     
-    logger.info(f"Admin {admin.email} reverted chunk {chunk_id}")
+    await audit.record_independent(Action.CHUNK_REVERTED, actor=audit.snapshot(admin), target_type="chunk",
+                                   target_id=chunk_id, request=http_request)
     
     return {"message": "Chunk reverted successfully", "chunk_id": str(chunk_id)}
 
@@ -311,6 +408,7 @@ async def revert_chunk(
 @router.delete("/chunks/{chunk_id}")
 async def delete_chunk(
     chunk_id: UUID,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user)
 ):
@@ -327,7 +425,8 @@ async def delete_chunk(
             detail=error
         )
     
-    logger.info(f"Admin {admin.email} deleted chunk {chunk_id}")
+    await audit.record_independent(Action.CHUNK_DELETED, actor=audit.snapshot(admin), target_type="chunk",
+                                   target_id=chunk_id, request=http_request)
     
     return {"message": "Chunk deleted successfully", "chunk_id": str(chunk_id)}
 
@@ -379,7 +478,7 @@ async def generate_chunk_title(
     Generate/regenerate AI title for a specific chunk.
     ADMIN ONLY.
     """
-    from sqlalchemy import select, update
+    from sqlalchemy import update
     await _assert_chunk_access(chunk_id, db, admin)
     
     # Get chunk
@@ -438,7 +537,7 @@ async def generate_all_titles(
     Generate titles for all chunks in a document.
     ADMIN ONLY - runs in background.
     """
-    from sqlalchemy import select, update
+    from sqlalchemy import update
     if not await document_viewer_service.get_document_info(document_id, db, admin.organization_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     
@@ -509,7 +608,7 @@ async def update_chunk_title(
     Manually update chunk title.
     ADMIN ONLY.
     """
-    from sqlalchemy import select, update
+    from sqlalchemy import update
     await _assert_chunk_access(chunk_id, db, admin)
     
     if len(title) > 200:

@@ -1,23 +1,18 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import api, { errorMessage, type InvitationPreview } from '../services/api';
+import { AuthLayout } from '../components/auth/AuthLayout';
+import { PasswordInput } from '../components/auth/PasswordInput';
+import { PasswordRules } from '../components/auth/PasswordRules';
+import { passwordProblem } from '../utils/password';
+import { Button, Field, Input, Notice, PageLoader } from '../ui';
 
 const ROLE_LABELS: Record<string, string> = {
   user: 'Member',
   admin: 'Administrator',
   org_admin: 'Organization administrator',
 };
-
-function passwordProblem(password: string): string | null {
-  if (password.length < 8) return 'Password must be at least 8 characters';
-  if (!/[A-Z]/.test(password)) return 'Password must contain an uppercase letter';
-  if (!/[a-z]/.test(password)) return 'Password must contain a lowercase letter';
-  if (!/[0-9]/.test(password)) return 'Password must contain a number';
-  if (!/[^A-Za-z0-9]/.test(password)) return 'Password must contain a special character';
-  return null;
-}
 
 export default function AcceptInvitePage() {
   const [params] = useSearchParams();
@@ -41,6 +36,19 @@ export default function AcceptInvitePage() {
       .catch((err) => setLoadError(errorMessage(err, 'This invitation is invalid or has expired.')));
   }, [token]);
 
+  if (loadError) {
+    return (
+      <AuthLayout title="Invitation unavailable" footer={<Link to="/login" className="font-semibold">Go to sign in</Link>}>
+        <p className="text-body text-ink-muted">{loadError}</p>
+        <p className="mt-2 text-body text-ink-muted">Ask your administrator to send a new invitation.</p>
+      </AuthLayout>
+    );
+  }
+  if (!preview) return <PageLoader />;
+
+  const set = (key: keyof typeof form) => (event: { target: { value: string } }) =>
+    setForm({ ...form, [key]: event.target.value });
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
@@ -58,73 +66,29 @@ export default function AcceptInvitePage() {
     }
   };
 
-  const input = 'block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500';
-
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-12">
-      <div className="max-w-md w-full bg-white border border-gray-200 rounded-lg p-8">
-        {loadError ? (
-          <div>
-            <h1 className="text-xl font-bold text-gray-900 mb-2">Invitation unavailable</h1>
-            <p className="text-gray-600">{loadError}</p>
-            <p className="text-gray-600 mt-2">Ask your administrator to send a new invitation.</p>
-            <Link to="/login" className="inline-block mt-6 font-medium text-primary-600 hover:text-primary-700">
-              Go to sign in
-            </Link>
-          </div>
-        ) : !preview ? (
-          <div className="flex justify-center py-8">
-            <Loader2 className="w-6 h-6 animate-spin text-gray-400" aria-label="Loading invitation" />
-          </div>
-        ) : (
-          <form onSubmit={submit} className="space-y-4" noValidate>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Join {preview.organization}</h1>
-              <p className="text-gray-600 mt-1">
-                You were invited as <strong>{ROLE_LABELS[preview.role] ?? preview.role}</strong> with{' '}
-                <strong>{preview.email}</strong>.
-              </p>
-            </div>
-
-            {error && (
-              <div className="flex gap-2 p-3 rounded-md bg-red-50 text-red-800 text-sm" role="alert">
-                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                <span>{error}</span>
-              </div>
-            )}
-
-            <label className="block">
-              <span className="block text-sm font-medium text-gray-700 mb-1">Username</span>
-              <input className={input} required minLength={3} maxLength={50} autoComplete="username"
-                value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-            </label>
-            <label className="block">
-              <span className="block text-sm font-medium text-gray-700 mb-1">Full name (optional)</span>
-              <input className={input} maxLength={255} autoComplete="name"
-                value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
-            </label>
-            <label className="block">
-              <span className="block text-sm font-medium text-gray-700 mb-1">Password</span>
-              <input className={input} type="password" required autoComplete="new-password"
-                value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-            </label>
-            <label className="block">
-              <span className="block text-sm font-medium text-gray-700 mb-1">Confirm password</span>
-              <input className={input} type="password" required autoComplete="new-password"
-                value={form.confirm} onChange={(e) => setForm({ ...form, confirm: e.target.value })} />
-            </label>
-
-            <button type="submit" disabled={submitting}
-              className="w-full inline-flex justify-center items-center gap-2 px-4 py-2.5 bg-gray-900 text-white rounded-md font-medium hover:bg-gray-800 disabled:opacity-60">
-              {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-              Create account and join
-            </button>
-            <p className="text-xs text-gray-500 text-center">
-              This invitation expires {new Date(preview.expires_at).toLocaleDateString()}.
-            </p>
-          </form>
-        )}
-      </div>
-    </div>
+    <AuthLayout
+      title={`Join ${preview.organization}`}
+      subtitle={<>You were invited as <strong className="text-ink">{ROLE_LABELS[preview.role] ?? preview.role}</strong> with <strong className="text-ink">{preview.email}</strong>.</>}
+      footer={<>This invitation expires on {new Date(preview.expires_at).toLocaleDateString()}.</>}
+    >
+      <form onSubmit={submit} className="space-y-5" noValidate>
+        {error && <Notice tone="error">{error}</Notice>}
+        <Field label="Username">
+          <Input autoComplete="username" required minLength={3} maxLength={50} value={form.username} onChange={set('username')} />
+        </Field>
+        <Field label="Full name" optional>
+          <Input autoComplete="name" maxLength={255} value={form.fullName} onChange={set('fullName')} />
+        </Field>
+        <Field label="Password">
+          <PasswordInput autoComplete="new-password" required value={form.password} onChange={set('password')} />
+        </Field>
+        <PasswordRules password={form.password} />
+        <Field label="Confirm password">
+          <PasswordInput autoComplete="new-password" required value={form.confirm} onChange={set('confirm')} />
+        </Field>
+        <Button type="submit" block loading={submitting}>Create account and join</Button>
+      </form>
+    </AuthLayout>
   );
 }

@@ -1,354 +1,208 @@
-import { useState, useEffect } from 'react';
-import { X, Save, RotateCcw, Trash2, History, AlertCircle, Sparkles, Loader2, Edit2 } from 'lucide-react';
-import { ChunkData } from '../../services/api';
-import { useAuth } from '../../contexts/AuthContext';
-import api from '../../services/api';
+import { useState } from 'react';
+import { History, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
+import api, { errorMessage, type ChunkData } from '../../services/api';
+import { Badge, Button, Field, Input, Modal, Notice, Textarea } from '../../ui';
 import { toast } from '../../utils/toast';
+import { chunkTitle } from './ChunkList';
 
-interface ChunkEditorProps {
-  chunk: ChunkData;
-  onSave: (chunkId: string, newContent: string) => Promise<void>;
-  onRevert: (chunkId: string) => Promise<void>;
-  onDelete: (chunkId: string) => Promise<void>;
-  onViewHistory: (chunkId: string) => void;
-  onClose: () => void;
-}
+/** Mirrors ChunkEditRequest.new_content on the server. */
+const MIN_CHARS = 10;
+const MAX_CHARS = 10_000;
 
+type Confirm = null | 'revert' | 'delete';
+
+/**
+ * View or (for administrators) edit one chunk. Saving re-embeds the chunk, so
+ * the next answer retrieves the corrected text.
+ */
 export default function ChunkEditor({
   chunk,
-  onSave,
-  onRevert,
-  onDelete,
-  onViewHistory,
-  onClose
-}: ChunkEditorProps) {
-  const { isAdmin } = useAuth();
+  canEdit,
+  onUpdated,
+  onRemoved,
+  onHistory,
+  onClose,
+}: {
+  chunk: ChunkData;
+  canEdit: boolean;
+  /** A changed chunk, or nothing when the caller should reload (revert). */
+  onUpdated: (chunk?: ChunkData) => void;
+  onRemoved: (chunkId: string) => void;
+  onHistory: (chunkId: string) => void;
+  onClose: () => void;
+}) {
   const [content, setContent] = useState(chunk.content);
-  const [saving, setSaving] = useState(false);
-  const [hasChanges, setHasChanges] = useState(false);
-  
-  // Title editing states
-  const [titleValue, setTitleValue] = useState(chunk.title || '');
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [generatingTitle, setGeneratingTitle] = useState(false);
+  const [title, setTitle] = useState(chunk.title ?? '');
+  const [busy, setBusy] = useState<null | 'save' | 'title' | 'generate' | 'revert' | 'delete'>(null);
+  const [confirm, setConfirm] = useState<Confirm>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setHasChanges(content !== chunk.content);
-  }, [content, chunk.content]);
+  const dirty = content !== chunk.content;
+  const titleDirty = title.trim() !== (chunk.title ?? '') && title.trim() !== '';
+  const length = content.trim().length;
+  const tooShort = length < MIN_CHARS;
+  const tooLong = content.length > MAX_CHARS;
 
-  const handleSave = async () => {
-    if (!hasChanges) {
-      toast.info('No changes to save');
-      return;
-    }
-
-    setSaving(true);
+  const run = async (kind: NonNullable<typeof busy>, task: () => Promise<void>) => {
+    setBusy(kind);
+    setError(null);
     try {
-      await onSave(chunk.id, content);
-      onClose();
-    } catch (error) {
-      console.error('Save failed:', error);
+      await task();
+    } catch (err) {
+      setError(errorMessage(err, 'That did not work. Please try again.'));
     } finally {
-      setSaving(false);
+      setBusy(null);
     }
   };
 
-  const handleRevert = async () => {
-    if (!confirm('Revert to original content? This will discard all edits.')) return;
-
-    try {
-      await onRevert(chunk.id);
-      onClose();
-    } catch (error) {
-      console.error('Revert failed:', error);
+  const save = () => run('save', async () => {
+    const updated = await api.editChunk(chunk.id, content);
+    let next = updated;
+    if (titleDirty) {
+      await api.updateChunkTitle(chunk.id, title.trim());
+      next = { ...updated, title: title.trim() };
     }
-  };
+    onUpdated(next);
+    toast.success('Chunk saved and re-indexed');
+    onClose();
+  });
 
-  const handleDelete = async () => {
-    if (!confirm('Delete this chunk permanently? This action cannot be undone.')) return;
+  const saveTitle = () => run('title', async () => {
+    await api.updateChunkTitle(chunk.id, title.trim());
+    onUpdated({ ...chunk, title: title.trim() });
+    toast.success('Title updated');
+  });
 
-    try {
-      await onDelete(chunk.id);
-      onClose();
-    } catch (error) {
-      console.error('Delete failed:', error);
-    }
-  };
+  const generate = () => run('generate', async () => {
+    const result = await api.generateChunkTitle(chunk.id);
+    setTitle(result.title);
+    onUpdated({ ...chunk, title: result.title });
+  });
 
-  const handleRegenerateTitle = async () => {
-    setGeneratingTitle(true);
-    try {
-      const result = await api.generateChunkTitle(chunk.id);
-      setTitleValue(result.title);
-      toast.success('Title generated successfully!');
-      // Reload to show new title
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
-    } catch (err: any) {
-      console.error('Title generation failed:', err);
-      toast.error(err.response?.data?.detail || 'Failed to generate title');
-    } finally {
-      setGeneratingTitle(false);
-    }
-  };
+  const revert = () => run('revert', async () => {
+    await api.revertChunk(chunk.id);
+    onUpdated();
+    toast.success('Chunk restored to its original text');
+    onClose();
+  });
 
-  const handleSaveTitle = async () => {
-    if (!titleValue.trim()) {
-      toast.error('Title cannot be empty');
-      return;
-    }
+  const remove = () => run('delete', async () => {
+    await api.deleteChunk(chunk.id);
+    onRemoved(chunk.id);
+    toast.success('Chunk deleted');
+    onClose();
+  });
 
-    try {
-      await api.updateChunkTitle(chunk.id, titleValue.trim());
-      setEditingTitle(false);
-      toast.success('Title updated successfully!');
-      // Reload to show new title
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
-    } catch (err: any) {
-      console.error('Title update failed:', err);
-      toast.error(err.response?.data?.detail || 'Failed to update title');
-    }
-  };
-
-  const handleCancelTitleEdit = () => {
-    setEditingTitle(false);
-    setTitleValue(chunk.title || '');
-  };
+  const confirming = confirm !== null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="px-4 sm:px-6 py-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
-          <div className="flex-1 min-w-0 mr-4">
-            <h2 className="text-lg sm:text-xl font-bold text-gray-900 truncate">
-              {isAdmin ? 'Edit Chunk' : 'View Chunk'}
-            </h2>
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-xs sm:text-sm text-gray-600">
-              <span>Index: {chunk.chunk_index + 1}</span>
-              <span className="hidden xs:inline">•</span>
-              <span>Type: {chunk.chunk_type}</span>
-              <span className="hidden sm:inline">•</span>
-              <span className="hidden sm:inline">Pages: {chunk.page_numbers.join(', ')}</span>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 scroll-smooth-touch">
-          {/* Read-only notice */}
-          {!isAdmin && (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 flex items-start gap-2">
-              <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-yellow-800">
-                You are viewing this chunk in read-only mode. Only administrators can make edits.
-              </p>
-            </div>
-          )}
-
-          {/* Edit status */}
-          {chunk.is_edited && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1 text-sm text-blue-800">
-                  <p className="font-medium">This chunk has been edited {chunk.edit_count} time(s)</p>
-                  {chunk.edited_at && (
-                    <p className="mt-1">Last edited: {new Date(chunk.edited_at).toLocaleString()}</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Title Section */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="block text-sm font-medium text-gray-700 flex items-center gap-2">
-                Chunk Title
-                {chunk.title && <span title="AI-generated"><Sparkles className="w-4 h-4 text-purple-500" /></span>}
-              </label>
-              {isAdmin && (
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleRegenerateTitle}
-                    disabled={generatingTitle}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-purple-600 hover:bg-purple-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Generate new AI title"
-                  >
-                    {generatingTitle ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        Generating...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-3.5 h-3.5" />
-                        Regenerate
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
-            </div>
-            
-            {editingTitle && isAdmin ? (
-              <div className="space-y-2">
-                <input
-                  type="text"
-                  value={titleValue}
-                  onChange={(e) => setTitleValue(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm"
-                  placeholder="Enter custom title (max 200 characters)..."
-                  maxLength={200}
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleSaveTitle}
-                    className="px-3 py-1.5 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 transition-colors"
-                  >
-                    Save Title
-                  </button>
-                  <button
-                    onClick={handleCancelTitleEdit}
-                    className="px-3 py-1.5 bg-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-300 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
+    <Modal
+      open
+      onClose={onClose}
+      dismissible={busy === null}
+      size="xl"
+      title={chunkTitle(chunk)}
+      description={
+        <>
+          Chunk {chunk.chunk_index + 1}
+          {chunk.page_numbers.length > 0 && <> · page {chunk.page_numbers.join(', ')}</>}
+          {' · '}{chunk.chunk_type} · {chunk.token_count} tokens
+          {chunk.is_edited && chunk.edited_at && <> · edited {new Date(chunk.edited_at).toLocaleString()}</>}
+        </>
+      }
+      footer={
+        confirming ? (
+          <>
+            <Button variant="ghost" onClick={() => setConfirm(null)} disabled={busy !== null}>Keep chunk</Button>
+            {confirm === 'revert' ? (
+              <Button loading={busy === 'revert'} onClick={revert}>Restore original</Button>
             ) : (
-              <div
-                onClick={() => isAdmin && setEditingTitle(true)}
-                className={`px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm flex items-center justify-between ${
-                  isAdmin ? 'cursor-pointer hover:bg-gray-100 hover:border-gray-300' : ''
-                }`}
-              >
-                <span className="flex-1 truncate">
-                  {titleValue || chunk.section_title || `Chunk #${chunk.chunk_index + 1}`}
-                </span>
-                {isAdmin && <Edit2 className="w-4 h-4 text-gray-400 ml-2 flex-shrink-0" />}
-              </div>
+              <Button variant="danger" loading={busy === 'delete'} onClick={remove}>Delete chunk</Button>
             )}
-          </div>
-
-          {/* Section Title (if exists) */}
-          {chunk.section_title && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Section
-              </label>
-              <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700">
-                {chunk.section_title}
-              </div>
-            </div>
-          )}
-
-          {/* Content Editor */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Content
-            </label>
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              disabled={!isAdmin}
-              className={`w-full h-64 sm:h-80 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-xs sm:text-sm resize-none ${
-                !isAdmin ? 'bg-gray-50 cursor-not-allowed' : ''
-              }`}
-              placeholder="Chunk content..."
-            />
-            <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
-              <span>Characters: {content.length}</span>
-              <span>Tokens: ~{Math.ceil(content.length / 4)}</span>
-            </div>
-          </div>
-
-          {/* Metadata */}
-          {chunk.metadata && Object.keys(chunk.metadata).length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Metadata
-              </label>
-              <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                <pre className="text-xs text-gray-700 overflow-x-auto">
-                  {JSON.stringify(chunk.metadata, null, 2)}
-                </pre>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Footer Actions */}
-        <div className="px-4 sm:px-6 py-4 border-t border-gray-200 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 flex-shrink-0">
-          {isAdmin ? (
-            <>
-              <button
-                onClick={handleSave}
-                disabled={!hasChanges || saving}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium text-sm sm:text-base order-1 sm:order-none"
-              >
-                {saving ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-4 h-4" />
-                    Save Changes
-                  </>
-                )}
-              </button>
-
+          </>
+        ) : canEdit ? (
+          <>
+            <div className="flex flex-wrap gap-2 sm:mr-auto">
               {chunk.is_edited && (
-                <button
-                  onClick={handleRevert}
-                  className="flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium text-sm sm:text-base order-2 sm:order-none"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  <span className="hidden xs:inline">Revert to Original</span>
-                  <span className="xs:hidden">Revert</span>
-                </button>
+                <>
+                  <Button variant="ghost" size="sm" leading={<History className="h-4 w-4" />} onClick={() => onHistory(chunk.id)}>History</Button>
+                  <Button variant="ghost" size="sm" leading={<RotateCcw className="h-4 w-4" />} onClick={() => setConfirm('revert')}>Restore original</Button>
+                </>
               )}
+              <Button variant="ghost" size="sm" leading={<Trash2 className="h-4 w-4" />} onClick={() => setConfirm('delete')}>Delete</Button>
+            </div>
+            <Button variant="secondary" onClick={onClose} disabled={busy !== null}>Cancel</Button>
+            <Button onClick={save} loading={busy === 'save'} disabled={!dirty || tooShort || tooLong}>Save and re-index</Button>
+          </>
+        ) : (
+          <>
+            {chunk.is_edited && <Button variant="ghost" leading={<History className="h-4 w-4" />} onClick={() => onHistory(chunk.id)}>History</Button>}
+            <Button variant="secondary" onClick={onClose}>Close</Button>
+          </>
+        )
+      }
+    >
+      <div className="space-y-5">
+        {confirm === 'revert' && (
+          <Notice tone="warning" title="Restore the original text?">
+            Every edit to this chunk is discarded and the original extracted text is re-indexed.
+          </Notice>
+        )}
+        {confirm === 'delete' && (
+          <Notice tone="error" title="Delete this chunk?">
+            Answers will no longer be able to use or cite this passage. This cannot be undone.
+          </Notice>
+        )}
+        {error && <Notice tone="error">{error}</Notice>}
 
-              <button
-                onClick={() => onViewHistory(chunk.id)}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium text-sm sm:text-base order-3 sm:order-none"
-              >
-                <History className="w-4 h-4" />
-                <span className="hidden sm:inline">View History</span>
-                <span className="sm:hidden">History</span>
-              </button>
-
-              <button
-                onClick={handleDelete}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors font-medium text-sm sm:text-base order-4 sm:order-none sm:ml-auto"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span className="hidden xs:inline">Delete Chunk</span>
-                <span className="xs:hidden">Delete</span>
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={onClose}
-              className="flex items-center justify-center gap-2 px-6 py-2.5 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-medium text-sm sm:text-base"
+        {canEdit ? (
+          <>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+              <Field label="Title" hint="Shown in the chunk list. Generated titles summarise the passage." className="flex-1">
+                <Input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} disabled={confirming} />
+              </Field>
+              <div className="flex gap-2 sm:mt-7">
+                <Button
+                  variant="secondary"
+                  leading={<Sparkles className="h-4 w-4" />}
+                  loading={busy === 'generate'}
+                  onClick={generate}
+                  disabled={confirming}
+                >
+                  Generate
+                </Button>
+                {titleDirty && !dirty && (
+                  <Button variant="secondary" loading={busy === 'title'} onClick={saveTitle}>Save title</Button>
+                )}
+              </div>
+            </div>
+            <Field
+              label="Text"
+              hint={
+                tooLong
+                  ? undefined
+                  : `${content.length.toLocaleString()} / ${MAX_CHARS.toLocaleString()} characters. Saving updates what answers retrieve and quote.`
+              }
+              error={tooLong ? `Keep it under ${MAX_CHARS.toLocaleString()} characters.` : dirty && tooShort ? `Write at least ${MIN_CHARS} characters.` : undefined}
             >
-              Close
-            </button>
-          )}
-        </div>
+              <Textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                rows={16}
+                disabled={confirming}
+                className="font-mono text-small leading-relaxed"
+              />
+            </Field>
+          </>
+        ) : (
+          <>
+            {chunk.is_edited && <Badge tone="warning">Edited by an administrator</Badge>}
+            <div className="whitespace-pre-wrap break-words rounded-sm border border-hairline bg-canvas-soft p-4 font-mono text-small leading-relaxed text-ink">
+              {chunk.content}
+            </div>
+          </>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }

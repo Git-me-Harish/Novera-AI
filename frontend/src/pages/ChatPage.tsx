@@ -1,602 +1,420 @@
-import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { Send, Loader2, FileText, AlertCircle, Plus, Sparkles, BarChart3, X, ChevronDown, ChevronUp } from 'lucide-react';
-import api, { ChatMessage, ChatResponse, Source } from '../services/api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import {
+  BarChart3,
+  Download,
+  FileDown,
+  ListChecks,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+  RotateCcw,
+  Trash2,
+  Upload,
+} from 'lucide-react';
+import api, { errorMessage, type ChatMessage, type ChatResponse, type Document } from '../services/api';
 import MessageBubble from '../components/chat/MessageBubble';
-import SourceCard from '../components/chat/SourceCard';
-import ContextIndicator from '../components/chat/ContextIndicator';
-import ExportButton from '../components/chat/ExportButton';
+import { PromptBar, type PromptBarHandle } from '../components/chat/PromptBar';
 import AnalyticsModal from '../components/chat/AnalyticsModal';
-import { useConversation } from '../contexts/ConversationContext';
 import SelectiveExportModal from '../components/chat/SelectiveExportModal';
-import { useCustomization } from '../contexts/CustomizationContext';
+import { useConversation } from '../contexts/ConversationContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useBrand } from '../contexts/BrandContext';
+import { Button, IconButton, Input, Menu, Modal, PixelLoader } from '../ui';
+import { toast } from '../utils/toast';
 
-const MemoizedMessageBubble = memo(MessageBubble);
-const MemoizedSourceCard = memo(SourceCard);
+interface Meta {
+  title: string;
+  isPinned: boolean;
+  hasMoreBefore: boolean;
+  oldestSequence: number | null;
+}
 
-// Alias the shared utility under the name used throughout this file
-import { getFullAssetUrl as getFullImageUrl } from '@/utils/apiBase';
+const EMPTY_META: Meta = { title: '', isPinned: false, hasMoreBefore: false, oldestSequence: null };
+
+function toChatMessages(messages: { role: string; content: string; timestamp: string; metadata: any }[]): ChatMessage[] {
+  return messages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content, timestamp: m.timestamp, metadata: m.metadata }));
+}
 
 export default function ChatPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
-  const { setCurrentConversationId } = useConversation();
-  const { customization } = useCustomization();
   const { isAdmin } = useAuth();
+  const { brand } = useBrand();
+  const { setCurrentConversationId, refreshRecent } = useConversation();
 
-  // State
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [meta, setMeta] = useState<Meta>(EMPTY_META);
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [currentConversationIdLocal, setCurrentConversationIdLocal] = useState<string | null>(
-    conversationId || null
-  );
-  const [sources, setSources] = useState<Source[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [contextSummary, setContextSummary] = useState<any>(null);
+  const [busySince, setBusySince] = useState<number | null>(null);
+  const [failedQuery, setFailedQuery] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(true);
+  const [loadingConversation, setLoadingConversation] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [documents, setDocuments] = useState<Document[] | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showSelectiveExport, setShowSelectiveExport] = useState(false);
-  const [showSourcesDrawer, setShowSourcesDrawer] = useState(false);
-  const [showSourcesPanel, setShowSourcesPanel] = useState(true);
-  const [isDarkMode, setIsDarkMode] = useState(
-    () => document.documentElement.classList.contains('dark')
-  );
 
-  // Refs
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const prompt = useRef<PromptBarHandle>(null);
+  const bottom = useRef<HTMLDivElement>(null);
+  // The id the current view belongs to; ignores late responses after navigation.
+  const activeId = useRef<string | null>(conversationId ?? null);
+  // Set when this page creates a conversation, so the URL change that
+  // follows does not reload what is already on screen.
+  const justCreated = useRef<string | null>(null);
+  const busy = busySince !== null;
 
-  // Sync dark mode with the html class (set by CustomizationContext)
   useEffect(() => {
-    const observer = new MutationObserver(() => {
-      setIsDarkMode(document.documentElement.classList.contains('dark'));
-    });
-    observer.observe(document.documentElement, { attributeFilter: ['class'] });
-    return () => observer.disconnect();
-  }, []);
-
-  // Sync global conversation context
-  useEffect(() => {
-    setCurrentConversationId(currentConversationIdLocal);
+    setCurrentConversationId(conversationId ?? null);
     return () => setCurrentConversationId(null);
-  }, [currentConversationIdLocal, setCurrentConversationId]);
+  }, [conversationId, setCurrentConversationId]);
 
-  // Load conversation from URL param
+  // Load the conversation from the URL (or reset for a new chat).
   useEffect(() => {
-    if (conversationId) loadConversation(conversationId);
+    activeId.current = conversationId ?? null;
+    setSuggestions([]);
+    setFailedQuery(null);
+    if (!conversationId) {
+      setMessages([]);
+      setMeta(EMPTY_META);
+      return;
+    }
+    if (justCreated.current === conversationId) {
+      justCreated.current = null; // already on screen
+      return;
+    }
+    let cancelled = false;
+    setLoadingConversation(true);
+    api.getConversation(conversationId, { limit: 100 })
+      .then((conversation) => {
+        if (cancelled) return;
+        setMessages(toChatMessages(conversation.messages));
+        setMeta({
+          title: conversation.title,
+          isPinned: conversation.is_pinned,
+          hasMoreBefore: conversation.has_more_before,
+          oldestSequence: conversation.messages[0]?.sequence ?? null,
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        toast.error('That conversation is not available');
+        navigate('/chat', { replace: true });
+      })
+      .finally(() => !cancelled && setLoadingConversation(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
-  // Auto-scroll
+  // Starter prompts come from this organization's own documents.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (conversationId || documents) return;
+    api.getDocuments({ limit: 6, status: 'completed' })
+      .then((result) => setDocuments(result.documents))
+      .catch(() => setDocuments([]));
+  }, [conversationId, documents]);
 
-  // Auto-resize textarea
   useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.style.height = 'auto';
-      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 120)}px`;
-    }
-  }, [input]);
+    bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages.length, busy]);
 
-  // Keyboard shortcut: Ctrl/Cmd+A → analytics
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'a' && currentConversationIdLocal) {
-        e.preventDefault();
-        setShowAnalytics(true);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [currentConversationIdLocal]);
-
-  // Close mobile sources drawer on outside click
-  useEffect(() => {
-    const onClickOutside = (e: MouseEvent) => {
-      if (window.innerWidth >= 1024) return;
-      const drawer = document.getElementById('sources-drawer');
-      const btn = document.getElementById('sources-drawer-button');
-      if (showSourcesDrawer && drawer && !drawer.contains(e.target as Node) && btn && !btn.contains(e.target as Node)) {
-        setShowSourcesDrawer(false);
-      }
-    };
-    document.addEventListener('mousedown', onClickOutside);
-    return () => document.removeEventListener('mousedown', onClickOutside);
-  }, [showSourcesDrawer]);
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
-  const loadConversation = async (convId: string) => {
+  const loadEarlier = async () => {
+    if (!conversationId || meta.oldestSequence == null) return;
+    setLoadingEarlier(true);
     try {
-      const conversation = await api.getConversation(convId);
-      setMessages(
-        conversation.messages
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content,
-                         timestamp: m.timestamp, metadata: m.metadata }))
-      );
-      setCurrentConversationIdLocal(convId);
-    } catch (err: any) {
-      const status = err?.response?.status;
-      if (status === 403 || status === 404) {
-        setCurrentConversationIdLocal(null);
-        navigate('/chat', { replace: true });
-      }
+      const page = await api.getConversation(conversationId, { before: meta.oldestSequence, limit: 100 });
+      setMessages((current) => [...toChatMessages(page.messages), ...current]);
+      setMeta((m) => ({ ...m, hasMoreBefore: page.has_more_before, oldestSequence: page.messages[0]?.sequence ?? m.oldestSequence }));
+    } catch (error) {
+      toast.error(errorMessage(error, 'Could not load earlier messages'));
+    } finally {
+      setLoadingEarlier(false);
     }
   };
 
-  const handleChatResponse = useCallback((response: ChatResponse) => {
-    setSources(response.sources.map(src => ({ ...src })));
-    setTimeout(() => {
-      if (response.suggestions && Array.isArray(response.suggestions)) {
-        setSuggestions(response.suggestions);
-        setShowSuggestions(true);
-      } else {
-        setSuggestions([]);
-      }
-    }, 0);
-    if (response.metadata?.context_summary) {
-      setContextSummary(response.metadata.context_summary);
-    }
-  }, []);
-
-  const handleSendMessage = async () => {
-    if (!input.trim() || loading) return;
-
-    const userMessage: ChatMessage = {
-      role: 'user',
-      content: input.trim(),
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages(prev => [...prev, userMessage]);
+  const send = useCallback(async (text?: string) => {
+    const query = (text ?? input).trim();
+    if (!query || busySince !== null) return;
+    const startedFor = activeId.current;
+    setMessages((current) => [...current, { role: 'user', content: query, timestamp: new Date().toISOString() }]);
     setInput('');
-    setLoading(true);
-    setError(null);
-
+    setSuggestions([]);
+    setFailedQuery(null);
+    setBusySince(Date.now());
     try {
-      const response: ChatResponse = await api.sendChatMessage({
-        query: input.trim(),
-        conversation_id: currentConversationIdLocal,
-      });
-
-      if (!currentConversationIdLocal && response.conversation_id) {
-        setCurrentConversationIdLocal(response.conversation_id);
+      const response: ChatResponse = await api.sendChatMessage({ query, conversation_id: startedFor });
+      if (activeId.current !== startedFor) return; // user navigated away mid-answer
+      if (!startedFor) {
+        activeId.current = response.conversation_id;
+        justCreated.current = response.conversation_id;
+        setMeta((m) => ({ ...m, title: query.slice(0, 60) }));
         navigate(`/chat/${response.conversation_id}`, { replace: true });
       }
-
-      const assistantMessage: ChatMessage = {
-        role: 'assistant',
-        content: response.answer,
-        timestamp: new Date().toISOString(),
-        metadata: {
-          sources: response.sources,
-          confidence: response.confidence,
-          citations: response.citations,
-          reformulated_query: response.metadata?.query_reformulated ? input.trim() : undefined,
+      setMessages((current) => [
+        ...current,
+        {
+          role: 'assistant',
+          content: response.answer,
+          timestamp: new Date().toISOString(),
+          metadata: { sources: response.sources, confidence: response.confidence, citations: response.citations },
         },
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
-      handleChatResponse(response);
-      setError(null);
-    } catch (err: any) {
-      console.error('Chat error:', err);
-      const errorMessage = err.response?.data?.detail || 'Failed to send message. Please try again.';
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `I apologize, but I encountered an error: ${errorMessage}\n\nPlease try rephrasing your question or try again in a moment.`,
-        timestamp: new Date().toISOString(),
-        metadata: { error: true },
-      }]);
+      ]);
+      setSuggestions(response.suggestions ?? []);
+      refreshRecent();
+      // The generated title arrives a few seconds later.
+      if (!startedFor) window.setTimeout(refreshRecent, 4000);
+    } catch (error) {
+      if (activeId.current !== startedFor) return;
+      setFailedQuery(query);
+      setMessages((current) => [
+        ...current,
+        {
+          role: 'assistant',
+          content: errorMessage(error, 'The answer could not be generated. Please try again.'),
+          timestamp: new Date().toISOString(),
+          metadata: { error: true },
+        },
+      ]);
     } finally {
-      setLoading(false);
-      inputRef.current?.focus();
+      setBusySince(null);
+      prompt.current?.focus();
+    }
+  }, [busySince, input, navigate, refreshRecent]);
+
+  const retry = () => {
+    if (!failedQuery) return;
+    // Drop the failed exchange, then resend the same question.
+    setMessages((current) => current.slice(0, -2));
+    send(failedQuery);
+  };
+
+  const updateConversation = async (patch: { title?: string; is_pinned?: boolean }) => {
+    if (!conversationId) return;
+    try {
+      const updated = await api.updateConversation(conversationId, patch);
+      setMeta((m) => ({ ...m, title: updated.title, isPinned: updated.is_pinned }));
+      refreshRecent();
+    } catch (error) {
+      toast.error(errorMessage(error, 'Could not update the conversation'));
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
+  const deleteConversation = async () => {
+    if (!conversationId) return;
+    setConfirmDelete(false);
+    try {
+      await api.deleteConversation(conversationId);
+      refreshRecent();
+      const id = conversationId;
+      toast.withAction('Conversation moved to Recently deleted', {
+        label: 'Undo',
+        onClick: async () => {
+          await api.restoreConversation(id);
+          refreshRecent();
+          navigate(`/chat/${id}`);
+        },
+      });
+      navigate('/chat');
+    } catch (error) {
+      toast.error(errorMessage(error, 'Could not delete the conversation'));
     }
   };
 
-  const startNewChat = useCallback(() => {
-    setMessages([]);
-    setCurrentConversationIdLocal(null);
-    setSources([]);
-    setError(null);
-    setContextSummary(null);
-    setSuggestions([]);
-    navigate('/chat');
-    inputRef.current?.focus();
-  }, [navigate]);
-
-  const clearContext = useCallback(() => {
-    setContextSummary(null);
-    setSuggestions([]);
-  }, []);
-
-  const handleSuggestionClick = useCallback((suggestion: string) => {
-    setInput(suggestion);
-    setSuggestions([]);
-  }, []);
-
-  const exampleQuestions = useMemo(() => [
-  'Loan products & rates?',
-  'Repayment terms & penalties?',
-  'Any risks or overdue loans?',
-  'Compliance & RBI rules?',
-  ], []);
-
-  const currentLogo = useMemo(() => {
-    if (isDarkMode && customization?.branding?.logo_dark_url) {
-      return getFullImageUrl(customization.branding.logo_dark_url);
+  const download = async (format: 'markdown' | 'pdf') => {
+    if (!conversationId) return;
+    try {
+      await api.downloadConversation(conversationId, format);
+    } catch (error) {
+      toast.error(errorMessage(error, 'Export failed'));
     }
-    if (customization?.branding?.logo_url) {
-      return getFullImageUrl(customization.branding.logo_url);
-    }
-    return null;
-  }, [isDarkMode, customization]);
+  };
 
-  const appName = customization?.branding?.app_name || 'Novera AI';
+  const starters = useMemo(() => {
+    const docs = (documents ?? []).slice(0, 4);
+    return docs.map((doc) => {
+      const name = doc.filename.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ');
+      return `Summarize the key points of “${name}”`;
+    });
+  }, [documents]);
 
-  // Only show sources UI to admin users
-  const canSeeSources = isAdmin;
+  const lastIsAnswer = messages.length > 0 && messages[messages.length - 1].role === 'assistant';
 
   return (
-    <div className="flex h-full bg-gray-50 relative">
-      {/* Mobile Sources Drawer Overlay — admin only */}
-      {canSeeSources && showSourcesDrawer && sources.length > 0 && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 lg:hidden"
-          onClick={() => setShowSourcesDrawer(false)}
-        />
+    <div className="flex h-full flex-col">
+      {conversationId && (
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-hairline bg-canvas px-4 lg:h-16 lg:px-6">
+          {renaming ? (
+            <form
+              className="flex flex-1 items-center gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setRenaming(false);
+                if (renameValue.trim() && renameValue.trim() !== meta.title) updateConversation({ title: renameValue.trim() });
+              }}
+            >
+              <Input
+                autoFocus
+                value={renameValue}
+                maxLength={200}
+                onChange={(event) => setRenameValue(event.target.value)}
+                onKeyDown={(event) => event.key === 'Escape' && setRenaming(false)}
+                aria-label="Conversation title"
+                className="min-h-[36px] py-1.5"
+              />
+              <Button type="submit" size="sm">Save</Button>
+              <Button size="sm" variant="ghost" onClick={() => setRenaming(false)}>Cancel</Button>
+            </form>
+          ) : (
+            <h1 className="flex min-w-0 items-center gap-2 text-heading-sm font-heavy">
+              {meta.isPinned && <Pin className="h-4 w-4 shrink-0 text-ink-muted" aria-label="Pinned" />}
+              <span className="truncate">{meta.title || 'Conversation'}</span>
+            </h1>
+          )}
+          {!renaming && (
+            <Menu
+              label="Conversation actions"
+              items={[
+                { label: 'Rename', icon: <Pencil className="h-4 w-4" />, onSelect: () => { setRenameValue(meta.title); setRenaming(true); } },
+                meta.isPinned
+                  ? { label: 'Unpin', icon: <PinOff className="h-4 w-4" />, onSelect: () => updateConversation({ is_pinned: false }) }
+                  : { label: 'Pin', icon: <Pin className="h-4 w-4" />, onSelect: () => updateConversation({ is_pinned: true }) },
+                { label: 'Export as Markdown', icon: <Download className="h-4 w-4" />, onSelect: () => download('markdown') },
+                { label: 'Export as PDF', icon: <FileDown className="h-4 w-4" />, onSelect: () => download('pdf') },
+                { label: 'Export selected messages…', icon: <ListChecks className="h-4 w-4" />, onSelect: () => setShowSelectiveExport(true) },
+                { label: 'Usage for this conversation', icon: <BarChart3 className="h-4 w-4" />, onSelect: () => setShowAnalytics(true) },
+                { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, danger: true, onSelect: () => setConfirmDelete(true) },
+              ]}
+              trigger={(props) => (
+                <IconButton {...props} label="Conversation actions">
+                  <MoreHorizontal className="h-5 w-5" />
+                </IconButton>
+              )}
+            />
+          )}
+        </header>
       )}
 
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col min-w-0">
-
-        {/* ── Header ────────────────────────────────────────────────────────── */}
-        <div className="h-14 sm:h-16 border-b border-gray-200 bg-white px-3 sm:px-6 flex items-center justify-between shadow-sm flex-shrink-0">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-md flex-shrink-0">
-              <Sparkles className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
+      <div className="min-h-0 flex-1 overflow-y-auto" aria-live="polite" aria-busy={busy || loadingConversation}>
+        <div className="mx-auto w-full max-w-3xl px-4 py-8 lg:px-6">
+          {loadingConversation ? (
+            <div className="space-y-6" aria-label="Loading conversation">
+              {[0, 1, 2].map((i) => <div key={i} className="skeleton h-16" />)}
             </div>
-            <div className="min-w-0 flex-1">
-              <h1 className="text-sm sm:text-lg font-semibold text-gray-900 truncate">
-                {currentConversationIdLocal ? `Chat with ${appName}` : 'New Conversation'}
-              </h1>
-              <p className="text-xs text-gray-500 hidden sm:block">AI-powered knowledge assistant</p>
-            </div>
-          </div>
-
-          {/* Header action buttons — only shown when there are messages */}
-          {messages.length > 0 && (
-            <div className="flex items-center gap-1 sm:gap-2">
-              {/* Mobile sources button — admin only */}
-              {canSeeSources && sources.length > 0 && (
-                <button
-                  id="sources-drawer-button"
-                  onClick={() => setShowSourcesDrawer(!showSourcesDrawer)}
-                  className="lg:hidden flex items-center gap-1 px-2 sm:px-3 py-2 text-xs sm:text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors min-touch-target relative"
-                >
-                  <FileText className="w-4 h-4" />
-                  <span className="hidden xs:inline">Sources</span>
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center">
-                    {sources.length}
-                  </span>
-                </button>
-              )}
-
-              {/* Desktop sources toggle — admin only */}
-              {canSeeSources && sources.length > 0 && (
-                <button
-                  onClick={() => setShowSourcesPanel(!showSourcesPanel)}
-                  className="hidden lg:flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors min-touch-target"
-                  title={showSourcesPanel ? 'Hide sources panel' : 'Show sources panel'}
-                >
-                  <FileText className="w-4 h-4" />
-                  <span>{showSourcesPanel ? 'Hide' : 'Show'} Sources</span>
-                  <span className="ml-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-semibold">
-                    {sources.length}
-                  </span>
-                </button>
-              )}
-
-              {/* Analytics — only when conversation is persisted */}
-              {currentConversationIdLocal && (
-                <button
-                  onClick={() => setShowAnalytics(true)}
-                  className="hidden sm:flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 border border-gray-300 rounded-lg transition-colors min-touch-target"
-                  title="View analytics"
-                >
-                  <BarChart3 className="w-4 h-4" />
-                  <span className="hidden md:inline">Analytics</span>
-                </button>
-              )}
-
-              {/* Export — always available when messages exist */}
-              <ExportButton
-                conversationId={currentConversationIdLocal || 'local'}
-                messages={messages}
-                onSelectiveExport={() => setShowSelectiveExport(true)}
-              />
-
-              {/* New chat */}
-              <button
-                onClick={startNewChat}
-                className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 text-xs sm:text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors min-touch-target"
-              >
-                <Plus className="w-4 h-4" />
-                <span className="hidden xs:inline">New</span>
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* ── Messages ──────────────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto scroll-smooth-touch">
-          {/* Sticky context indicator */}
-          {isAdmin && messages.length > 0 && contextSummary && (
-            <div className="sticky top-0 z-10 pt-2 sm:pt-4 bg-gray-50">
-              <ContextIndicator
-                contextSummary={contextSummary}
-                onClearContext={clearContext}
-              />
-            </div>
-          )}
-
-          <div className="max-w-6xl mx-auto px-3 sm:px-8 py-4 sm:py-8 space-y-4 sm:space-y-6">
-            {/* Empty state */}
-            {messages.length === 0 && (
-              <div className="h-full flex items-center justify-center py-8 sm:py-12">
-                <div className="text-center max-w-2xl px-4">
-                  {currentLogo ? (
-                    <div className="mx-auto mb-4 sm:mb-6 flex items-center justify-center">
-                      <img
-                        src={currentLogo}
-                        alt={appName}
-                        className="h-16 sm:h-20 w-auto object-contain max-w-[200px] sm:max-w-[280px]"
-                        onError={e => {
-                          e.currentTarget.style.display = 'none';
-                          const parent = e.currentTarget.parentElement;
-                          if (parent && !parent.querySelector('.logo-fallback')) {
-                            const fb = document.createElement('div');
-                            fb.className = 'logo-fallback w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-blue-100 to-purple-100 rounded-2xl mx-auto flex items-center justify-center shadow-lg';
-                            fb.innerHTML = `<span class="text-4xl sm:text-5xl">${appName.charAt(0)}</span>`;
-                            parent.appendChild(fb);
-                          }
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-blue-100 to-purple-100 rounded-2xl mx-auto mb-4 sm:mb-6 flex items-center justify-center shadow-lg">
-                      <Sparkles className="w-8 h-8 sm:w-10 sm:h-10 text-blue-600" />
-                    </div>
-                  )}
-
-                  <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 sm:mb-3">
-                    Welcome to {appName}
-                  </h2>
-                  <p className="text-sm sm:text-base text-gray-600 mb-6 sm:mb-8 leading-relaxed">
-                    {customization?.branding?.app_tagline ||
-                      "Your AI Co-Pilot for Microfinance operations, loan insights, and compliance.Ask about portfolios, repayments, risks, or policies across your organization."}
+          ) : messages.length === 0 ? (
+            <section className="pt-[8vh]">
+              <h1 className="display-title">What would you like to know?</h1>
+              <span className="gold-rule" aria-hidden />
+              <p className="mt-4 max-w-prose text-body-loose font-book text-ink-muted">
+                {brand.appName} answers from your organization's documents and cites every claim, so you can check the source.
+              </p>
+              {documents && documents.length === 0 ? (
+                <div className="mt-8 rounded-md bg-canvas-soft p-6">
+                  <p className="text-body font-semibold">No documents yet</p>
+                  <p className="mt-1 text-small text-ink-muted">
+                    {isAdmin ? 'Upload documents so answers have something to draw on.' : 'Ask an administrator to upload documents.'}
                   </p>
-
-                  <div className="space-y-3">
-                    <p className="text-xs sm:text-sm font-medium text-gray-700">What would you like to explore?</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {exampleQuestions.map((example, idx) => (
+                  {isAdmin && (
+                    <Link to="/documents" className="mt-4 inline-flex">
+                      <Button leading={<Upload className="h-4 w-4" />}>Upload documents</Button>
+                    </Link>
+                  )}
+                </div>
+              ) : (
+                starters.length > 0 && (
+                  <div className="mt-8">
+                    <p className="mb-3 text-label font-semibold text-ink-muted">Start with one of your documents</p>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {starters.map((starter) => (
                         <button
-                          key={idx}
-                          onClick={() => setInput(example)}
-                          className="px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm text-left text-gray-700 bg-white hover:bg-gray-50 border border-gray-200 hover:border-blue-300 rounded-lg transition-all shadow-sm hover:shadow min-touch-target"
+                          key={starter}
+                          type="button"
+                          onClick={() => send(starter)}
+                          className="rounded-md border border-hairline bg-canvas p-4 text-left text-small text-ink transition-colors hover:border-ink"
                         >
-                          <FileText className="w-4 h-4 inline mr-2 text-gray-400" />
-                          {example}
+                          {starter}
                         </button>
                       ))}
                     </div>
                   </div>
+                )
+              )}
+            </section>
+          ) : (
+            <div className="space-y-8">
+              {meta.hasMoreBefore && (
+                <div className="flex justify-center">
+                  <Button variant="ghost" size="sm" loading={loadingEarlier} onClick={loadEarlier}>
+                    Load earlier messages
+                  </Button>
                 </div>
-              </div>
-            )}
-
-            {/* Message list */}
-            {messages.map((message, index) => (
-              <MemoizedMessageBubble key={`${message.timestamp}-${index}`} message={message} />
-            ))}
-
-            {/* Loading indicator */}
-            {loading && (
-              <div className="flex items-start gap-2 sm:gap-3">
-                <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-md">
-                  <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-                </div>
-                <div className="flex-1 bg-white rounded-2xl p-3 sm:p-4 shadow-sm border border-gray-200">
-                  <div className="flex items-center gap-3 text-gray-500">
-                    <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin text-blue-500" />
-                    <div className="flex gap-1">
-                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Error banner */}
-            {error && (
-              <div className="flex items-start gap-2 sm:gap-3 p-3 sm:p-4 bg-red-50 border border-red-200 rounded-lg">
-                <AlertCircle className="w-4 h-4 sm:w-5 sm:h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs sm:text-sm font-medium text-red-900">Error</p>
-                  <p className="text-xs sm:text-sm text-red-700 mt-1 break-words">{error}</p>
-                </div>
-              </div>
-            )}
-
-            <div ref={messagesEndRef} />
-          </div>
-        </div>
-
-        {/* ── Input Area ────────────────────────────────────────────────────── */}
-        <div className="border-t border-gray-200 bg-white p-3 sm:p-4 shadow-lg flex-shrink-0">
-          <div className="max-w-6xl mx-auto">
-
-            {/* Suggested questions */}
-            {suggestions.length > 0 && messages.length > 0 && (
-              <div className="mb-3 animate-fadeIn">
-                <div className="flex items-center mb-2">
-                  <button
-                    onClick={() => setShowSuggestions(v => !v)}
-                    className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-800 transition-colors"
-                  >
-                    <Sparkles className="w-3 h-3 text-blue-500" />
-                    Suggested questions
-                    {showSuggestions
-                      ? <ChevronDown className="w-3 h-3" />
-                      : <ChevronUp className="w-3 h-3" />
-                    }
-                  </button>
-                </div>
-                {showSuggestions && (
+              )}
+              {messages.map((message, index) => (
+                <MessageBubble key={`${message.timestamp}-${index}`} message={message} />
+              ))}
+              {busy && <PixelLoader label="Searching your documents and writing an answer" startedAt={busySince ?? undefined} />}
+              {failedQuery && !busy && (
+                <Button variant="secondary" size="sm" leading={<RotateCcw className="h-4 w-4" />} onClick={retry}>
+                  Retry
+                </Button>
+              )}
+              {lastIsAnswer && !busy && suggestions.length > 0 && (
+                <div>
+                  <p className="mb-2 text-caption font-semibold text-ink-muted">Follow up</p>
                   <div className="flex flex-wrap gap-2">
-                    {suggestions.map((suggestion, idx) => (
+                    {suggestions.slice(0, 4).map((suggestion) => (
                       <button
-                        key={idx}
-                        onClick={() => handleSuggestionClick(suggestion)}
-                        className="group px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-300 rounded-lg transition-all shadow-sm hover:shadow min-touch-target"
+                        key={suggestion}
+                        type="button"
+                        onClick={() => send(suggestion)}
+                        className="rounded-xs border border-hairline bg-canvas px-3 py-2 text-left text-small text-ink transition-colors hover:border-ink"
                       >
-                        <span className="flex items-center gap-1">
-                          <span className="line-clamp-1">{suggestion}</span>
-                          <Send className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-                        </span>
+                        {suggestion}
                       </button>
                     ))}
                   </div>
-                )}
-              </div>
-            )}
-
-            {/* Focus context hint */}
-            {isAdmin && contextSummary && contextSummary.primary_document && (
-              <div className="mb-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-md">
-                <p className="text-xs text-blue-700 truncate">
-                  <Sparkles className="w-3 h-3 inline mr-1" />
-                  I'll focus on <span className="font-medium">{contextSummary.primary_document}</span> for your next question
-                </p>
-              </div>
-            )}
-
-            {/* Text input */}
-            <div className="flex items-end gap-2">
-              <div className="flex-1 relative min-w-0">
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={e => setInput(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder="Ask me anything about your documents..."
-                  rows={1}
-                  className="w-full px-3 sm:px-4 py-2.5 sm:py-3 pr-10 sm:pr-12 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none shadow-sm text-sm sm:text-base"
-                  style={{ minHeight: '44px', maxHeight: '120px' }}
-                  disabled={loading}
-                />
-              </div>
-              <button
-                onClick={handleSendMessage}
-                disabled={!input.trim() || loading}
-                className="px-3 sm:px-4 py-2.5 sm:py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl hover:from-blue-700 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg disabled:shadow-none min-touch-target flex-shrink-0"
-              >
-                {loading
-                  ? <Loader2 className="w-5 h-5 animate-spin" />
-                  : <Send className="w-5 h-5" />
-                }
-              </button>
+                </div>
+              )}
             </div>
-            <p className="mt-2 text-xs text-gray-500 text-center hidden sm:block">
-              Press Enter to send • Shift+Enter for new line
-            </p>
-          </div>
+          )}
+          <div ref={bottom} />
         </div>
       </div>
 
-      {/* ── Sources Sidebar (desktop) — admin only ───────────────────────── */}
-      {canSeeSources && sources.length > 0 && showSourcesPanel && (
-        <div className="hidden lg:block w-80 border-l border-gray-200 bg-white overflow-y-auto scroll-smooth-touch flex-shrink-0">
-          <div className="p-4 border-b border-gray-200 bg-gray-50 sticky top-0 z-10">
-            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-blue-600" />
-              Sources ({sources.length})
-            </h3>
-            {contextSummary?.primary_document && (
-              <p className="text-xs text-gray-500 mt-1 truncate">
-                Currently focusing on:{' '}
-                <span className="font-medium">{contextSummary.primary_document}</span>
-              </p>
-            )}
-          </div>
-          <div className="p-4 space-y-2">
-            {sources.map((source, index) => (
-              <MemoizedSourceCard key={`${source.chunk_id}-${index}`} source={source} />
-            ))}
-          </div>
+      <div className="shrink-0 border-t border-hairline bg-canvas-warm">
+        <div className="mx-auto w-full max-w-3xl px-4 py-4 lg:px-6">
+          <PromptBar ref={prompt} value={input} onChange={setInput} onSubmit={() => send()} busy={busy} />
+          <p className="mt-2 text-center text-caption text-ink-muted">
+            Answers come from your organization's documents. Check the cited sources for important decisions.
+          </p>
         </div>
-      )}
+      </div>
 
-      {/* ── Sources Drawer (mobile) — admin only ────────────────────────── */}
-      {canSeeSources && sources.length > 0 && (
-        <div
-          id="sources-drawer"
-          className={`fixed bottom-0 left-0 right-0 z-50 bg-white transform transition-transform duration-300 ease-in-out lg:hidden border-t-2 border-gray-200 rounded-t-2xl shadow-2xl ${
-            showSourcesDrawer ? 'translate-y-0' : 'translate-y-full'
-          }`}
-          style={{ maxHeight: '70vh' }}
-        >
-          <div className="p-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between sticky top-0 z-10">
-            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-blue-600" />
-              Sources ({sources.length})
-            </h3>
-            <button
-              onClick={() => setShowSourcesDrawer(false)}
-              className="p-2 hover:bg-gray-200 rounded-lg transition-colors min-touch-target"
-            >
-              <X className="w-5 h-5 text-gray-600" />
-            </button>
-          </div>
-          <div className="p-4 space-y-2 overflow-y-auto scroll-smooth-touch" style={{ maxHeight: 'calc(70vh - 60px)' }}>
-            {sources.map((source, index) => (
-              <MemoizedSourceCard key={`${source.chunk_id}-${index}`} source={source} />
-            ))}
-          </div>
-        </div>
+      <Modal
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        title="Delete this conversation?"
+        description="It moves to Recently deleted, where you can restore it."
+        size="sm"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmDelete(false)}>Cancel</Button>
+            <Button variant="danger" onClick={deleteConversation}>Delete</Button>
+          </>
+        }
+      />
+      {conversationId && showAnalytics && (
+        <AnalyticsModal conversationId={conversationId} onClose={() => setShowAnalytics(false)} />
       )}
-
-      {/* ── Modals ───────────────────────────────────────────────────────── */}
-      {currentConversationIdLocal && (
-        <AnalyticsModal
-          conversationId={currentConversationIdLocal}
-          isOpen={showAnalytics}
-          onClose={() => setShowAnalytics(false)}
-        />
-      )}
-
-      {currentConversationIdLocal && (
-        <SelectiveExportModal
-          isOpen={showSelectiveExport}
-          onClose={() => setShowSelectiveExport(false)}
-          conversationId={currentConversationIdLocal}
-          messages={messages}
-        />
+      {conversationId && showSelectiveExport && (
+        <SelectiveExportModal onClose={() => setShowSelectiveExport(false)} conversationId={conversationId} />
       )}
     </div>
   );

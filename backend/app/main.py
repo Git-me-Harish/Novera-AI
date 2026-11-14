@@ -215,6 +215,19 @@ branding_path = upload_path / "branding"
 branding_path.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads/branding", StaticFiles(directory=str(branding_path)), name="branding_uploads")
 
+
+@app.middleware("http")
+async def harden_branding_assets(request: Request, call_next):
+    """Logos are tenant-uploaded and may be SVG. Opened directly, an SVG is a
+    document that can run script in this origin; the sandbox CSP stops that,
+    and nosniff stops a mislabelled file being read as HTML."""
+    response = await call_next(request)
+    if request.url.path.startswith("/uploads/branding/"):
+        response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
 if frontend_path.exists() and (frontend_path / "assets").exists():
     app.mount(
         "/assets",
@@ -291,13 +304,28 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logger.warning(f"Validation error on {request.url.path}: {exc.errors()}")
+    # Errors from custom validators carry the exception object in ``ctx``;
+    # serializing it raw turned every such 422 into a 500. Only field, message
+    # and type leave the server — never the submitted input (it may be a password).
+    errors = [
+        {
+            "field": ".".join(str(part) for part in err.get("loc", ()) if part not in ("body", "query", "path")),
+            "message": str(err.get("msg", "Invalid value")).removeprefix("Value error, "),
+            "type": err.get("type"),
+        }
+        for err in exc.errors()
+    ]
+    logger.warning(f"Validation error on {request.url.path}: {[(e['field'], e['type']) for e in errors]}")
+    first = errors[0] if errors else None
+    detail = (f"{first['field']}: {first['message']}" if first and first["field"] else
+              first["message"] if first else "Invalid request data")
     return JSONResponse(
         status_code=422,
         content={
             "error": "Validation error",
             "message": "Invalid request data",
-            "details": exc.errors() if settings.debug else None,
+            "detail": detail,
+            "errors": errors,
         },
     )
 

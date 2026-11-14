@@ -42,9 +42,11 @@ class ChatRequest(BaseModel):
 
 class SourceInfo(BaseModel):
     document: str
+    document_id: Optional[str] = None
     page: Optional[int] = None
     section: Optional[str] = None
     chunk_id: str
+    excerpt: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -77,7 +79,10 @@ class ConversationDetail(BaseModel):
 
 
 class SelectiveExportRequest(BaseModel):
-    message_indices: List[int] = Field(..., description="Indices of messages to export")
+    # Sequences are stable; positions shift whenever the client has only a page
+    # of the conversation loaded. Indices are kept for older clients.
+    message_sequences: Optional[List[int]] = Field(None, max_length=10_000, description="Sequences of messages to export")
+    message_indices: Optional[List[int]] = Field(None, max_length=10_000, description="Deprecated: positions in the full conversation")
     format: str = Field("markdown", pattern="^(markdown|json|pdf)$")
 
 
@@ -214,9 +219,11 @@ async def chat(
             try:
                 sources.append(SourceInfo(
                     document=src.get("document", "Unknown"),
+                    document_id=src.get("document_id"),
                     page=src.get("page"),
                     section=src.get("section"),
                     chunk_id=src.get("chunk_id", "unknown"),
+                    excerpt=src.get("excerpt"),
                 ))
             except Exception as e:
                 logger.warning(f"Error formatting source: {e}")
@@ -403,7 +410,12 @@ async def export_selected_messages(
         conversation = await load_conversation_dict(db, conversation_id, current_user)
 
         all_messages = conversation.get("messages", [])
-        selected = [all_messages[i] for i in sorted(request.message_indices) if 0 <= i < len(all_messages)]
+        if request.message_sequences is not None:
+            wanted = set(request.message_sequences)
+            selected = [m for m in all_messages if m.get("sequence") in wanted]
+        else:
+            indices = request.message_indices or []
+            selected = [all_messages[i] for i in sorted(set(indices)) if 0 <= i < len(all_messages)]
         if not selected:
             raise HTTPException(status_code=400, detail="No valid messages selected")
 
@@ -415,7 +427,7 @@ async def export_selected_messages(
                 "is_selective_export": True,
                 "total_messages_in_conversation": len(all_messages),
                 "exported_message_count": len(selected),
-                "exported_indices": request.message_indices,
+                "exported_sequences": [m.get("sequence") for m in selected],
             },
         }
 

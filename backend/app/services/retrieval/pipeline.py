@@ -19,6 +19,17 @@ if TYPE_CHECKING:
     from app.services.generation.context_manager import ConversationContext
 
 
+_EXCERPT_CHARS = 600
+
+
+def _excerpt(content: str) -> str:
+    """First ~600 characters of a chunk, cut at a word boundary."""
+    text = " ".join((content or "").split())
+    if len(text) <= _EXCERPT_CHARS:
+        return text
+    return text[:_EXCERPT_CHARS].rsplit(" ", 1)[0] + "…"
+
+
 class RetrievalPipeline:
     """
     Complete retrieval pipeline for RAG system.
@@ -504,9 +515,13 @@ class RetrievalPipeline:
 
             sources.append({
                 'document': chunk_metadata.get('document_title', chunk.get('document_name', 'Unknown Document')),
+                'document_id': str(chunk.get('document_id')) if chunk.get('document_id') else None,
                 'page': chunk.get('page_numbers', [None])[0] if chunk.get('page_numbers') else None,
                 'section': chunk.get('section_title'),
                 'chunk_id': chunk_key,
+                # The cited passage, so readers can verify a claim in place
+                # without opening the document. Tenant-scoped like the answer.
+                'excerpt': _excerpt(chunk.get('content', '')),
             })
             seen_chunk_ids.add(chunk_key)
             final_chunks.append(chunk)

@@ -3,7 +3,8 @@ Enhanced Customization API endpoints with comprehensive theming support.
 """
 from typing import Optional, List
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from uuid import uuid4
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field, validator
@@ -21,6 +22,8 @@ from app.api.dependencies.auth import get_current_admin_user, get_optional_user
 from app.models.organization import Organization
 from sqlalchemy import and_
 from app.core.config import settings
+from app.services.tenancy import audit
+from app.services.tenancy.audit import Action
 
 router = APIRouter()
 
@@ -157,13 +160,73 @@ class ThemePreset(BaseModel):
 UPLOAD_DIR = Path(settings.upload_dir) / "branding"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-ALLOWED_IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.svg', '.ico'}
+ALLOWED_IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.svg', '.ico', '.webp'}
 MAX_IMAGE_SIZE_MB = 5
+
+
+def _looks_like(ext: str, head: bytes) -> bool:
+    """The bytes must match the extension; a renamed HTML file is not a logo."""
+    if ext == '.png':
+        return head.startswith(b'\x89PNG\r\n\x1a\n')
+    if ext in ('.jpg', '.jpeg'):
+        return head.startswith(b'\xff\xd8\xff')
+    if ext == '.ico':
+        return head.startswith(b'\x00\x00\x01\x00')
+    if ext == '.webp':
+        return head[:4] == b'RIFF' and head[8:12] == b'WEBP'
+    if ext == '.svg':
+        text = head.lstrip(b'\xef\xbb\xbf').lstrip().lower()
+        return text.startswith(b'<svg') or (text.startswith(b'<?xml') and b'<svg' in text)
+    return False
+
+
+# ── brand colour slots (custom_settings.brand) ───────────────────────────────
+
+_HEX = re.compile(r'^#[0-9a-fA-F]{6}$')
+
+
+def _luminance(hex_color: str) -> float:
+    def channel(c: int) -> float:
+        v = c / 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def contrast_with_white(hex_color: str) -> float:
+    return 1.05 / (_luminance(hex_color) + 0.05)
+
+
+# The action colour fills buttons with white text (WCAG AA body text: 4.5:1).
+# The mark colour is the large, heavy wordmark on white (AA large text: 3:1).
+_BRAND_SLOTS = {'action_color': 4.5, 'mark_color': 3.0}
+
+
+def validate_brand_settings(custom_settings: Optional[dict]) -> None:
+    brand = (custom_settings or {}).get('brand')
+    if brand is None:
+        return
+    if not isinstance(brand, dict):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "custom_settings.brand must be an object")
+    for key, value in brand.items():
+        if key not in _BRAND_SLOTS:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Unknown brand setting: {key}")
+        if value is None:
+            continue
+        if not isinstance(value, str) or not _HEX.match(value):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{key} must be a colour like #1a2b3c")
+        ratio = contrast_with_white(value)
+        if ratio < _BRAND_SLOTS[key]:
+            label = 'Button colour' if key == 'action_color' else 'Wordmark colour'
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"{label} {value} is too light: {ratio:.2f}:1 against white, needs {_BRAND_SLOTS[key]}:1",
+            )
 
 
 def validate_image_file(file: UploadFile) -> None:
     """Validate uploaded image file."""
-    file_ext = Path(file.filename).suffix.lower()
+    file_ext = Path(file.filename or '').suffix.lower()
     if file_ext not in ALLOWED_IMAGE_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -180,15 +243,27 @@ def validate_image_file(file: UploadFile) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"File too large. Maximum size: {MAX_IMAGE_SIZE_MB}MB"
         )
+    head = file.file.read(512)
+    file.file.seek(0)
+    if not _looks_like(file_ext, head):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"The file is not a valid {file_ext.lstrip('.').upper()} image"
+        )
 
 
-async def save_uploaded_file(file: UploadFile, organization_name: str, file_type: str) -> str:
-    """Save uploaded file and return the URL path."""
+async def save_uploaded_file(file: UploadFile, organization_id: UUID, file_type: str) -> str:
+    """Save uploaded file and return the URL path.
+
+    Named by organization id, never by its name: names are free text and could
+    carry path separators. The random suffix makes URLs unguessable and lets
+    browsers cache each version forever.
+    """
     validate_image_file(file)
-    
-    file_ext = Path(file.filename).suffix.lower()
+
+    file_ext = Path(file.filename or '').suffix.lower()
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    filename = f"{organization_name}_{file_type}_{timestamp}{file_ext}"
+    filename = f"{organization_id}_{file_type}_{timestamp}_{uuid4().hex[:8]}{file_ext}"
     file_path = UPLOAD_DIR / filename
     
     try:
@@ -438,6 +513,7 @@ async def get_admin_customization(
 @router.put("/admin/customization", response_model=dict)
 async def update_customization(
     request: CustomizationUpdate,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user)
 ):
@@ -454,6 +530,7 @@ async def update_customization(
     customization = await get_or_create_customization(db, admin.organization_id)
     
     update_data = request.dict(exclude_unset=True)
+    validate_brand_settings(update_data.get('custom_settings'))
     
     logger.info(f"Admin {admin.email} updating customization for org {admin.organization_id}")
     
@@ -471,16 +548,20 @@ async def update_customization(
                 logger.info(f"✅ Dark mode enabled set to: {value}")
     
     customization.updated_at = datetime.now(timezone.utc)
-    
+    audit.record(db, Action.BRANDING_UPDATED, actor=admin, target_type="organization",
+                 target_id=admin.organization_id, details={"fields": sorted(update_data)},
+                 request=http_request)
+
     await db.commit()
     await db.refresh(customization)
-    
+
     logger.info(f"✅ Customization updated for organization {admin.organization_id}")
     
     return customization.to_dict()
 
 @router.post("/admin/customization/logo")
 async def upload_logo(
+    http_request: Request,
     file: UploadFile = File(...),
     logo_type: str = "light",
     db: AsyncSession = Depends(get_db),
@@ -507,7 +588,7 @@ async def upload_logo(
     )
     organization = org_result.scalar_one()
     
-    file_url = await save_uploaded_file(file, organization.name, logo_type)
+    file_url = await save_uploaded_file(file, organization.id, logo_type)
     
     customization = await get_or_create_customization(db, admin.organization_id)
     
@@ -517,9 +598,11 @@ async def upload_logo(
         customization.logo_dark_url = file_url
     elif logo_type == "favicon":
         customization.favicon_url = file_url
-    
+
     customization.updated_at = datetime.now(timezone.utc)
-    
+    audit.record(db, Action.BRANDING_UPDATED, actor=admin, target_type="organization",
+                 target_id=admin.organization_id, details={"uploaded": logo_type}, request=http_request)
+
     await db.commit()
     await db.refresh(customization)
     
@@ -534,6 +617,7 @@ async def upload_logo(
 
 @router.delete("/admin/customization/logo")
 async def delete_logo(
+    http_request: Request,
     logo_type: str = "light",
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(get_current_admin_user)
@@ -575,8 +659,10 @@ async def delete_logo(
                 logger.error(f"Failed to delete file: {str(e)}")
     
     customization.updated_at = datetime.now(timezone.utc)
+    audit.record(db, Action.BRANDING_UPDATED, actor=admin, target_type="organization",
+                 target_id=admin.organization_id, details={"removed": logo_type}, request=http_request)
     await db.commit()
-    
+
     # Get org name for logging
     org_result = await db.execute(
         select(Organization).where(Organization.id == admin.organization_id)

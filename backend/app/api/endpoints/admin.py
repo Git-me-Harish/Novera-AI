@@ -111,13 +111,18 @@ async def list_users(
     query = query.order_by(User.created_at.desc()).offset(skip).limit(limit)
     users = (await db.execute(query)).scalars().all()
 
+    # One grouped query instead of one count per listed user.
+    doc_counts: dict = {}
+    if users:
+        doc_counts = dict((await db.execute(
+            select(Document.uploaded_by, func.count())
+            .where(Document.uploaded_by.in_([u.id for u in users]))
+            .group_by(Document.uploaded_by)
+        )).all())
+
     user_list = []
     for user in users:
-        doc_count = (
-            await db.execute(
-                select(func.count()).select_from(Document).where(Document.uploaded_by == user.id)
-            )
-        ).scalar()
+        doc_count = doc_counts.get(user.id, 0)
         user_list.append(
             UserListItem(
                 id=str(user.id),

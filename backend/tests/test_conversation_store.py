@@ -286,6 +286,24 @@ async def test_api_hides_other_users_conversations(tenants, client):
     assert bulk.json()["deleted"] == 0
 
 
+async def test_selective_export_picks_messages_by_sequence(tenants, client):
+    """A client showing only the newest page must still export what it ticked:
+    sequences are stable where list positions are not."""
+    http, _ = client
+    conv = await _conversation(tenants, messages=[("user", "first question"), ("assistant", "first answer"),
+                                                  ("user", "second question"), ("assistant", "second answer")])
+    url = f"/api/v1/chat/conversations/{conv.id}/export-selected"
+
+    body = (await http.post(url, json={"message_sequences": [3, 4], "format": "json"})).json()
+    assert [m["content"] for m in body["messages"]] == ["second question", "second answer"]
+    assert body["metadata"]["exported_sequences"] == [3, 4]
+
+    legacy = (await http.post(url, json={"message_indices": [0], "format": "json"})).json()
+    assert [m["content"] for m in legacy["messages"]] == ["first question"]
+
+    assert (await http.post(url, json={"message_sequences": [99], "format": "json"})).status_code == 400
+
+
 # ── chat pipeline → durable store ────────────────────────────────────────────
 
 @pytest.fixture

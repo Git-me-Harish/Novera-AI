@@ -1,123 +1,96 @@
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { lazy, Suspense } from 'react';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
+import { BrandProvider } from './contexts/BrandContext';
 import { ConversationProvider } from './contexts/ConversationContext';
-import { CustomizationProvider } from './contexts/CustomizationContext';
-import ToastContainer from './components/common/ToastContainer';
-import CommandPalette from './components/common/CommandPalette';
-import { useCommandPalette } from './hooks/useCommandPalette';
-import ProtectedRoute from './components/ProtectedRoute';
+import { ThemeProvider } from './contexts/ThemeContext';
 import Layout from './components/Layout';
-import LoginPage from './pages/LoginPage';
-import RegisterPage from './pages/RegisterPage';
-import ForgotPasswordPage from './pages/ForgotPasswordPage';
-import ResetPasswordPage from './pages/ResetPasswordPage';
-import VerifyEmailPage from './pages/VerifyEmailPage';
-import AcceptInvitePage from './pages/AcceptInvitePage';
-import ChatPage from './pages/ChatPage';
-import DocumentsPage from './pages/DocumentsPage';
-import DocumentEditorPage from './pages/DocumentEditorPage';
-import ConversationsPage from './pages/ConversationsPage';
-import ProfilePage from './pages/ProfilePage';
-import AdminDashboard from './pages/admin/AdminDashboard';
-import UserManagement from './pages/admin/UserManagement';
-import CustomizationPage from './pages/admin/CustomizationPage';
+import ProtectedRoute from './components/ProtectedRoute';
+import ToastContainer from './components/common/ToastContainer';
+import { PageLoader } from './ui';
 
-function AppContent() {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const commandPalette = useCommandPalette();
-  const location = useLocation();
+// Every page is its own chunk: the first load ships only what the route needs
+// (the old single bundle was 719 KB).
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const RegisterPage = lazy(() => import('./pages/RegisterPage'));
+const ForgotPasswordPage = lazy(() => import('./pages/ForgotPasswordPage'));
+const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
+const VerifyEmailPage = lazy(() => import('./pages/VerifyEmailPage'));
+const AcceptInvitePage = lazy(() => import('./pages/AcceptInvitePage'));
+const ChatPage = lazy(() => import('./pages/ChatPage'));
+const ConversationsPage = lazy(() => import('./pages/ConversationsPage'));
+const DocumentsPage = lazy(() => import('./pages/DocumentsPage'));
+const DocumentEditorPage = lazy(() => import('./pages/DocumentEditorPage'));
+const ProfilePage = lazy(() => import('./pages/ProfilePage'));
+const AdminOverviewPage = lazy(() => import('./pages/admin/AdminDashboard'));
+const MembersPage = lazy(() => import('./pages/admin/UserManagement'));
+const UsagePage = lazy(() => import('./pages/admin/UsagePage'));
+const AuditLogPage = lazy(() => import('./pages/admin/AuditLogPage'));
+const AISettingsPage = lazy(() => import('./pages/admin/AISettingsPage'));
+const BrandingPage = lazy(() => import('./pages/admin/BrandingPage'));
 
-  useEffect(() => {
-    const publicPaths = ['/login', '/register', '/forgot-password', '/reset-password', '/verify-email'];
-    const isPublicPage = publicPaths.some(path => location.pathname.startsWith(path));
-    
-    if (isPublicPage) {
-      document.documentElement.classList.remove('dark');
-    } else {
-      const savedDarkMode = localStorage.getItem('darkMode') === 'true';
-      if (savedDarkMode) {
-        document.documentElement.classList.add('dark');
-      }
-    }
-  }, [location.pathname]);
+const admin = (page: JSX.Element) => <ProtectedRoute adminOnly>{page}</ProtectedRoute>;
 
+function AppRoutes() {
   return (
     <>
       <ToastContainer />
-      <CommandPalette 
-        isOpen={commandPalette.isOpen} 
-        onClose={commandPalette.close} 
-      />
-      <Routes>
-        {/* Public Routes */}
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
-        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/reset-password" element={<ResetPasswordPage />} />
-        <Route path="/verify-email" element={<VerifyEmailPage />} />
-        <Route path="/accept-invite" element={<AcceptInvitePage />} />
+      <Suspense fallback={<PageLoader />}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
+          <Route path="/accept-invite" element={<AcceptInvitePage />} />
 
-        {/* Protected Routes */}
-        <Route
-          path="/*"
-          element={
-            <ProtectedRoute>
-              <Layout sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}>
-                <Routes>
-                  <Route path="/" element={<Navigate to="/chat" replace />} />
-                  <Route path="/chat" element={<ChatPage />} />
-                  <Route path="/chat/:conversationId" element={<ChatPage />} />
-                  <Route path="/documents" element={<DocumentsPage />} />
-                  <Route path="/documents/:documentId/edit" element={<DocumentEditorPage />} />
-                  <Route path="/conversations" element={<ConversationsPage />} />
-                  <Route path="/profile" element={<ProfilePage />} />
-                  
-                  {/* Admin Routes */}
-                  <Route
-                    path="/admin"
-                    element={
-                      <ProtectedRoute adminOnly>
-                        <AdminDashboard />
-                      </ProtectedRoute>
-                    }
-                  />
-                  <Route
-                    path="/admin/users"
-                    element={
-                      <ProtectedRoute adminOnly>
-                        <UserManagement />
-                      </ProtectedRoute>
-                    }
-                  />
-                  <Route
-                    path="/admin/customization"
-                    element={
-                      <ProtectedRoute adminOnly>
-                        <CustomizationPage />
-                      </ProtectedRoute>
-                    }
-                  />
-                </Routes>
-              </Layout>
-            </ProtectedRoute>
-          }
-        />
-      </Routes>
+          <Route
+            path="/*"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <Suspense fallback={<PageLoader />}>
+                    <Routes>
+                      <Route path="/" element={<Navigate to="/chat" replace />} />
+                      <Route path="/chat" element={<ChatPage />} />
+                      <Route path="/chat/:conversationId" element={<ChatPage />} />
+                      <Route path="/conversations" element={<ConversationsPage />} />
+                      <Route path="/documents" element={<DocumentsPage />} />
+                      <Route path="/documents/:documentId/edit" element={<DocumentEditorPage />} />
+                      <Route path="/profile" element={<ProfilePage />} />
+
+                      <Route path="/admin" element={admin(<AdminOverviewPage />)} />
+                      <Route path="/admin/members" element={admin(<MembersPage />)} />
+                      <Route path="/admin/usage" element={admin(<UsagePage />)} />
+                      <Route path="/admin/audit" element={admin(<AuditLogPage />)} />
+                      <Route path="/admin/ai" element={admin(<AISettingsPage />)} />
+                      <Route path="/admin/branding" element={admin(<BrandingPage />)} />
+                      {/* Old bookmarks */}
+                      <Route path="/admin/users" element={<Navigate to="/admin/members" replace />} />
+                      <Route path="/admin/customization" element={<Navigate to="/admin/branding" replace />} />
+                      <Route path="*" element={<Navigate to="/chat" replace />} />
+                    </Routes>
+                  </Suspense>
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </Suspense>
     </>
   );
 }
 
-function App() {
+export default function App() {
   return (
-    <AuthProvider>
-      <CustomizationProvider>
-        <ConversationProvider>
-          <AppContent />
-        </ConversationProvider>
-      </CustomizationProvider>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <BrandProvider>
+          <ConversationProvider>
+            <AppRoutes />
+          </ConversationProvider>
+        </BrandProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
-
-export default App;

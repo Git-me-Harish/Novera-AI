@@ -1,97 +1,53 @@
-import { useState, useEffect } from 'react';
-import { CheckCircle, AlertCircle, Info, AlertTriangle, X } from 'lucide-react';
-import { toast, Toast, ToastType } from '../../utils/toast';
+import { useEffect, useState } from 'react';
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
+import { toast, type Toast, type ToastType } from '../../utils/toast';
 
-function useToast() {
-  const [toasts, setToasts] = useState<Toast[]>([]);
+const ICONS: Record<ToastType, JSX.Element> = {
+  success: <CheckCircle2 className="h-5 w-5 text-success" aria-hidden />,
+  error: <AlertCircle className="h-5 w-5 text-error" aria-hidden />,
+  warning: <AlertTriangle className="h-5 w-5 text-warning" aria-hidden />,
+  info: <Info className="h-5 w-5 text-link" aria-hidden />,
+};
 
-  useEffect(() => {
-    return toast.subscribe(setToasts);
-  }, []);
-
-  return toasts;
-}
-
+/**
+ * Design.md toast: canvas, hairline border, 8px radius, no shadow; tone shows
+ * only in the icon. Errors are announced assertively, everything else
+ * politely. Bottom-centred on phones, bottom-right otherwise.
+ */
 export default function ToastContainer() {
-  const toasts = useToast();
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  useEffect(() => toast.subscribe(setToasts), []);
 
-  const getIcon = (type: ToastType) => {
-    switch (type) {
-      case 'success':
-        return <CheckCircle className="w-5 h-5 text-green-600" />;
-      case 'error':
-        return <AlertCircle className="w-5 h-5 text-red-600" />;
-      case 'warning':
-        return <AlertTriangle className="w-5 h-5 text-yellow-600" />;
-      default:
-        return <Info className="w-5 h-5 text-blue-600" />;
-    }
-  };
+  const errors = toasts.filter((t) => t.type === 'error');
+  const others = toasts.filter((t) => t.type !== 'error');
 
-  const getStyles = (type: ToastType) => {
-    switch (type) {
-      case 'success':
-        return 'bg-green-50 border-green-200';
-      case 'error':
-        return 'bg-red-50 border-red-200';
-      case 'warning':
-        return 'bg-yellow-50 border-yellow-200';
-      default:
-        return 'bg-blue-50 border-blue-200';
-    }
-  };
-
-  const getTextColor = (type: ToastType) => {
-    switch (type) {
-      case 'success':
-        return 'text-green-900';
-      case 'error':
-        return 'text-red-900';
-      case 'warning':
-        return 'text-yellow-900';
-      default:
-        return 'text-blue-900';
-    }
-  };
-
-  if (toasts.length === 0) return null;
+  const render = (t: Toast) => (
+    <div key={t.id} className="pointer-events-auto flex items-start gap-3 rounded-md border border-hairline bg-canvas px-4 py-3 animate-rise-in">
+      {ICONS[t.type]}
+      <p className="flex-1 text-small text-ink">{t.message}</p>
+      {t.action && (
+        <button
+          type="button"
+          onClick={() => {
+            t.action?.onClick();
+            toast.remove(t.id);
+          }}
+          className="text-small font-semibold text-link hover:underline"
+        >
+          {t.action.label}
+        </button>
+      )}
+      <button type="button" onClick={() => toast.remove(t.id)} aria-label="Dismiss notification"
+        className="text-ink-muted transition-colors hover:text-ink">
+        <X className="h-4 w-4" aria-hidden />
+      </button>
+    </div>
+  );
 
   return (
-    <div className="fixed top-4 right-4 z-50 space-y-2 max-w-md" role="status" aria-live="polite">
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={`
-            flex items-center gap-3 p-4 rounded-lg border shadow-lg 
-            transition-all duration-300
-            animate-slideIn
-            ${getStyles(t.type)}
-          `}
-        >
-          {getIcon(t.type)}
-          <p className={`flex-1 text-sm font-medium ${getTextColor(t.type)}`}>
-            {t.message}
-          </p>
-          {t.action && (
-            <button
-              onClick={() => {
-                t.action?.onClick();
-                toast.remove(t.id);
-              }}
-              className="text-sm font-semibold underline underline-offset-2 hover:no-underline"
-            >
-              {t.action.label}
-            </button>
-          )}
-          <button
-            onClick={() => toast.remove(t.id)}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
-            aria-label="Close notification"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      ))}
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[70] flex flex-col items-center gap-2 px-4 md:inset-x-auto md:right-4 md:w-[380px] md:items-stretch">
+      <div role="alert" aria-live="assertive" className="contents">{errors.map(render)}</div>
+      <div role="status" aria-live="polite" className="contents">{others.map(render)}</div>
     </div>
   );
 }
